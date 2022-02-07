@@ -184,6 +184,18 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	 * the array so as not to reject conninfo strings from old apps that might
 	 * still try to set it.
 	 */
+
+	{"load_balance" , "PGLOAD_BALANCE", NULL, NULL, 
+	"Load-Balancing" , "D" ,  20 , 
+	offsetof(struct pg_conn, load_balance) },
+
+	
+	{"topology_keys" , "PGTOPOLOGY_KEYS", NULL, NULL, 
+	"topology_keys" , "D" ,  20 , 
+	offsetof(struct pg_conn, topology_keys) },
+
+	
+
 	{"authtype", "PGAUTHTYPE", DefaultAuthtype, NULL,
 	"Database-Authtype", "D", 20, -1},
 
@@ -618,6 +630,37 @@ PQpingParams(const char *const *keywords,
 	return ret;
 }
 
+
+/*
+* node_details will store the details regarding the connection count for any server
+*/
+
+struct node_details {
+	char *host_ip ; 
+	int connections; 
+	
+} *cluster_connections;
+int total_connections =0 ; 
+
+/*
+* update_map will be used to increase or decrease the count of connection for any host id
+*/
+
+
+
+void  update_map(const char *ip_address , int change) 
+{
+	for(int i =0 ;i <  total_connections ; i++ )
+	{
+		if(strcmp(cluster_connections[i].host_ip , ip_address ) == 0 )
+			cluster_connections[i].connections += change ; //Update the connection count
+
+	}
+}
+
+
+
+
 /*
  *		PQconnectdb
  *
@@ -645,10 +688,8 @@ PGconn *
 PQconnectdb(const char *conninfo)
 {
 	PGconn	   *conn = PQconnectStart(conninfo);
-
 	if (conn && conn->status != CONNECTION_BAD)
 		(void) connectDBComplete(conn);
-
 	return conn;
 }
 
@@ -730,22 +771,206 @@ PQconnectStartParams(const char *const *keywords,
 	 */
 	PQconninfoFree(connOptions);
 
+	
 	/*
-	 * Compute derived options
-	 */
-	if (!connectOptions2(conn))
-		return conn;
+	*	Check for the load_balance 
+	*/
 
-	/*
-	 * Connect to the database
-	 */
-	if (!connectDBStart(conn))
+	if(conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0 ) 
 	{
-		/* Just in case we failed to set it in connectDBStart */
-		conn->status = CONNECTION_BAD;
-	}
+		/*
+		*	Make the smart connection with the loadbalance feature 
+		*/
+		
+		connectLoadBalance(conn  ) ; 
+		if(conn->status != CONNECTION_BAD)
+		update_map(conn->connhost[conn->whichhost].host , 1) ; //We need to update the connection count
+		
+		return conn ;
 
-	return conn;
+
+	}else
+	{
+		/*
+		 * Compute derived options
+	 	*/
+		if (!connectOptions2(conn))
+			return conn;
+		if (!connectDBStart( conn))
+			{
+				/* Just in case we failed to set it in connectDBStart */
+			conn->status = CONNECTION_BAD;
+			}	
+		else
+			update_map(conn->connhost[conn->whichhost].host , 1) ; //We need to update the connection count
+		
+
+		return conn ;
+
+	}
+		
+
+
+}
+
+
+/*
+*	add_cluster_info() adds the cluster information for the first 
+*	time when the control connection has been established
+*/
+
+void add_cluster_info(PGconn * conn )
+{
+	PGresult   *res;
+
+	/* Check to see that the backend connection was successfully made */
+  if (PQstatus(conn) != CONNECTION_OK)
+  {
+      fprintf(stderr, "Connection to database failed: %s",
+        PQerrorMessage(conn));
+      PQfinish(conn);
+      exit(1);
+  }
+
+
+  	res = PQexec(conn , "SELECT  * from yb_servers() ; ") ; 
+  	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+  	{
+		 
+    	PQclear(res);
+      	PQfinish(conn);
+        exit(1) ; 		//Connection error in transaction , needs to be modified
+  	}
+
+  	//int  nFields = PQntuples(res);
+	//Increase the size 
+	
+		int  nFields = PQntuples(res);
+	//Increase the size 
+	struct node_details *temp_arr = (struct node_details *) malloc ( (nFields + total_connections) * sizeof (struct node_details));
+	for(int i =0 ; i <  total_connections ; i++ )
+		temp_arr[i] = cluster_connections[i] ; 
+	cluster_connections = temp_arr ; 
+	
+  	for (int i = 0; i < nFields ; i++)
+  	{
+		  
+		char  *temp = PQgetvalue(res, i , 0 ) ;  
+
+		cluster_connections[total_connections].host_ip = (char *)malloc(sizeof(char)*(strlen(temp)+1)) ;
+		strcpy(cluster_connections[total_connections].host_ip ,  temp )	 ;	
+		cluster_connections[total_connections].connections =  0 ; 			
+		total_connections++ ; 
+	}
+	
+	PQclear(res);
+
+	
+}
+
+/*
+* next_host() returns the value of the server with 
+* with least number of connections 
+*/
+
+char * next_host()
+{
+	char *next_host_ip  =NULL ; 
+	int lowest_value = -1 ; 
+	for(int i =0 ;i < total_connections ; i++ )
+	{
+		if(next_host_ip == NULL  )
+		{
+			next_host_ip = cluster_connections[i].host_ip ; 
+			lowest_value = cluster_connections[i].connections ; 
+
+		}else if(lowest_value > cluster_connections[i].connections)
+		{
+			next_host_ip = cluster_connections[i].host_ip ; 
+			lowest_value = cluster_connections[i].connections ; 
+
+		} 
+
+	}
+	return next_host_ip ; 
+
+}
+
+/*
+* control_connection is used to update the values of the 
+* ip address in any cluster
+*/
+
+
+PGconn * control_connection  = NULL ; 
+
+/*
+* connectLoadBalance function will be used to make any   LoadBalanced connection
+* The control_connection is established if it has not yet connected,  the host 
+* with lowest number of connnction will be choosen and a connnection will be 
+* made to it.
+*/
+
+void connectLoadBalance(PGconn *conn  ) 
+{
+			
+		
+		if(control_connection == NULL || control_connection->status == CONNECTION_BAD) 
+		{
+
+		/*
+		*	Delete the current control_connection 
+		* 	if any 
+		*/
+		control_connection = makeEmptyPGconn();
+		if (control_connection == NULL)
+			return ;
+
+		/* 
+		*	Copy the connection info 
+		*/
+
+		*control_connection =  *conn ; 
+		/*
+		 * Compute derived options
+	 	*/
+		if (!connectOptions2(control_connection))
+			return ;
+		if (!connectDBStart( control_connection))
+			{
+				/* Just in case we failed to set it in connectDBStart */
+			control_connection->status = CONNECTION_BAD;
+			}
+
+		if (control_connection && control_connection->status != CONNECTION_BAD)
+			{
+				(void) connectDBComplete(control_connection);
+				add_cluster_info(control_connection ) ; 
+				//We won't update the connection count for the smart connections 
+
+			}
+
+		}
+
+
+		/*
+		Change the host id 
+		*/
+
+		strcpy(conn->pghost , next_host() ) ; //We can make changes here and improve 
+												//performance during the system down moment
+		/*
+		 * Compute derived options
+	 	*/
+		if (!connectOptions2(conn))
+			return ;
+		if (!connectDBStart( conn))
+			{
+				/* Just in case we failed to set it in connectDBStart */
+			conn->status = CONNECTION_BAD;
+			}
+
+		
 }
 
 /*
@@ -767,6 +992,9 @@ PQconnectStartParams(const char *const *keywords,
  *
  * See PQconnectPoll for more info.
  */
+
+
+
 PGconn *
 PQconnectStart(const char *conninfo)
 {
@@ -784,23 +1012,49 @@ PQconnectStart(const char *conninfo)
 	 */
 	if (!connectOptions1(conn, conninfo))
 		return conn;
+	
 
 	/*
-	 * Compute derived options
-	 */
-	if (!connectOptions2(conn))
-		return conn;
+	*	Check for the load_balance 
+	*/
 
-	/*
-	 * Connect to the database
-	 */
-	if (!connectDBStart(conn))
+	
+	if(conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0 ) 
 	{
-		/* Just in case we failed to set it in connectDBStart */
-		conn->status = CONNECTION_BAD;
-	}
+		/*
+		*	Make the smart connection with the loadbalance feature 
+		*/
+		connectLoadBalance(conn  ) ; 
+		if(conn->status != CONNECTION_BAD)
+			update_map(conn->connhost[conn->whichhost].host , 1) ; //We need to update the connection count
+		
 
-	return conn;
+		return conn ;
+
+
+	}else
+	{
+		/*
+		 * Compute derived options
+	 	*/
+		if (!connectOptions2(conn))
+			return conn;
+		if (!connectDBStart( conn))
+			{
+				/* Just in case we failed to set it in connectDBStart */
+			conn->status = CONNECTION_BAD;
+			}	
+		else
+			update_map(conn->connhost[conn->whichhost].host, 1) ; //We need to update the connection count
+			
+
+
+		return conn ;
+
+	}
+		
+	
+	
 }
 
 /*
@@ -868,6 +1122,7 @@ connectOptions1(PGconn *conn, const char *conninfo)
 		/* errorMessage is already set */
 		return false;
 	}
+
 
 	/*
 	 * Move option values into conn structure
@@ -1329,6 +1584,7 @@ PQconndefaults(void)
  * then only the errorMessage is likely to be useful.
  * ----------------
  */
+
 PGconn *
 PQsetdbLogin(const char *pghost, const char *pgport, const char *pgoptions,
 			 const char *pgtty, const char *dbName, const char *login,
@@ -3747,7 +4003,8 @@ void
 PQfinish(PGconn *conn)
 {
 	if (conn)
-	{
+	{	
+		update_map(conn->connhost[conn->whichhost].host , -1) ;     
 		closePGconn(conn);
 		freePGconn(conn);
 	}
@@ -5983,9 +6240,10 @@ conninfo_storeval(PQconninfoOption *connOptions,
 	option = conninfo_find(connOptions, keyword);
 	if (option == NULL)
 	{
+		
 		if (!ignoreMissing)
 			printfPQExpBuffer(errorMessage,
-							  libpq_gettext("invalid connection option \"%s\"\n"),
+							  libpq_gettext("invalid connection option xsbcs\"%s\"\n"),
 							  keyword);
 		return NULL;
 	}
@@ -6029,6 +6287,7 @@ conninfo_find(PQconninfoOption *connOptions, const char *keyword)
 
 	for (option = connOptions; option->keyword != NULL; option++)
 	{
+		
 		if (strcmp(option->keyword, keyword) == 0)
 			return option;
 	}
