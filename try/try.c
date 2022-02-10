@@ -14,10 +14,14 @@ main(int argc, char **argv)
    
   /* connection string */
  // conninfo = "host=10.150.1.126,10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte  load_balance=true topology_keys=gcp.us-west1.us-west1-d,gcp.us-west1.us-west1-e ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
-  conninfo = "host=10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte load_balance=true  topology_keys=gcp.us-west1.us-west1-d,gcp.us-west1.us-west1-a,gcp.us-west1.us-west1-c ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
+  conninfo = "host=10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte load_balance=true  topology_keys=gcp.us-west1.us-west1-d,gcp.us-west1.us-west1-e,gcp.us-west1.us-west1-c ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
   conn = PQconnectdb(conninfo);
-
- 
+  conn =  PQconnectdb(conninfo); 
+  conn =  PQconnectdb(conninfo); 
+ conninfo = "host=10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte load_balance=true";  // load_balance=true topology_keys=gcp.us-   conn = PQconnectdb(conninfo);                                                                      
+  conn = PQconnectdb(conninfo);                                                                      
+     conn =  PQconnectdb(conninfo);                                                                     
+       conn =  PQconnectdb(conninfo); 
   /* Check to see that the backend connection was successfully made */
   if (PQstatus(conn) != CONNECTION_OK)
   {
