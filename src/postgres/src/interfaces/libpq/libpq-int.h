@@ -521,7 +521,7 @@ struct pg_cancel
  */
 extern char *const pgresStatus[];
 
-void connectLoadBalance(PGconn *conn  )  ; 
+bool connectLoadBalance(PGconn *conn  )  ; 
 
 #ifdef USE_SSL
 
