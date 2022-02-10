@@ -698,7 +698,10 @@ PQconnectdb(const char *conninfo)
 	PGconn	   *conn = PQconnectStart(conninfo);
 	if (conn && conn->status != CONNECTION_BAD)
 		(void) connectDBComplete(conn);
-	
+for(int i =0;i<total_servers;i++)
+{
+printf("%s : %d \n" , server_details[i].host_ip  ,  server_details[i].connections ) ; 
+}
 	return conn;
 }
 
@@ -791,9 +794,7 @@ PQconnectStartParams(const char *const *keywords,
 		*	Make the smart connection with the loadbalance feature 
 		*/
 		
-		if(connectLoadBalance(conn  ) && conn->whichhost <  conn->nconnhost  )
-			update_map(conn->connhost[conn->whichhost].host , 1) ; //We need to update the connection count
-		else
+		if( !connectLoadBalance(conn  ) )
 			conn->status = CONNECTION_BAD;
 		return conn ;
 
@@ -1120,13 +1121,19 @@ bool connectLoadBalance(PGconn *conn  )
 	 	*/
 		if (!connectOptions2(conn))
 		{
-				yb_server_down(next_least_connection) ;
-				goto next_server_for_connection ;
-		}			
-		if (!connectDBStart( conn))
-			{
-				yb_server_down(next_least_connection) ;
-				goto next_server_for_connection ;
+		      yb_server_down(next_least_connection) ;
+		      goto next_server_for_connection ;
+		}   
+                  /*
+                   * Optimistically modifying the map 
+                  */
+
+                update_map(conn->pghost ,  1 ) ; 
+                if (!connectDBStart( conn))
+	      	{
+		      yb_server_down(next_least_connection) ;
+		      update_map(conn->pghost , -1 )  ; 
+                      goto next_server_for_connection ;
 			}
 
 			return 1  ;
@@ -1184,11 +1191,6 @@ PQconnectStart(const char *conninfo)
 		/*
 		*	Make the smart connection with the loadbalance feature 
 		*/
-	/*
-		if(connectLoadBalance(conn  ) ) 
-			update_map(conn->connhost[conn->whichhost].host , 1) ; //We need to update the connection count
-	
-	else*/
 	
 	if(!connectLoadBalance(conn  ) ) {
 				/* Just in case we failed to set it in connectDBStart */
@@ -4173,7 +4175,7 @@ PQfinish(PGconn *conn)
 		
 		if( (conn->load_balance != NULL) && (strcmp(conn->load_balance,"true") == 0 ) )
 		{
-			
+                    update_map(conn->pghost , -1 ) ; 
 		}
 		
 
