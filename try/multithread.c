@@ -15,7 +15,7 @@ void* foo(void* p){
   pthread_exit(&i);
 }
 
-void ThreadFun()
+void *ThreadFun(void *vargp)
 {
 
     const char *conninfo;
@@ -23,7 +23,7 @@ void ThreadFun()
 
   
     // conninfo = "host=10.150.1.126,10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte  load_balance=true topology_keys=gcp.us-west1.us-west1-d,gcp.us-west1.us-west1-e ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
-    conninfo = "host=10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte load_balance=true topology_keys=gcp.us-west1.us-west1-d ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
+    conninfo = "host=10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte load_balance=true topology_keys=gcp.us-west1.us-west1-c ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
     PGconn     *conn;
     PGresult   *res;
     
@@ -42,8 +42,9 @@ if (PQstatus(conn) != CONNECTION_OK)
         PQerrorMessage(conn));
       
         
-    PQfinish(conn);
-  return ;
+      PQfinish(conn);
+         pthread_exit(&i);
+    return NULL ;
    }
 
 
@@ -55,7 +56,8 @@ if (PQstatus(conn) != CONNECTION_OK)
       fprintf(stderr, "SELECT failed: %s", PQerrorMessage(conn));
       PQclear(res);
       PQfinish(conn);
-    return ; 
+         pthread_exit(&i);
+    return NULL ;
   }
 
 
@@ -74,12 +76,56 @@ if (PQstatus(conn) != CONNECTION_OK)
   sleep(5) ;
   conn = PQconnectdb(conninfo) ; 
  PQfinish(conn);
- 
+     pthread_exit(&i);
+    return NULL ;
+
+    
+    
+  /*
+   */ 
 
 }
 
 int main(void){
 
-ThreadFun();
+      time_t begin = time(NULL);
+    printf("%d\n" ,  begin) ; 
+    // do some stuff here
+    sleep(3);
+ 
+    time_t end = time(NULL);
+ 
+    // calculate elapsed time by finding difference (end - begin)
+    printf("The elapsed time is %d seconds", (end - begin));
+
+
+  // Declare variable for thread's ID:
+  pthread_t thread_ids[10];
+  int itr ;
+  for(itr =0 ; itr < 10 ; itr++ )
+    {
+        
+        int j = 1;
+        pthread_create(thread_ids+itr, NULL, ThreadFun, &j);
+    }
+    
+  int* ptr;
+
+  for(itr =0 ; itr < 10 ;itr++ )
+  pthread_join( *(thread_ids+itr) , (void**)&ptr);
+
+  sleep(10) ; 
+  printf("asdda\n") ;
+  for(itr =0 ; itr < 10 ; itr++ )
+    {
+        
+        int j = 1;
+        pthread_create(thread_ids+itr, NULL, ThreadFun, &j);
+    }
+    
+
+  for(itr =0 ; itr < 10 ;itr++ )
+  pthread_join( *(thread_ids+itr) , (void**)&ptr);
+
 
 }

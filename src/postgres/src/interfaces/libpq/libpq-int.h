@@ -521,7 +521,8 @@ struct pg_cancel
  */
 extern char *const pgresStatus[];
 
-bool connectLoadBalance(PGconn *conn  )  ; 
+bool yb_connectLoadBalance(PGconn *conn  )  ; 
+bool yb_server_status_change(char *server_address , bool new_status , bool check_map_ready ) ; 
 
 #ifdef USE_SSL
 

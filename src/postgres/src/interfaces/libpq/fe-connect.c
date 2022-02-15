@@ -15,6 +15,9 @@
 
 #include "postgres_fe.h"
 
+#include <pthread.h>
+#include <semaphore.h>
+
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
@@ -25,7 +28,7 @@
 #include "libpq-int.h"
 #include "fe-auth.h"
 #include "pg_config_paths.h"
-
+#include<time.h>
 #ifdef WIN32
 #include "win32.h"
 #ifdef _WIN32_IE
@@ -640,33 +643,51 @@ struct node_details {
 	int connections; 
 	char *topology ; 
 	bool is_running ; 
-	
-} *server_details;
+} *server_details = NULL;
+/*
+*	Before iterating over the map the map_ready mutex must be checked
+*/
+static pthread_mutex_t map_ready = PTHREAD_MUTEX_INITIALIZER ;
 int total_servers =0 ; 
+time_t yb_last_update_time = 0 ; 
+
 
 /*
-* update_map will be used to increase or decrease the count of connection for any host id
-*/
+ *	update_map will be used to increase or decrease the count of connection for any server
+ *	Input:	The ip_address of the server
+ *			change: +1 to increment / -1 to decrement the connection count.
+ *			check_thread_safe: Boolean value, if true then lock the map_ready thread lock 
+ *							   before iterating. 
+ */
 
 
-
-void  update_map(const char *ip_address , int change) 
+void  update_map(const char *ip_address , int change , bool check_thread_safe) 
 {
+
+
 	/* In case if the ip_address is NULL */
+
 
 	if( !ip_address)
 	return ; 	/* This can be made boolean for success or failure identification */
 
 
+	/*
+	*	Add a thread lock for the map
+	*/
+	if(check_thread_safe)
+		pthread_mutex_lock(&(map_ready)) ;
+	
 	for(int i =0 ;i <  total_servers ; i++ )
-	{
+	{	
 		if(strcmp(server_details[i].host_ip , ip_address ) == 0 )
 			server_details[i].connections += change ; //Update the connection count
-
 	}
+	if(check_thread_safe)
+		pthread_mutex_unlock(&(map_ready)) ; 
+
+	
 }
-
-
 
 
 /*
@@ -692,16 +713,14 @@ void  update_map(const char *ip_address , int change)
  * You should call PQfinish (if conn is not NULL) regardless of whether this
  * call succeeded.
  */
+
+
 PGconn *
 PQconnectdb(const char *conninfo)
 {
 	PGconn	   *conn = PQconnectStart(conninfo);
 	if (conn && conn->status != CONNECTION_BAD)
 		(void) connectDBComplete(conn);
-for(int i =0;i<total_servers;i++)
-{
-printf("%s : %d \n" , server_details[i].host_ip  ,  server_details[i].connections ) ; 
-}
 	return conn;
 }
 
@@ -794,7 +813,7 @@ PQconnectStartParams(const char *const *keywords,
 		*	Make the smart connection with the loadbalance feature 
 		*/
 		
-		if( !connectLoadBalance(conn  ) )
+		if( !yb_connectLoadBalance(conn  ) )
 			conn->status = CONNECTION_BAD;
 		return conn ;
 
@@ -820,75 +839,177 @@ PQconnectStartParams(const char *const *keywords,
 
 }
 
+/* 
+ *	update_cluster_info populates the data regarding the server into the 
+ *	server_details map/list.
+ *	If the last update happened before 5 minutes the update will be skipped.
+ *	Use contro_connection to execute the query : "SELECT  * from yb_servers() ;"
+ *	Once the query's results has been received the yb_last_update_time is modified.
+ *	If any server that is present in server_details but is absent in the result 
+ *	of the above query it is considered to be down. All other servers present in
+ *	the result are considered to be running.
+ *	It returns 1 for every successful update and 0 for any failure.
+ */
 
-/*
-*	add_cluster_info() adds the cluster information for the first 
-*	time when the control connection has been established
-*/
+bool update_cluster_info(PGconn *conn)
+{	
+	
+	/*
+	 *	Check for the last update time 
+	 */
+	const int refresh_time = 5*60 ; //	5 mins 
+	time_t temp_time =  time(NULL ) ; 
+	if( (yb_last_update_time != 0 )&&  temp_time - yb_last_update_time  < refresh_time  )	
+		return 1 ; 
+	
+	/*
+	 *	Collect the data using the query "SELECT  * from yb_servers() ; "
+	 */
 
-bool add_cluster_info(PGconn * conn )
-{
 	PGresult   *res;
-
-	/* Check to see that the backend connection was successfully made */
-  if (PQstatus(conn) != CONNECTION_OK)
-  {
-      return 0 ; 
-  }
-
-
+	/* 
+	 *	Check to see that the backend connection was successfully made 
+	 */
+  	if (PQstatus(conn) != CONNECTION_OK)
+      	return 0 ; 
+	/*
+	 *	Execute the query
+	 */
   	res = PQexec(conn , "SELECT  * from yb_servers() ; ") ; 
   	if (PQresultStatus(res) != PGRES_TUPLES_OK)
-  	{
+  	{	
+		/*
+		 * 	Incase if any error occurs
+		 */
     	PQclear(res);
-       	return 0 ;	//Connection error in transaction , needs to be modified
+		conn->status = CONNECTION_BAD ;  
+       	return 0 ;
   	}
+	
+	/*
+	 *	Locking the map_ready so that no other thread can start iterating it.
+	 */
 
-  	//int  nFields = PQntuples(res);
-	//Increase the size 
+	pthread_mutex_lock(&(map_ready)) ; 
+
+	/*
+	*	Update the yb_last_update_time
+	*/
+	yb_last_update_time = time(NULL) ; 
+
+	/*
+	 *	1. Assigne the value of is_running as false for all the servers.
+	 *	2. Iterate the result and update the is_running as true.
+	 *	3. Maintaine the count of the servers which were not found in the server_details.
+	 *	4. If this count is not zero reallocate the map memory and add the values to it.  
+	 */
+
+	/*
+	*	1. Assigne the value of is_running as false for all the servers.
+	*/
 	
-	int  nFields = PQntuples(res);
-	//Increase the size 
-	struct node_details *temp_arr = (struct node_details *) malloc ( (nFields + total_servers) * sizeof (struct node_details));
-	for(int i =0 ; i <  total_servers ; i++ )
-		temp_arr[i] = server_details[i] ; 
-	server_details = temp_arr ; 
-	
-  	for (int i = 0; i < nFields ; i++)
-  	{
-		  
-		char  *temp = PQgetvalue(res, i , 0 ) ;  
-		/* 
-		* Store the ip address
-		*/
-		server_details[total_servers].host_ip = (char *)malloc(sizeof(char)*(strlen(temp)+1)) ;
-		strcpy(server_details[total_servers].host_ip ,  temp )	 ;	
-		/*
-		*Reset the connection count
-		*/
-		server_details[total_servers].connections =  0 ; 		
-		/*
-		Create the topology key 
-		*/
-		int topology_len =  strlen(PQgetvalue(res, i , 4 ) ) +  strlen(PQgetvalue(res, i , 5 ) ) +  strlen(PQgetvalue(res, i , 6 ) ) + 3 ;  
-		server_details[total_servers].topology = (char *) malloc(sizeof(char)*topology_len) ; 
-		strcpy( server_details[total_servers].topology , PQgetvalue(res, i , 4 )  ) ; 
-		strcat(server_details[total_servers].topology , ".") ; 
-		strcat(server_details[total_servers].topology , PQgetvalue(res, i , 5 )) ; 
-		strcat(server_details[total_servers].topology , ".") ; 
-		strcat(server_details[total_servers].topology , PQgetvalue(res, i , 6 )) ; 
-		server_details[total_servers].is_running = true ; 
-		total_servers++ ; 
+	for(int i =0;i< total_servers ; i++ )
+	{
+		server_details[i].is_running = false ; 
 	}
+
+	int  nServers = PQntuples(res);	//Total number of servers found in the query's result.
+	int increase_map_size = 0 ; 	//For keeping the count of servers to be added.
+	bool server_to_add[nServers] ; 	//For keeping the mark of servers to be added.
+
+	/*
+	 *	2. Iterate the result and update the is_running as true.
+	 */
+  	
+	for (int i = 0; i < nServers ; i++)
+  	{
+	  
+		char  *server = PQgetvalue(res, i , 0 ) ;	//The current server
+		/*
+		 *	3. Maintaine the count of the servers which were not found in the map.
+		 */
+		/*
+		 *	Since no other thread is iterating the server_details (map_ready is locked),
+		 *	yb_server_status_change can be called without considering the 
+		 *	thread_safe (keeping the value of check_thread_safe as false).	If kept true 
+		 *	will endup in a deadlock.
+		 */
+		if (!yb_server_status_change(server,true,false) )
+		{
+			increase_map_size++  ; 
+			server_to_add[i] = true ; 
+		}else
+			server_to_add[i] =	false ; 
+
+	}
+	/*
+	 *	4. If count is not zero reallocate the map memory and add the values to it.  
+	 */
+
+	if(increase_map_size != 0)
+	{
+		/*
+		 *	Allocate the space
+		 */
+		struct node_details *temp_server_details = (struct node_details *) malloc ( (increase_map_size + total_servers) * sizeof (struct node_details));
+		for(int i =0 ;i < total_servers ; i++ )
+		{
+			temp_server_details[i] = server_details[i] ;
+		} 
+		for(int i =0 ;i < nServers ;i++)
+		{
+			if(!server_to_add[i])
+				continue ; 
+			/*
+			 *	Add the server details
+			 */
+			
+			char  *temp = PQgetvalue(res, i , 0 ) ;  
+			/* 
+			 *	Store the ip address
+			 */
+			temp_server_details[total_servers].host_ip = (char *)malloc(sizeof(char)*(strlen(temp)+1)) ;
+			strcpy(temp_server_details[total_servers].host_ip ,  temp )	 ;	
+			/*
+			 *	Reset the connection count
+			 */
+			temp_server_details[total_servers].connections =  0 ; 		
+			/*
+			 *	Create the topology key 
+			 */
+			int topology_len =  strlen(PQgetvalue(res, i , 4 ) ) +  strlen(PQgetvalue(res, i , 5 ) ) +  strlen(PQgetvalue(res, i , 6 ) ) + 3 ;  
+			temp_server_details[total_servers].topology = (char *) malloc(sizeof(char)*topology_len) ; 
+			strcpy( temp_server_details[total_servers].topology , PQgetvalue(res, i , 4 )  ) ; 
+			strcat(temp_server_details[total_servers].topology , ".") ; 
+			strcat(temp_server_details[total_servers].topology , PQgetvalue(res, i , 5 )) ; 
+			strcat(temp_server_details[total_servers].topology , ".") ; 
+			strcat(temp_server_details[total_servers].topology , PQgetvalue(res, i , 6 )) ; 
+			temp_server_details[total_servers].is_running = true ; 
+			total_servers++ ; 
+		}
+		/*
+		 *	Delete the previous data structure 
+		 */
+		free(server_details) ;
+		server_details = temp_server_details ;
+	}
+
 	
 	PQclear(res);
+	/*
+	 *	thread_unlock
+	 */
+	pthread_mutex_unlock(&(map_ready)) ; 
 	return 1 ; 
-	
+
 }
 
 /*
-* topology_check() checks that is server present in the required topology
-*/
+ *	topology_check() checks that is server present in the required topology.
+ * 	Input: A list of topology seperated with a  ',' in form of a string; 
+ * 		   The server's topology
+ * 	Returns true if the server is present in the given topology else false.
+ */
 
 bool topology_check(const char* topology_keys , const char* server_topology)
 {	
@@ -916,23 +1037,41 @@ bool topology_check(const char* topology_keys , const char* server_topology)
 	return false ; 
 }
 
-/*
-* next_host() returns the value of the server with 
-* with least number of connections 
-* returns NULL if no connection is found 
-*/
+/*	
+ *	next_host() returns the host with least number of connections 
+ *	which is running and present in a given toplogy.	
+ *	Input:	The toplogy keys for the required server 
+ *			(NULL In case of no such topology key ).
+ *			The pointer to the string where the value of next_host will be stored.
+ *	Returns true if the next_host is found, false if no such host is found.
+ *	It requires to lock th sync_next_host function so that only one
+ */
 
 bool next_host(const char *topology_keys , char **next_host_ip  ) 
 {
 	
+
+	/*
+	*	Check if the map is ready 
+	*/
+	pthread_mutex_lock(&(map_ready)) ;
+	/*
+	*	Add a thread_lock for this part 
+	*/
+
 	*next_host_ip = NULL ; 		//This can be updated 
 	int lowest_value = -1 ; 
 	for(int i =0 ;i < total_servers ; i++ )
 	{
-
+		/*
+		*	Add a thread lock 
+		*/
 		if(!server_details[i].is_running)
+		{
 			continue ;
-		if( (topology_keys == NULL) || topology_check(topology_keys ,  server_details[i].topology))
+		}
+		//printf(" %s ::: ::: %d\n", server_details[i].host_ip ,  server_details[i].connections ) ;
+ 		if( (topology_keys == NULL) || topology_check(topology_keys ,  server_details[i].topology))
 		{
 
 			if(*next_host_ip == NULL  )
@@ -948,195 +1087,337 @@ bool next_host(const char *topology_keys , char **next_host_ip  )
 			} 
 
 		}
+
 		
 	}
+
+	
+
+	
 	
 	if(*next_host_ip != NULL)
-	return 1 ; 
-	return 0 ; 
-
-}
-
-void yb_server_down(char *server_address)
-{
-	for(int i =0 ;i <  total_servers ;i++) 
 	{
-		if( strcmp(server_details[i].host_ip , server_address ) == 0  )
-			server_details[i].is_running = false ;
+		/*
+		 *	Since no other thread is iterating the server_details the 
+		 * 	update_map can be called with check_thread_safe as false.
+		 */
+		update_map( *next_host_ip ,  1 , false ) ;
+		/*
+		 *	Unlock the map_ready thread lock.
+		 */
+		pthread_mutex_unlock(&(map_ready)) ; 	
+		return 1 ; 	
+	}else
+	{	
+		/*
+		 *	Unlock the map_ready thread lock.
+		 */
+		pthread_mutex_unlock(&(map_ready )) ; 
+		return 0 ; 
 	}
 }
-/*
-* control_connection is used to update the values of the 
-* ip address in any cluster
-*/
 
+/*
+ *	yb_server_status_change() changes the is_running  status of the server 
+ *	returns true if the chage is successful else false
+ */
+
+bool yb_server_status_change(char *server_address , bool new_status , bool check_thread_safe )
+{
+
+	/*
+	 *	Check if the map is ready to iterate 
+	 */
+
+	if(check_thread_safe)
+		pthread_mutex_lock(&(map_ready)) ;
+	
+	
+
+	for(int i =0 ;i <  total_servers ;i++) 
+	{
+	
+		if( strcmp(server_details[i].host_ip , server_address ) == 0  )
+		{
+			server_details[i].is_running = new_status ;
+			if(check_thread_safe)
+				pthread_mutex_unlock(&(map_ready)) ;
+			return  true ; 
+		}	
+	}
+	if(check_thread_safe)
+		pthread_mutex_unlock(&(map_ready)) ;
+	
+	return false ;
+}
+
+/*
+ * 	control_connection is the backend connection that will 
+ *	be used to update the information about the servers in the cluster.
+ */
 
 PGconn * control_connection  = NULL ; 
 
-/*
-* connectLoadBalance function will be used to make any   LoadBalanced connection
-* The control_connection is established if it has not yet connected,  the host 
-* with lowest number of connnction will be choosen and a connnection will be 
-* made to it.
-*/
+/*	check_control_connection is used to establish the control connection and
+ *	update the server_details.
+ *		1.	Establish the control connection
+ *		2.	Initialize the map
+ *		3.	Update the clusters in the map
+ */
 
-bool connectLoadBalance(PGconn *conn  ) 
+
+
+static   pthread_mutex_t sync_control_connection = PTHREAD_MUTEX_INITIALIZER ;
+bool check_control_connection(PGconn *conn)
 {
-			
-		
-		if(control_connection == NULL || control_connection->status == CONNECTION_BAD)  //This needs to be changed 
-		{
-			
-		
-			/*
-			* Allocate the control_connection 
-			*/
+	/*
+	*	Thread lock
+	*/
+  	pthread_mutex_lock(&sync_control_connection); 
+	
+	start_control_connection :
+	/*
+	 *	Check if the control_connection has already been established or not.
+	 */
+
+	if(control_connection == NULL || control_connection->status != CONNECTION_OK )   
+	{
+		/*
+		 * Allocate the memory for the control_connection if required.
+		 */
 
 		if(control_connection == NULL) 
-		control_connection = makeEmptyPGconn();
+			control_connection = makeEmptyPGconn();
 
+		/*
+		 *	Unable to allocate the memory
+		 */
 		if (control_connection == NULL)
+		{
+			/*
+			 *	Thread unlock
+			 */
+			pthread_mutex_unlock(&sync_control_connection); 
 			return 0;
-
+		}
+		
 		/* 
-		*	Copy the connection info 
-		*/
+		 *	Copy the connection info 
+		 */
 
 		*control_connection =  *conn ; 
 
-		//Load balance feature is not considered for control_connection 
+		/* 
+		 *	Modify the load_balance feature to false 
+		 */ 
 		control_connection->load_balance = "false" ; 
 		control_connection->topology_keys = NULL  ;	 
 
+		/*
+		 * 	try_next_server is the index of the server 
+		 * 	we are trying to connect in the list server_details.
+		 *	Its value is -1 for the ip address provided by the user.
+		 */
 		int try_next_server = -1  ;
 
-		//The connection of control_connection 
+		/* 
+		 *	Try connecting with the server
+		 */
 		next_server_for_control_connection: 
 		/*
 		 * Compute derived options
-	 	*/
+	 	 */
 		if (!connectOptions2(control_connection))
+		{
+			/*
+			 * Try connecting with next server available in the cluster
+			 */
+			try_next_server++ ;
+			if(try_next_server < total_servers )
 			{
 				/*
-					* Try connecting with any server available in the cluster
-					*/
-
-					try_next_server++ ;
-					if(try_next_server < total_servers )
-					{
-						//Go for next server that can be connected 
-						control_connection->pghost = server_details[try_next_server].host_ip  ; 
-						goto next_server_for_control_connection ; 
-					}else
-					{
-						/*
-						* 	We are unable to establish any control_connection
-						*/
-						
-						PQfinish(control_connection) ; 
-						return 0 ;
-					}
-
+				 *	Try connecting to the next server
+				 */
+				control_connection->pghost = server_details[try_next_server].host_ip  ; 
+				goto next_server_for_control_connection ; 
+			}else
+			{
+				/*
+				* 	We are unable to establish any control_connection
+				*/
+				PQfinish(control_connection) ; 
+				/*
+				 * 	Thread unlock
+				 */
+				pthread_mutex_unlock(&sync_control_connection); 
+				return 0 ;
 			}
+		}
 		if (!connectDBStart( control_connection))
+		{
+			/*
+			 * Try connecting with next server available in the cluster
+			 */
+			try_next_server++ ;
+			if(try_next_server < total_servers )
 			{
 				/*
-					* Try connecting with any server available in the cluster
-					*/
-
-					try_next_server++ ;
-					if(try_next_server < total_servers )
-					{
-						//Go for next server that can be connected 
-						control_connection->pghost = server_details[try_next_server].host_ip  ; 
-						goto next_server_for_control_connection ; 
-					}else
-					{
-						/*
-						* 	We are unable to establish any control_connection
-						*/
-						control_connection->status = CONNECTION_BAD;
-					
-						return 0 ;
-					}
-				}
-			else{
-				(void) connectDBComplete(control_connection);
-				if(!add_cluster_info(control_connection ))
-				{
-					/*
-					* Try connecting with any server available in the cluster
-					*/
-
-					try_next_server++ ;
-					if(try_next_server < total_servers )
-					{
-						//Go for next server that can be connected 
-						control_connection->pghost = server_details[try_next_server].host_ip  ; 
-						goto next_server_for_control_connection ; 
-					}else
-					{
-						/*
-						* 	We are unable to establish any control_connection
-						*/
-						control_connection->status = CONNECTION_BAD;
-						return 0 ;
-					}
-				}
-					
-			}
-			
-		}
-		
-
-		conn->pghost = (char *) malloc( sizeof(char)  ) ;
-		char *next_least_connection  ;
-		/*
-		Change the host id 
-		*/
-		
-		next_server_for_connection:
-
-		
-		
-		if(next_host( conn->topology_keys , &next_least_connection ) )
-		{
-			
-			conn->pghost =  (char *) malloc ( (strlen( next_least_connection) + 1 ) *  sizeof(char)) ;
-			strcpy(conn->pghost , next_least_connection ) 	;	
-				
-		}
-		else
+				 *	Try connecting to the next server
+				 */
+				control_connection->pghost = server_details[try_next_server].host_ip  ; 
+				goto next_server_for_control_connection ; 
+			}else
 			{
-				
-
-				conn->status = CONNECTION_BAD ; 
-				return 0 ; 
+				/*
+				* 	We are unable to establish any control_connection
+				*/
+				PQfinish(control_connection) ; 
+				/*
+				 * 	Thread unlock
+				 */
+				pthread_mutex_unlock(&sync_control_connection); 
+				return 0 ;
 			}
+		}
 		
+		(void) connectDBComplete(control_connection);
+		if(!update_cluster_info(control_connection ) )
+		{
+			/*
+			 * Try connecting with next server available in the cluster
+			 */
+			try_next_server++ ;
+			if(try_next_server < total_servers )
+			{
+				/*
+				 *	Try connecting to the next server
+				 */
+				control_connection->pghost = server_details[try_next_server].host_ip  ; 
+				goto next_server_for_control_connection ; 
+			}else
+			{
+				/*
+				* 	We are unable to establish any control_connection
+				*/
+				PQfinish(control_connection) ; 
+				/*
+				 * 	Thread unlock
+				 */
+				pthread_mutex_unlock(&sync_control_connection); 
+				return 0 ;
+			}
+		}		
+	}
+
+	if(!update_cluster_info(control_connection))
+	{	
+		/*
+		 *	Unable to connect/retrieve data
+		 */
+		control_connection->status = CONNECTION_BAD;
+		goto start_control_connection ; 
+	} 
+
+	/*
+	*	Thread unlock
+	*/
+	pthread_mutex_unlock(&sync_control_connection); 
+	return 1 ; 
+}
+
+/*
+ *  yb_connectLoadBalance function will be used to make any   LoadBalanced connection
+ *	Input - PGconn connection object
+ *		1.	Check that the control connection is established
+ *  	2.	Consider the host with lowest number of connections and try to connect with it.
+ *		3. 	If the connection fails goto step 2 and repeat until all the available hosts are checked.
+ * 		4.	Once a connection is established return true else false if unable to establish connection with any host.
+ */
+
+
+bool yb_connectLoadBalance(PGconn *conn  ) 
+{	
+	/*
+	 *	Check the control connection
+	 */
+	if(!check_control_connection(conn))
+		return 0 ;
+
+
+	conn->pghost = NULL ;
+	char *next_least_connection  ;
 		
+	next_server_for_connection:
+
+	/* 
+	 *	Allocate the host with least number of connection
+	 */
+
+	if(next_host( conn->topology_keys , &next_least_connection ) )
+	{
+		/*
+		 *	Free the space taken by the conn->pghost 
+		 */
+
+		
+		if(conn->pghost)
+			free(conn->pghost);
+
+		conn->pghost =  (char *) malloc ( (strlen( next_least_connection) + 1 ) *  sizeof(char)) ;
+		strcpy(conn->pghost , next_least_connection ) 	;			
+	}
+	else
+	{
+		/*
+		 *	If next_host returns false then the map was not updated
+		 */
+		conn->status = CONNECTION_BAD ; 
+		return 0 ; 
+	}
+
+	/*
+	 * Compute derived options
+	 */
+
+	if (!connectOptions2(conn))
+	{
+		/* 
+		 *	Update the server's is_running status to false 
+		 */
+	    yb_server_status_change(next_least_connection,false,true) ;
+		/*
+		 *	Since the connection count was optimistically incremented, decrement the count.
+		 */
+		update_map(conn->pghost , -1 , true)  ; 
+		/*
+		 *	Try connecting with the next host
+		 */
+	    goto next_server_for_connection ;
+	}
+	   
+    /*
+    * Optimistically modifying the map 
+    */
+
+        
+    if (!connectDBStart( conn))
+	{	/* 
+		 *	Update the server's is_running status to false 
+		 */
+	    yb_server_status_change(next_least_connection,false,true) ;
+		/*
+		 *	Since the connection count was optimistically incremented, decrement the count.
+		 *	Check for thread_safe.
+		 */
+		update_map(conn->pghost , -1 ,true)  ; 
 
 		/*
-		 * Compute derived options
-	 	*/
-		if (!connectOptions2(conn))
-		{
-		      yb_server_down(next_least_connection) ;
-		      goto next_server_for_connection ;
-		}   
-                  /*
-                   * Optimistically modifying the map 
-                  */
+		 *	Try connecting with the next host
+		 */
+	    goto next_server_for_connection ;
+	}
 
-                update_map(conn->pghost ,  1 ) ; 
-                if (!connectDBStart( conn))
-	      	{
-		      yb_server_down(next_least_connection) ;
-		      update_map(conn->pghost , -1 )  ; 
-                      goto next_server_for_connection ;
-			}
-
-			return 1  ;
+	return 1  ;
 
 }
 
@@ -1182,24 +1463,23 @@ PQconnectStart(const char *conninfo)
 	
 
 	/*
-	*	Check for the load_balance 
-	*/
+	 *	Check for the load_balance 
+	 */
 
 	
 	if(conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0 ) 
 	{
 		/*
-		*	Make the smart connection with the loadbalance feature 
-		*/
+		 *	Make the smart connection with the loadbalance feature 
+		 */
 	
-	if(!connectLoadBalance(conn  ) ) {
-				/* Just in case we failed to set it in connectDBStart */
+		if(!yb_connectLoadBalance(conn  ) ) 
+			{
+			/*
+			 * Just in case we failed to set it in connectDBStart 
+			 */
 			conn->status = CONNECTION_BAD;
-		}	
-		
-		return conn ;
-
-
+			}	
 	}else
 	{
 		/*
@@ -1212,14 +1492,10 @@ PQconnectStart(const char *conninfo)
 				/* Just in case we failed to set it in connectDBStart */
 			conn->status = CONNECTION_BAD;
 			}	
-		
-
-		return conn ;
-
 	}
-		
-	
-	
+
+	return conn ;
+
 }
 
 /*
@@ -4169,13 +4445,11 @@ closePGconn(PGconn *conn)
 void
 PQfinish(PGconn *conn)
 {
-	if (conn)
+	if (conn != NULL )
 	{	
-
-		
 		if( (conn->load_balance != NULL) && (strcmp(conn->load_balance,"true") == 0 ) )
 		{
-                    update_map(conn->pghost , -1 ) ; 
+                    update_map(conn->pghost , -1 ,true) ; 
 		}
 		
 
