@@ -190,13 +190,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"load_balance" , "YBLOAD_BALANCE", NULL, NULL, 
 	"Load-Balancing" , "D" ,  20 , 
 	offsetof(struct pg_conn, load_balance) },
-
 	
 	{"topology_keys" , "YBTOPOLOGY_KEYS", NULL, NULL, 
 	"topology_keys" , "D" ,  20 , 
 	offsetof(struct pg_conn, topology_keys) },
-
-	
 
 	{"authtype", "PGAUTHTYPE", DefaultAuthtype, NULL,
 	"Database-Authtype", "D", 20, -1},
@@ -634,22 +631,21 @@ PQpingParams(const char *const *keywords,
 
 
 /*
-* node_details will store the details regarding the connection count for any server
-*/
-
+ * node_details will store the details regarding the connection count for any server
+ */
 struct node_details {
 	char *host_ip ; 
 	int connections; 
 	char *topology ; 
 	bool is_running ; 
 } *server_details = NULL;
+
 /*
-*	Before iterating over the map the map_ready mutex must be checked
-*/
+ *	Before iterating over the map the map_ready mutex must be checked
+ */
 static pthread_mutex_t map_ready = PTHREAD_MUTEX_INITIALIZER ;
 int total_servers =0 ; 
 time_t yb_last_update_time = 0 ; 
-
 
 /*
  *	update_map will be used to increase or decrease the count of connection for any server
@@ -658,36 +654,24 @@ time_t yb_last_update_time = 0 ;
  *			check_thread_safe: Boolean value, if true then lock the map_ready thread lock 
  *							   before iterating. 
  */
-
-
 void  update_map(const char *ip_address , int change , bool check_thread_safe) 
 {
-
-
 	/* In case if the ip_address is NULL */
-
-
 	if( !ip_address)
-	return ; 	/* This can be made boolean for success or failure identification */
+		return ; 	
 
-
-	/*
-	*	Add a thread lock for the map
-	*/
+	/*	Add a thread lock for the map	*/
 	if(check_thread_safe)
 		pthread_mutex_lock(&(map_ready)) ;
 	
 	for(int i =0 ;i <  total_servers ; i++ )
 	{	
 		if(strcmp(server_details[i].host_ip , ip_address ) == 0 )
-			server_details[i].connections += change ; //Update the connection count
+			server_details[i].connections += change ; 	/*	Update the connection count	*/
 	}
 	if(check_thread_safe)
-		pthread_mutex_unlock(&(map_ready)) ; 
-
-	
+		pthread_mutex_unlock(&(map_ready)) ; 	
 }
-
 
 /*
  *		PQconnectdb
@@ -802,58 +786,52 @@ PQconnectStartParams(const char *const *keywords,
 	PQconninfoFree(connOptions);
 
 	/*
-	*	Check for the load_balance 
-	*/
-
+	 * Check for the load_balance 
+	 */
 	if(conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0 ) 
 	{
 		/*
-		*	Make the smart connection with the loadbalance feature 
-		*/
-		
+		 * Make the smart connection with the loadbalance feature 
+		 */
 		if( !yb_connectLoadBalance(conn  ) )
 			conn->status = CONNECTION_BAD;
-		return conn ;
-
 
 	}else
 	{
 		/*
 		 * Compute derived options
-	 	*/
+	 	 */
 		if (!connectOptions2(conn))
 			return conn;
+
 		if (!connectDBStart( conn))
-			{
-				/* Just in case we failed to set it in connectDBStart */
+		{
+			/*
+			 * Just in case we failed to set it in connectDBStart 
+			 */
 			conn->status = CONNECTION_BAD;
-			}	
-		
-		return conn ;
-
+		}	
 	}
-		
-
-
+	
+	return conn ;
 }
 
 /* 
- *	update_cluster_info populates the data regarding the server into the 
- *	server_details map/list.
- *	If the last update happened before 5 minutes the update will be skipped.
- *	Use contro_connection to execute the query : "SELECT  * from yb_servers() ;"
- *	Once the query's results has been received the yb_last_update_time is modified.
- *	If any server that is present in server_details but is absent in the result 
- *	of the above query it is considered to be down. All other servers present in
- *	the result are considered to be running.
- *	It returns 1 for every successful update and 0 for any failure.
+ * update_cluster_info populates the data regarding the server into the 
+ * server_details map/list.
+ * If the last update happened before 5 minutes the update will be skipped.
+ * Use contro_connection to execute the query : "SELECT  * from yb_servers() ;"
+ * Once the query's results has been received the yb_last_update_time is modified.
+ * If any server that is present in server_details but is absent in the result 
+ * of the above query it is considered to be down. All other servers present in
+ * the result are considered to be running.
+ * It returns 1 for every successful update and 0 for any failure.
  */
-
 bool update_cluster_info(PGconn *conn)
 {	
 	
 	/*
-	 *	Check for the last update time 
+	 * Check for the last update time 
 	 */
 	const int refresh_time = 5*60 ; //	5 mins 
 	time_t temp_time =  time(NULL ) ; 
@@ -861,23 +839,23 @@ bool update_cluster_info(PGconn *conn)
 		return 1 ; 
 	
 	/*
-	 *	Collect the data using the query "SELECT  * from yb_servers() ; "
+	 * Collect the data using the query "SELECT  * from yb_servers() ; "
 	 */
 
 	PGresult   *res;
 	/* 
-	 *	Check to see that the backend connection was successfully made 
+	 * Check to see that the backend connection was successfully made 
 	 */
   	if (PQstatus(conn) != CONNECTION_OK)
       	return 0 ; 
 	/*
-	 *	Execute the query
+	 * Execute the query
 	 */
   	res = PQexec(conn , "SELECT  * from yb_servers() ; ") ; 
   	if (PQresultStatus(res) != PGRES_TUPLES_OK)
   	{	
 		/*
-		 * 	Incase if any error occurs
+		 * Incase if any error occurs
 		 */
     	PQclear(res);
 		conn->status = CONNECTION_BAD ;  
@@ -885,13 +863,12 @@ bool update_cluster_info(PGconn *conn)
   	}
 	
 	/*
-	 *	Locking the map_ready so that no other thread can start iterating it.
+	 * Locking the map_ready so that no other thread can start iterating it.
 	 */
-
 	pthread_mutex_lock(&(map_ready)) ; 
 
 	/*
-	*	Update the yb_last_update_time
+	* Update the yb_last_update_time
 	*/
 	yb_last_update_time = time(NULL) ; 
 
@@ -903,37 +880,38 @@ bool update_cluster_info(PGconn *conn)
 	 */
 
 	/*
-	*	1. Assigne the value of is_running as false for all the servers.
-	*/
+	 * Assigne the value of is_running as false for all the servers.
+	 */
 	
 	for(int i =0;i< total_servers ; i++ )
 	{
 		server_details[i].is_running = false ; 
 	}
 
-	int  nServers = PQntuples(res);	//Total number of servers found in the query's result.
-	int increase_map_size = 0 ; 	//For keeping the count of servers to be added.
-	bool server_to_add[nServers] ; 	//For keeping the mark of servers to be added.
+	
+	int  nServers = PQntuples(res);	/* Total number of servers found in the query's result */
+	int increase_map_size = 0 ; 	/* For keeping the count of servers to be added. */
+	bool server_to_add[nServers] ; 	/* For keeping the mark of servers to be added. */
 
 	/*
-	 *	2. Iterate the result and update the is_running as true.
+	 * Iterate the result and update the is_running as true.
 	 */
-  	
-	for (int i = 0; i < nServers ; i++)
+  	for (int i = 0; i < nServers ; i++)
   	{
 	  
-		char  *server = PQgetvalue(res, i , 0 ) ;	//The current server
+		char  *server = PQgetvalue(res, i , 0 ) ;	
+
 		/*
-		 *	3. Maintaine the count of the servers which were not found in the map.
-		 */
-		/*
-		 *	Since no other thread is iterating the server_details (map_ready is locked),
-		 *	yb_server_status_change can be called without considering the 
-		 *	thread_safe (keeping the value of check_thread_safe as false).	If kept true 
-		 *	will endup in a deadlock.
+		 * Since no other thread is iterating the server_details (map_ready is locked),
+		 * yb_server_status_change can be called without considering the 
+		 * thread_safe (keeping the value of check_thread_safe as false).	If kept true 
+		 * will endup in a deadlock.
 		 */
 		if (!yb_server_status_change(server,true,false) )
 		{
+			/*
+		 	* Maintaine the count of the servers which were not found in the map.
+		 	*/
 			increase_map_size++  ; 
 			server_to_add[i] = true ; 
 		}else
@@ -947,33 +925,36 @@ bool update_cluster_info(PGconn *conn)
 	if(increase_map_size != 0)
 	{
 		/*
-		 *	Allocate the space
+		 * Allocate the space
 		 */
 		struct node_details *temp_server_details = (struct node_details *) malloc ( (increase_map_size + total_servers) * sizeof (struct node_details));
 		for(int i =0 ;i < total_servers ; i++ )
 		{
 			temp_server_details[i] = server_details[i] ;
 		} 
+
+		/*
+		 * Add the server details
+		 */
 		for(int i =0 ;i < nServers ;i++)
 		{
 			if(!server_to_add[i])
 				continue ; 
-			/*
-			 *	Add the server details
-			 */
 			
-			char  *temp = PQgetvalue(res, i , 0 ) ;  
 			/* 
-			 *	Store the ip address
+			 * Store the ip address
 			 */
-			temp_server_details[total_servers].host_ip = (char *)malloc(sizeof(char)*(strlen(temp)+1)) ;
-			strcpy(temp_server_details[total_servers].host_ip ,  temp )	 ;	
+			char  *temp_host_id = PQgetvalue(res, i , 0 ) ;  
+			temp_server_details[total_servers].host_ip = (char *)malloc(sizeof(char)*(strlen(temp_host_id)+1)) ;
+			strcpy(temp_server_details[total_servers].host_ip ,  temp_host_id )	 ;	
+			
 			/*
-			 *	Reset the connection count
+			 * Reset the connection count
 			 */
-			temp_server_details[total_servers].connections =  0 ; 		
+			temp_server_details[total_servers].connections =  0 ; 
+
 			/*
-			 *	Create the topology key 
+			 * Create the topology key 
 			 */
 			int topology_len =  strlen(PQgetvalue(res, i , 4 ) ) +  strlen(PQgetvalue(res, i , 5 ) ) +  strlen(PQgetvalue(res, i , 6 ) ) + 3 ;  
 			temp_server_details[total_servers].topology = (char *) malloc(sizeof(char)*topology_len) ; 
@@ -985,21 +966,21 @@ bool update_cluster_info(PGconn *conn)
 			temp_server_details[total_servers].is_running = true ; 
 			total_servers++ ; 
 		}
+
 		/*
-		 *	Delete the previous data structure 
+		 * Delete the previous data structure 
 		 */
 		free(server_details) ;
 		server_details = temp_server_details ;
 	}
 
-	
 	PQclear(res);
+
 	/*
 	 *	thread_unlock
 	 */
 	pthread_mutex_unlock(&(map_ready)) ; 
 	return 1 ; 
-
 }
 
 /*
@@ -1008,7 +989,6 @@ bool update_cluster_info(PGconn *conn)
  * 		   The server's topology
  * 	Returns true if the server is present in the given topology else false.
  */
-
 bool topology_check(const char* topology_keys , const char* server_topology)
 {	
 	if( (topology_keys == NULL ) || strcmp(topology_keys , "" ) ==0  )	
@@ -1460,33 +1440,23 @@ PQconnectStart(const char *conninfo)
 	/*
 	 *	Check for the load_balance 
 	 */
-
-	
 	if(conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0 ) 
 	{
 		/*
-		 *	Make the smart connection with the loadbalance feature 
+		 * Make the smart connection with the loadbalance feature 
 		 */
-	
 		if(!yb_connectLoadBalance(conn  ) ) 
-			{
-			/*
-			 * Just in case we failed to set it in connectDBStart 
-			 */
 			conn->status = CONNECTION_BAD;
-			}	
 	}else
 	{
 		/*
 		 * Compute derived options
-	 	*/
+	 	 */
 		if (!connectOptions2(conn))
 			return conn;
+
 		if (!connectDBStart( conn))
-			{
-				/* Just in case we failed to set it in connectDBStart */
-			conn->status = CONNECTION_BAD;
-			}	
+			conn->status = CONNECTION_BAD;		/* Just in case we failed to set it in connectDBStart */
 	}
 
 	return conn ;
