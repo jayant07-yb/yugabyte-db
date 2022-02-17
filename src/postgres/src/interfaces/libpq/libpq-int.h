@@ -359,7 +359,6 @@ struct pg_conn
 	char	   *requirepeer;	/* required peer credentials for local sockets */
 	char	   *topology_keys; 	/* Stores the details about the topology */
 	char 	   *load_balance ; 	/* For enabling the load_balancing feature */ 
-	
 #if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
 	char	   *krbsrvname;		/* Kerberos service name */
 #endif

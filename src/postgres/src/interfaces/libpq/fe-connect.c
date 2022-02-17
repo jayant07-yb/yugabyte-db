@@ -26,6 +26,7 @@
 #include "libpq-int.h"
 #include "fe-auth.h"
 #include "pg_config_paths.h"
+
 #include<time.h>
 #ifdef WIN32
 #include "win32.h"
@@ -715,8 +716,10 @@ PGconn *
 PQconnectdb(const char *conninfo)
 {
 	PGconn	   *conn = PQconnectStart(conninfo);
+
 	if (conn && conn->status != CONNECTION_BAD)
 		(void) connectDBComplete(conn);
+
 	return conn;
 }
 
@@ -798,7 +801,6 @@ PQconnectStartParams(const char *const *keywords,
 	 */
 	PQconninfoFree(connOptions);
 
-	
 	/*
 	*	Check for the load_balance 
 	*/
@@ -1556,7 +1558,6 @@ connectOptions1(PGconn *conn, const char *conninfo)
 		/* errorMessage is already set */
 		return false;
 	}
-
 
 	/*
 	 * Move option values into conn structure
@@ -2746,7 +2747,7 @@ keep_going:						/* We will come back to here until there is
 	if (conn->try_next_addr)
 	{
 		if (conn->addr_cur && conn->addr_cur->ai_next)
-		{	
+		{
 			conn->addr_cur = conn->addr_cur->ai_next;
 			reset_connection_state_machine = true;
 		}
@@ -4193,7 +4194,6 @@ makeEmptyPGconn(void)
 	conn->verbosity = PQERRORS_DEFAULT;
 	conn->show_context = PQSHOW_CONTEXT_ERRORS;
 	conn->sock = PGINVALID_SOCKET;
-	
 	/*
 	 * We try to send at least 8K at a time, which is the usual size of pipe
 	 * buffers on Unix systems.  That way, when we are sending a large amount
@@ -4269,8 +4269,6 @@ freePGconn(PGconn *conn)
 		}
 		free(conn->connhost);
 	}
-
-	
 
 	if (conn->client_encoding_initial)
 		free(conn->client_encoding_initial);
@@ -6680,8 +6678,7 @@ conninfo_storeval(PQconninfoOption *connOptions,
 
 	option = conninfo_find(connOptions, keyword);
 	if (option == NULL)
-	{
-		
+	{	
 		if (!ignoreMissing)
 			printfPQExpBuffer(errorMessage,
 							  libpq_gettext("invalid connection option \"%s\"\n"),
@@ -6728,7 +6725,6 @@ conninfo_find(PQconninfoOption *connOptions, const char *keyword)
 
 	for (option = connOptions; option->keyword != NULL; option++)
 	{
-		
 		if (strcmp(option->keyword, keyword) == 0)
 			return option;
 	}
