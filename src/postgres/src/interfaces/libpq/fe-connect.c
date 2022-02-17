@@ -4194,6 +4194,7 @@ makeEmptyPGconn(void)
 	conn->verbosity = PQERRORS_DEFAULT;
 	conn->show_context = PQSHOW_CONTEXT_ERRORS;
 	conn->sock = PGINVALID_SOCKET;
+
 	/*
 	 * We try to send at least 8K at a time, which is the usual size of pipe
 	 * buffers on Unix systems.  That way, when we are sending a large amount
@@ -4438,14 +4439,10 @@ PQfinish(PGconn *conn)
 	if (conn != NULL )
 	{	
 		if( (conn->load_balance != NULL) && (strcmp(conn->load_balance,"true") == 0 ) )
-		{
-                    update_map(conn->pghost , -1 ,true) ; 
-		}
+		            update_map(conn->pghost , -1 ,true) ; 
 		
-
 		closePGconn(conn);
 		freePGconn(conn);
-	
 	}
 }
 
@@ -6678,7 +6675,7 @@ conninfo_storeval(PQconninfoOption *connOptions,
 
 	option = conninfo_find(connOptions, keyword);
 	if (option == NULL)
-	{	
+	{
 		if (!ignoreMissing)
 			printfPQExpBuffer(errorMessage,
 							  libpq_gettext("invalid connection option \"%s\"\n"),
