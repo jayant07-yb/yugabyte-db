@@ -12,9 +12,6 @@
  *-------------------------------------------------------------------------
  */
 
-
-
-
 #ifndef LIBPQ_FE_H
 #define LIBPQ_FE_H
 
@@ -47,7 +44,6 @@ extern "C"
 
 #define DefaultHost "localhost"
 
-
 /* Application-visible enum types */
 
 /*
@@ -55,7 +51,6 @@ extern "C"
  * should never be removed, nor should constants be redefined - that would
  * break compatibility with existing code.
  */
-
 
 typedef enum
 {
@@ -278,7 +273,6 @@ extern PGconn *PQsetdbLogin(const char *pghost, const char *pgport,
 			 const char *pgoptions, const char *pgtty,
 			 const char *dbName,
 			 const char *login, const char *pwd);
-
 
 #define PQsetdb(M_PGHOST,M_PGPORT,M_PGOPT,M_PGTTY,M_DBNAME)  \
 	PQsetdbLogin(M_PGHOST, M_PGPORT, M_PGOPT, M_PGTTY, M_DBNAME, NULL, NULL)
