@@ -15,7 +15,6 @@
 
 #include "postgres_fe.h"
 
-#include <pthread.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
@@ -27,7 +26,6 @@
 #include "fe-auth.h"
 #include "pg_config_paths.h"
 
-#include<time.h>
 #ifdef WIN32
 #include "win32.h"
 #ifdef _WIN32_IE
