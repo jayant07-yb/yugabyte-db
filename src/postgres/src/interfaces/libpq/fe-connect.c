@@ -639,33 +639,35 @@ struct node_details {
 } *server_details = NULL;
 
 /*
- *	Before iterating over the map the map_ready mutex must be checked
+ * Before iterating over the map the map_ready mutex must be checked
  */
 static pthread_mutex_t map_ready = PTHREAD_MUTEX_INITIALIZER ;
 int total_servers =0 ; 
 time_t yb_last_update_time = 0 ; 
 
 /*
- *	update_map will be used to increase or decrease the count of connection for any server
- *	Input:	The ip_address of the server
- *			change: +1 to increment / -1 to decrement the connection count.
- *			check_thread_safe: Boolean value, if true then lock the map_ready thread lock 
- *							   before iterating. 
+ *		YBupdateMap
+ *
+ * YBupdateMap will be used to increase or decrease the count of connection for any server
+ * Input: The ip_address of the server
+ *		    change: +1 to increment / -1 to decrement the connection count.
+ *		    check_thread_safe: Boolean value, if true then lock the map_ready thread lock 
+ *		    				   before iterating. 
  */
-void  update_map(const char *ip_address , int change , bool check_thread_safe) 
+void  YBupdateMap(const char *ip_address , int change , bool check_thread_safe) 
 {
 	/* In case if the ip_address is NULL */
 	if( !ip_address)
 		return ; 	
 
-	/*	Add a thread lock for the map	*/
+	/* Add a thread lock for the map	*/
 	if(check_thread_safe)
 		pthread_mutex_lock(&(map_ready)) ;
 	
 	for(int i =0 ;i <  total_servers ; i++ )
 	{	
 		if(strcmp(server_details[i].host_ip , ip_address ) == 0 )
-			server_details[i].connections += change ; 	/*	Update the connection count	*/
+			server_details[i].connections += change ; 	/* Update the connection count	*/
 	}
 	if(check_thread_safe)
 		pthread_mutex_unlock(&(map_ready)) ; 	
@@ -791,7 +793,7 @@ PQconnectStartParams(const char *const *keywords,
 		/*
 		 * Make the smart connection with the loadbalance feature 
 		 */
-		if( !yb_connectLoadBalance(conn  ) )
+		if( !YBconnectLoadBalance(conn  ) )
 			conn->status = CONNECTION_BAD;
 
 	}else
@@ -815,7 +817,9 @@ PQconnectStartParams(const char *const *keywords,
 }
 
 /* 
- * update_cluster_info populates the data regarding the server into the 
+ *		YBupdateCusterinfo
+ *
+ * YBupdateCusterinfo populates the data regarding the server into the 
  * server_details map/list.
  * If the last update happened before 5 minutes the update will be skipped.
  * Use contro_connection to execute the query : "SELECT  * from yb_servers() ;"
@@ -825,9 +829,8 @@ PQconnectStartParams(const char *const *keywords,
  * the result are considered to be running.
  * It returns 1 for every successful update and 0 for any failure.
  */
-bool update_cluster_info(PGconn *conn)
+bool YBupdateCusterinfo(PGconn *conn)
 {	
-	
 	/*
 	 * Check for the last update time 
 	 */
@@ -880,7 +883,6 @@ bool update_cluster_info(PGconn *conn)
 	/*
 	 * Assigne the value of is_running as false for all the servers.
 	 */
-	
 	for(int i =0;i< total_servers ; i++ )
 	{
 		server_details[i].is_running = false ; 
@@ -901,11 +903,11 @@ bool update_cluster_info(PGconn *conn)
 
 		/*
 		 * Since no other thread is iterating the server_details (map_ready is locked),
-		 * yb_server_status_change can be called without considering the 
+		 * YBserverStatusChange can be called without considering the 
 		 * thread_safe (keeping the value of check_thread_safe as false).	If kept true 
 		 * will endup in a deadlock.
 		 */
-		if (!yb_server_status_change(server,true,false) )
+		if (!YBserverStatusChange(server,true,false) )
 		{
 			/*
 		 	* Maintaine the count of the servers which were not found in the map.
@@ -916,10 +918,10 @@ bool update_cluster_info(PGconn *conn)
 			server_to_add[i] =	false ; 
 
 	}
+
 	/*
 	 *	4. If count is not zero reallocate the map memory and add the values to it.  
 	 */
-
 	if(increase_map_size != 0)
 	{
 		/*
@@ -982,12 +984,14 @@ bool update_cluster_info(PGconn *conn)
 }
 
 /*
- *	topology_check() checks that is server present in the required topology.
+ *		YBtopologyCheck
+ *
+ *	YBtopologyCheck() checks that is server present in the required topology.
  * 	Input: A list of topology seperated with a  ',' in form of a string; 
  * 		   The server's topology
  * 	Returns true if the server is present in the given topology else false.
  */
-bool topology_check(const char* topology_keys , const char* server_topology)
+bool YBtopologyCheck(const char* topology_keys , const char* server_topology)
 {	
 	if( (topology_keys == NULL ) || strcmp(topology_keys , "" ) ==0  )	
 		return true ; 
@@ -1014,7 +1018,9 @@ bool topology_check(const char* topology_keys , const char* server_topology)
 }
 
 /*	
- *	next_host() returns the host with least number of connections 
+ *		next_host
+ *
+ *	YBnextHost() returns the host with least number of connections 
  *	which is running and present in a given toplogy.	
  *	Input:	The toplogy keys for the required server 
  *			(NULL In case of no such topology key ).
@@ -1022,15 +1028,12 @@ bool topology_check(const char* topology_keys , const char* server_topology)
  *	Returns true if the next_host is found, false if no such host is found.
  *	It requires to lock th sync_next_host function so that only one
  */
-bool next_host(const char *topology_keys , char **next_host_ip  ) 
+bool YBnextHost(const char *topology_keys , char **next_host_ip  ) 
 {
 	/*
 	 * Check if the map is ready 
 	 */
 	pthread_mutex_lock(&(map_ready)) ;
-	/*
-	 * Add a thread_lock for this part 
-	 */
 
 	*next_host_ip = NULL ; 
 	int lowest_value = -1 ; 
@@ -1039,7 +1042,7 @@ bool next_host(const char *topology_keys , char **next_host_ip  )
 		if(!server_details[i].is_running)
 			continue ;
 		
-		if( (topology_keys == NULL) || topology_check(topology_keys ,  server_details[i].topology))
+		if( (topology_keys == NULL) || YBtopologyCheck(topology_keys ,  server_details[i].topology))
 		{
 			if(*next_host_ip == NULL  )
 			{
@@ -1058,9 +1061,9 @@ bool next_host(const char *topology_keys , char **next_host_ip  )
 	{
 		/*
 		 *	Since no other thread is iterating the server_details the 
-		 * 	update_map can be called with check_thread_safe as false.
+		 * 	YBupdateMap can be called with check_thread_safe as false.
 		 */
-		update_map( *next_host_ip ,  1 , false ) ;
+		YBupdateMap( *next_host_ip ,  1 , false ) ;
 		/*
 		 *	Unlock the map_ready thread lock.
 		 */
@@ -1077,10 +1080,12 @@ bool next_host(const char *topology_keys , char **next_host_ip  )
 }
 
 /*
- *	yb_server_status_change() changes the is_running  status of the server 
+ *		YBserverStatusChange
+ *
+ *	YBserverStatusChange() changes the is_running  status of the server 
  *	returns true if the chage is successful else false
  */
-bool yb_server_status_change(char *server_address , bool new_status , bool check_thread_safe )
+bool YBserverStatusChange(char *server_address , bool new_status , bool check_thread_safe )
 {
 
 	/*
@@ -1113,17 +1118,20 @@ bool yb_server_status_change(char *server_address , bool new_status , bool check
 PGconn * control_connection  = NULL ; 
 
 /*
- * thread_lock mutex for check_control_connection function
+ * thread_lock mutex for YBcheckControlConnection function
  */
 static   pthread_mutex_t sync_control_connection = PTHREAD_MUTEX_INITIALIZER ;
 
-/* check_control_connection is used to establish the control connection and
+/*
+ *		YBcheckControlConnection
+ *
+ * YBcheckControlConnection is used to establish the control connection and
  * update the server_details.
  * 	1.	Establish the control connection
  * 	2.	Initialize the map
  * 	3.	Update the clusters in the map
  */
-bool check_control_connection(PGconn *conn)
+bool YBcheckControlConnection(PGconn *conn)
 {
 	/*
 	 * Thread lock
@@ -1236,7 +1244,7 @@ bool check_control_connection(PGconn *conn)
 		}
 		
 		(void) connectDBComplete(control_connection);
-		if(!update_cluster_info(control_connection ) )
+		if(!YBupdateCusterinfo(control_connection ) )
 		{
 			/*
 			 * Try connecting with next server available in the cluster
@@ -1255,6 +1263,7 @@ bool check_control_connection(PGconn *conn)
 				 * We are unable to establish any control_connection
 				 */
 				PQfinish(control_connection) ; 
+
 				/*
 				 * 	Thread unlock
 				 */
@@ -1264,7 +1273,7 @@ bool check_control_connection(PGconn *conn)
 		}		
 	}
 
-	if(!update_cluster_info(control_connection))
+	if(!YBupdateCusterinfo(control_connection))
 	{	
 		/*
 		 * Unable to connect/retrieve data
@@ -1281,19 +1290,21 @@ bool check_control_connection(PGconn *conn)
 }
 
 /*
- *  yb_connectLoadBalance function will be used to make any   LoadBalanced connection
- *	Input - PGconn connection object
- *		1.	Check that the control connection is established
- *  	2.	Consider the host with lowest number of connections and try to connect with it.
- *		3. 	If the connection fails goto step 2 and repeat until all the available hosts are checked.
- * 		4.	Once a connection is established return true else false if unable to establish connection with any host.
+ *		YBconnectLoadBalance
+ *
+ * YBconnectLoadBalance function will be used to make any   LoadBalanced connection
+ * Input - PGconn connection object
+ *	1.	Check that the control connection is established
+ * 	2.	Consider the host with lowest number of connections and try to connect with it.
+ *	3. 	If the connection fails goto step 2 and repeat until all the available hosts are checked.
+ * 	4.	Once a connection is established return true else false if unable to establish connection with any host.
  */
-bool yb_connectLoadBalance(PGconn *conn  ) 
+bool YBconnectLoadBalance(PGconn *conn  ) 
 {	
 	/*
 	 * Check the control connection
 	 */
-	if(!check_control_connection(conn))
+	if(!YBcheckControlConnection(conn))
 		return 0 ;
 
 	conn->pghost = NULL ;
@@ -1304,11 +1315,8 @@ bool yb_connectLoadBalance(PGconn *conn  )
 	/* 
 	 *	Allocate the host with least number of connection
 	 */
-	if(next_host( conn->topology_keys , &next_least_connection ) )
+	if(YBnextHost( conn->topology_keys , &next_least_connection ) )
 	{
-		/*
-		 *	Free the space taken by the conn->pghost 
-		 */
 		if(conn->pghost)
 			free(conn->pghost);
 		conn->pghost =  (char *) malloc ( (strlen( next_least_connection) + 1 ) *  sizeof(char)) ;
@@ -1331,12 +1339,12 @@ bool yb_connectLoadBalance(PGconn *conn  )
 		/* 
 		 *	Update the server's is_running status to false 
 		 */
-	    yb_server_status_change(next_least_connection,false,true) ;
+	    YBserverStatusChange(next_least_connection,false,true) ;
 		
 		/*
 		 *	Since the connection count was optimistically incremented, decrement the count.
 		 */
-		update_map(conn->pghost , -1 , true)  ; 
+		YBupdateMap(conn->pghost , -1 , true)  ; 
 		/*
 		 *	Try connecting with the next host
 		 */
@@ -1347,13 +1355,13 @@ bool yb_connectLoadBalance(PGconn *conn  )
 	{	/* 
 		 *	Update the server's is_running status to false 
 		 */
-	    yb_server_status_change(next_least_connection,false,true) ;
+	    YBserverStatusChange(next_least_connection,false,true) ;
 		
 		/*
 		 *	Since the connection count was optimistically incremented, decrement the count.
 		 *	Check for thread_safe.
 		 */
-		update_map(conn->pghost , -1 ,true)  ; 
+		YBupdateMap(conn->pghost , -1 ,true)  ; 
 
 		/*
 		 *	Try connecting with the next host
@@ -1409,7 +1417,7 @@ PQconnectStart(const char *conninfo)
 		/*
 		 * Make the smart connection with the loadbalance feature 
 		 */
-		if(!yb_connectLoadBalance(conn  ) ) 
+		if(!YBconnectLoadBalance(conn  ) ) 
 			conn->status = CONNECTION_BAD;
 	}else
 	{
@@ -4372,7 +4380,7 @@ PQfinish(PGconn *conn)
 	if (conn != NULL )
 	{	
 		if( (conn->load_balance != NULL) && (strcmp(conn->load_balance,"true") == 0 ) )
-		            update_map(conn->pghost , -1 ,true) ; 
+		            YBupdateMap(conn->pghost , -1 ,true) ; 
 		
 		closePGconn(conn);
 		freePGconn(conn);
