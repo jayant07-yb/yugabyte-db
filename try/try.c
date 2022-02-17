@@ -15,13 +15,10 @@ void* foo(void* p){
   pthread_exit(&i);
 }
 
-void ThreadFun()
+void test_driver()
 {
 
-    const char *conninfo;
-    
-
-  
+    const char *conninfo;  
     // conninfo = "host=10.150.1.126,10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte  load_balance=true topology_keys=gcp.us-west1.us-west1-d,gcp.us-west1.us-west1-e ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
     conninfo = "host=10.150.0.218 port=5433 dbname=yugabyte user=yugabyte password=yugabyte load_balance=true topology_keys=gcp.us-west1.us-west1-d ";  // load_balance=true topology_keys=gcp.us-west1.us-west1-c
     PGconn     *conn;
@@ -79,7 +76,6 @@ if (PQstatus(conn) != CONNECTION_OK)
 }
 
 int main(void){
-
-ThreadFun();
+test_driver();
 
 }
