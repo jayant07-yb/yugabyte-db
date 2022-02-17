@@ -16,7 +16,6 @@
 #include "postgres_fe.h"
 
 #include <pthread.h>
-
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
@@ -712,8 +711,6 @@ void  update_map(const char *ip_address , int change , bool check_thread_safe)
  * You should call PQfinish (if conn is not NULL) regardless of whether this
  * call succeeded.
  */
-
-
 PGconn *
 PQconnectdb(const char *conninfo)
 {
@@ -1439,9 +1436,6 @@ bool yb_connectLoadBalance(PGconn *conn  )
  *
  * See PQconnectPoll for more info.
  */
-
-
-
 PGconn *
 PQconnectStart(const char *conninfo)
 {
@@ -2024,7 +2018,6 @@ PQconndefaults(void)
  * then only the errorMessage is likely to be useful.
  * ----------------
  */
-
 PGconn *
 PQsetdbLogin(const char *pghost, const char *pgport, const char *pgoptions,
 			 const char *pgtty, const char *dbName, const char *login,
