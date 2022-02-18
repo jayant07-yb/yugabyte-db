@@ -1143,13 +1143,12 @@ bool YBcheckControlConnection(PGconn *conn)
 	/*
 	 * Check if the control_connection has already been established or not.
 	 */
-	if(control_connection == NULL || control_connection->status != CONNECTION_OK )   
+	if(control_connection == NULL )   
 	{
 		/*
-		 * Allocate the memory for the control_connection if required.
+		 * Allocate the memory for the control_connection.
 		 */
-		if(control_connection == NULL) 
-			control_connection = makeEmptyPGconn();
+		control_connection = makeEmptyPGconn();
 
 		/*
 		 * Unable to allocate the memory
@@ -1207,7 +1206,7 @@ bool YBcheckControlConnection(PGconn *conn)
 				 * We are unable to establish any control_connection
 				 */
 				PQfinish(control_connection) ; 
-
+				control_connection = NULL ;
 				/*
 				 * Thread unlock
 				 */
@@ -1234,7 +1233,7 @@ bool YBcheckControlConnection(PGconn *conn)
 				 * We are unable to establish any control_connection
 				 */
 				PQfinish(control_connection) ; 
-				
+				control_connection = NULL ;
 				/*
 				 * 	Thread unlock
 				 */
@@ -1263,7 +1262,7 @@ bool YBcheckControlConnection(PGconn *conn)
 				 * We are unable to establish any control_connection
 				 */
 				PQfinish(control_connection) ; 
-
+				control_connection = NULL;
 				/*
 				 * 	Thread unlock
 				 */
@@ -1278,7 +1277,8 @@ bool YBcheckControlConnection(PGconn *conn)
 		/*
 		 * Unable to connect/retrieve data
 		 */
-		control_connection->status = CONNECTION_BAD;
+		PQfinish(control_connection);
+		control_connection = NULL;
 		goto start_control_connection ; 
 	} 
 
