@@ -530,8 +530,8 @@ extern char *const pgresStatus[];
  * 		4.	Once a connection is established return true else false if unable to establish connection with any host.
  */
 
-bool yb_connectLoadBalance(PGconn *conn  )  ; 
-bool yb_server_status_change(char *server_address , bool new_status , bool check_map_ready ) ; 
+bool YBconnectLoadBalance(PGconn *conn  )  ; 
+bool YBserverStatusChange(char *server_address , bool new_status , bool check_map_ready ) ; 
 
 #ifdef USE_SSL
 
