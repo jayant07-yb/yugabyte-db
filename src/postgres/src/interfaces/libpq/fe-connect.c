@@ -916,7 +916,7 @@ bool YBupdateCusterinfo(PGconn *conn)
 			increase_map_size++;
 			server_to_add[i] = true;
 		}else
-			server_to_add[i] =	false;
+			server_to_add[i] = false;
 
 	}
 
@@ -1204,7 +1204,7 @@ bool YBcheckControlConnection(PGconn *conn)
 				/*
 				 * Try connecting to the next server
 				 */
-				control_connection->pghost = server_details[try_next_server].host_ip ;
+				control_connection->pghost = server_details[try_next_server].host_ip;
 				goto next_server_for_control_connection;
 			}else
 			{
@@ -1271,8 +1271,8 @@ bool YBconnectLoadBalance(PGconn *conn)
 	{
 		if(conn->pghost)
 			free(conn->pghost);
-		conn->pghost = (char *) malloc((strlen( next_least_connection)+1) * sizeof(char));
-		strcpy(conn->pghost , next_least_connection) 	;			
+		conn->pghost = (char *) malloc((strlen(next_least_connection)+1) * sizeof(char));
+		strcpy(conn->pghost , next_least_connection);
 	}
 	else
 	{
@@ -1346,12 +1346,12 @@ PQconnectStart(const char *conninfo)
 	/*
 	 * Check for the load_balance 
 	 */
-	if(conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0) 
+	if (conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0) 
 	{
 		/*
 		 * Make the smart connection with the loadbalance feature 
 		 */
-		if(!YBconnectLoadBalance(conn)) 
+		if (!YBconnectLoadBalance(conn)) 
 			conn->status = CONNECTION_BAD;
 	}else
 	{
