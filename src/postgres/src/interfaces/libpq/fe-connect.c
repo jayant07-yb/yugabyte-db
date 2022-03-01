@@ -639,6 +639,14 @@ struct node_details {
 } *server_details = NULL;
 
 /*
+ * YBclientNetworkStatus
+ * 1 if the client is identified inside the YB network
+ * -1 if the client is identified outside the YB network
+ * 0 network status is not yet found
+ */
+int	   YBclientNetworkStatus = 0;
+
+/*
  * Before iterating over the map the map_ready mutex must be checked
  */
 static pthread_mutex_t map_ready = PTHREAD_MUTEX_INITIALIZER;
@@ -815,6 +823,31 @@ PQconnectStartParams(const char *const *keywords,
 	return conn;
 }
 
+/*
+ *		YBtestNetwork
+ * Checks whether the Client is inside the network of the YB cluster for a given control connection and IP address
+ */
+bool YBtestNetwork(const PGconn *control_connection,char* private_ip)
+{
+	PGconn	*new_conn = makeEmptyPGconn();
+	*new_conn = *control_connection;
+
+	new_conn->load_balance="false";
+
+	if (!connectOptions2(new_conn)	||
+		!connectDBComplete(new_conn)||
+		!connectDBStart( new_conn))
+	{
+		PQfinish(new_conn);
+		return 	0;
+	}else
+	{
+		PQfinish(new_conn);
+		return	1;
+	}
+}
+
+
 /* 
  *		YBupdateCusterinfo
  *
@@ -864,6 +897,69 @@ bool YBupdateCusterinfo(PGconn *conn)
        	return 0;
   	}
 	
+	int  	nServers = PQntuples(res);	/* Total number of servers found in the query's result */
+	int 	increase_map_size = 0;	/* For keeping the count of servers to be added. */
+	bool 	server_to_add[nServers];	/* For keeping the mark of servers to be added. */
+
+	/*
+	 * If the Network status is not yet decided.
+	 * Identify if the Client is inside the Private network.
+	 */
+	if (YBclientNetworkStatus==0)
+	{
+		int itr;
+		for(itr=0;itr<nServers;itr++)
+		{
+			if(strcmp(conn->pghost,PQgetvalue(res, itr , 0)))
+			{
+				YBclientNetworkStatus=1;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * If the Network status is not yet decided.
+	 * Identify if the Client is outside the Private network.
+	 */
+	if (YBclientNetworkStatus==0)
+	{
+		int itr;
+	 	for(itr=0;itr<nServers;itr++)
+		{
+			if(strcmp(conn->pghost,PQgetvalue(res, itr , 2)))
+			{
+				YBclientNetworkStatus=-1;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * If the Network status is not yet decided.
+	 * Try connecting with all the Private IP address.
+	 */
+	if (YBclientNetworkStatus==0)
+	{
+		int itr;
+		for(itr=0;itr<nServers;itr++)
+		{
+			if(YBtestNetwork(conn,PQgetvalue(res, itr , 0)))
+			{
+				YBclientNetworkStatus=1;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Since the Client was unable to connect with the Private ips.
+	 * It must not have access to it. Thus we need to make the connection
+	 * to with the public ip.
+	 */
+	if (YBclientNetworkStatus==0)
+		YBclientNetworkStatus=-1;
+
 	/*
 	 * Locking the map_ready so that no other thread can start iterating it.
 	 */
@@ -888,11 +984,6 @@ bool YBupdateCusterinfo(PGconn *conn)
 	{
 		server_details[i].is_running = false;
 	}
-
-	
-	int  	nServers = PQntuples(res);	/* Total number of servers found in the query's result */
-	int 	increase_map_size = 0;	/* For keeping the count of servers to be added. */
-	bool 	server_to_add[nServers];	/* For keeping the mark of servers to be added. */
 
 	/*
 	 * Iterate the result and update the is_running as true.
