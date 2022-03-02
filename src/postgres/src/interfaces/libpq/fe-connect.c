@@ -1296,12 +1296,6 @@ bool YBcheckControlConnection(PGconn *conn)
 				 * Try connecting to the next server
 				 */
 				control_connection->pghost = server_details[try_next_server].host_ip;
-
-				/*
-				 * Setting the value of pghostaddr as NULL, as the connection 
-				 * will be made to it, if it would had present.
-				 */
-				control_connection->pghostaddr = NULL;
 				goto next_server_for_control_connection;
 			}else
 			{
@@ -1367,10 +1361,10 @@ bool YBconnectLoadBalance(PGconn *conn)
 	 */
 	if(YBnextHost(conn->topology_keys , &next_least_connection))
 	{
-		if(conn->pghostaddr)
-			free(conn->pghostaddr);
-		conn->pghostaddr = (char *) malloc((strlen(next_least_connection)+1) * sizeof(char));
-		strcpy(conn->pghostaddr , next_least_connection);
+		if(conn->pghost)
+			free(conn->pghost);
+		conn->pghost = (char *) malloc((strlen(next_least_connection)+1) * sizeof(char));
+		strcpy(conn->pghost , next_least_connection);
 	}
 	else
 	{
@@ -1394,7 +1388,7 @@ bool YBconnectLoadBalance(PGconn *conn)
 		/*
 		 * Since the connection count was optimistically incremented, decrement the count.
 		 */
-		YBupdateMap(conn->pghostaddr , -1 , true) ;
+		YBupdateMap(conn->pghost,-1,true) ;
 
 		/*
 		 * Try connecting with the next host
@@ -4413,7 +4407,7 @@ PQfinish(PGconn *conn)
 	if (conn!=NULL)
 	{	
 		if((conn->load_balance!= NULL)&&(strcmp(conn->load_balance,"true")==0))
-			YBupdateMap(conn->pghostaddr,-1,true);
+			YBupdateMap(conn->pghost,-1,true);
 		
 		closePGconn(conn);
 		freePGconn(conn);
