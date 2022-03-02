@@ -849,9 +849,9 @@ bool YBtestNetwork(const PGconn *control_connection,char* private_ip)
 
 
 /* 
- *		YBupdateCusterinfo
+ *		YBupdateClusterinfo
  *
- * YBupdateCusterinfo populates the data regarding the server into the 
+ * YBupdateClusterinfo populates the data regarding the server into the 
  * server_details map/list.
  * If the last update happened before 5 minutes the update will be skipped.
  * Use contro_connection to execute the query : "SELECT  * from yb_servers();"
@@ -861,7 +861,7 @@ bool YBtestNetwork(const PGconn *control_connection,char* private_ip)
  * the result are considered to be running.
  * It returns 1 for every successful update and 0 for any failure.
  */
-bool YBupdateCusterinfo(PGconn *conn)
+bool YBupdateClusterinfo(PGconn *conn)
 {	
 	/*
 	 * Check for the last update time 
@@ -1284,7 +1284,7 @@ bool YBcheckControlConnection(PGconn *conn)
 		if (!connectOptions2(control_connection) 	|| 
 			!connectDBStart( control_connection) 	|| 
 			!connectDBComplete(control_connection) 	|| 
-			!YBupdateCusterinfo(control_connection))
+			!YBupdateClusterinfo(control_connection))
 		{
 			/*
 			 * Try connecting with next server available in the cluster
@@ -1319,7 +1319,7 @@ bool YBcheckControlConnection(PGconn *conn)
 		}	
 	}
 
-	if(!YBupdateCusterinfo(control_connection))
+	if(!YBupdateClusterinfo(control_connection))
 	{	
 		/*
 		 * Unable to connect/retrieve data
