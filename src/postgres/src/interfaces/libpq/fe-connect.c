@@ -829,8 +829,17 @@ PQconnectStartParams(const char *const *keywords,
  */
 bool YBtestNetwork(const PGconn *control_connection,char* private_ip)
 {
+	if(!(private_ip) || private_ip==NULL)
+		return 0;
+
 	PGconn	*new_conn = makeEmptyPGconn();
 	*new_conn = *control_connection;
+
+	new_conn->pghostaddr=NULL;
+	free(new_conn->pghost);
+	new_conn->pghost  = (char*)malloc(sizeof(private_ip)+1);
+	strcpy(new_conn->pghost,private_ip);
+
 
 	new_conn->load_balance="false";
 
@@ -854,7 +863,7 @@ bool YBtestNetwork(const PGconn *control_connection,char* private_ip)
  * YBupdateClusterinfo populates the data regarding the server into the 
  * server_details map/list.
  * If the last update happened before 5 minutes the update will be skipped.
- * Use contro_connection to execute the query : "SELECT  * from yb_servers();"
+ * Use contro_connection to execute the query : "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();"
  * Once the query's results has been received the yb_last_update_time is modified.
  * If any server that is present in server_details but is absent in the result 
  * of the above query it is considered to be down. All other servers present in
@@ -866,14 +875,14 @@ bool YBupdateClusterinfo(PGconn *conn)
 	/*
 	 * Check for the last update time 
 	 */
-	const int 	refresh_time = 5*60;//5 mins 
+	const int 	refresh_time = 5*60;	/*	5 mins	*/ 
 	time_t 		temp_time = time(NULL);
 
 	if((yb_last_update_time!=0)&&(temp_time-yb_last_update_time<refresh_time))	
 		return 1;
 	
 	/*
-	 * Collect the data using the query "SELECT  * from yb_servers();"
+	 * Collect the data using the query "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();"
 	 */
 
 	PGresult   *res;
@@ -886,7 +895,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 	/*
 	 * Execute the query
 	 */
-  	res = PQexec(conn , "SELECT  * from yb_servers();");
+  	res = PQexec(conn , "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();");
   	if (PQresultStatus(res) != PGRES_TUPLES_OK)
   	{	
 		/*
@@ -910,7 +919,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 		int itr;
 		for(itr=0;itr<nServers;itr++)
 		{
-			if(strcmp(conn->pghost,PQgetvalue(res, itr , 0)))
+			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 0))==0 ) || (conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 0))==0) )
 			{
 				YBclientNetworkStatus=1;
 				break;
@@ -927,7 +936,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 		int itr;
 	 	for(itr=0;itr<nServers;itr++)
 		{
-			if(strcmp(conn->pghost,PQgetvalue(res, itr , 2)))
+			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 7))==0) || (conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 7)))==0)
 			{
 				YBclientNetworkStatus=-1;
 				break;
@@ -971,14 +980,14 @@ bool YBupdateClusterinfo(PGconn *conn)
 	yb_last_update_time = time(NULL);
 
 	/*
-	 * 1. Assigne the value of is_running as false for all the servers.
+	 * 1. Assign the value of is_running as false for all the servers.
 	 * 2. Iterate the result and update the is_running as true.
-	 * 3. Maintaine the count of the servers which were not found in the server_details.
+	 * 3. Maintain the count of the servers which were not found in the server_details.
 	 * 4. If this count is not zero reallocate the map memory and add the values to it.  
 	 */
 
 	/*
-	 * Assigne the value of is_running as false for all the servers.
+	 * Assign the value of is_running as false for all the servers.
 	 */
 	for(int i =0;i< total_servers;i++)
 	{
@@ -991,8 +1000,12 @@ bool YBupdateClusterinfo(PGconn *conn)
   	for (int i = 0;i < nServers;i++)
   	{
 	  
-		char  *server = PQgetvalue(res, i , 0);	
-
+		char  *server;
+		if(YBclientNetworkStatus==1) 
+			server= PQgetvalue(res, i , 0);	
+		else 
+			server= PQgetvalue(res, i , 7);
+		
 		/*
 		 * Since no other thread is iterating the server_details (map_ready is locked),
 		 * YBserverStatusChange can be called without considering the 
@@ -1002,7 +1015,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 		if (!YBserverStatusChange(server,true,false))
 		{
 			/*
-		 	* Maintaine the count of the servers which were not found in the map.
+		 	* Maintain the count of the servers which were not found in the map.
 		 	*/
 			increase_map_size++;
 			server_to_add[i] = true;
@@ -1036,7 +1049,12 @@ bool YBupdateClusterinfo(PGconn *conn)
 			/* 
 			 * Store the ip address
 			 */
-			char  *temp_host_id = PQgetvalue(res, i , 0);
+			char  *temp_host_id;
+			if(YBclientNetworkStatus==1)
+				temp_host_id= PQgetvalue(res, i, 0);
+			else
+				temp_host_id= PQgetvalue(res, i, 7);
+				
 			temp_server_details[total_servers].host_ip = (char *)malloc(sizeof(char)*(strlen(temp_host_id)+1));
 			strcpy(temp_server_details[total_servers].host_ip ,  temp_host_id)	;	
 			
