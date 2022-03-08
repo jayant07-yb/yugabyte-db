@@ -654,6 +654,103 @@ int total_servers =0;
 time_t yb_last_update_time = 0;
 
 /*
+ *		YBtopologyCheck
+ *
+ * YBtopologyCheck() checks that is server present in the required topology.
+ * Input: A list of topology seperated with a  ',' in form of a string;
+ * 	   The server's topology
+ * Returns true if the server is present in the given topology else false.
+ */
+bool YBtopologyCheck(const char* topology_keys , const char* server_topology)
+{	
+	if((topology_keys == NULL)||strcmp(topology_keys,"")==0)	
+		return true;
+	int toplogy_keys_len = strlen(topology_keys);
+	int server_topology_len = strlen(server_topology);
+	for(int i =0;i+server_topology_len  <= toplogy_keys_len;i++)
+	{
+		if(i==0 ||  topology_keys[i-1]==',')
+		{
+			bool found = 1;
+			for(int  j = 0;j < server_topology_len;j++)
+			{
+				if(topology_keys[i+j] != server_topology[j])
+				{
+					found = 0;
+					break;
+				}
+			}
+			if(found && (topology_keys[i+server_topology_len] == '\0' || topology_keys[i+server_topology_len] == ','))
+				return  true;
+		}
+	}
+	return false;
+}
+
+/*	
+ *		next_host
+ *
+ * YBnextHost() returns the host with least number of connections 
+ * which is running and present in a given toplogy.	
+ * Input:	The toplogy keys for the required server 
+ * 		(NULL In case of no such topology key).
+ * 		The pointer to the string where the value of next_host will be stored.
+ * Returns true if the next_host is found, false if no such host is found.
+ * It requires to lock th sync_next_host function so that only one
+ */
+bool YBnextHost(const char *topology_keys , char **next_host_ip) 
+{
+	/*
+	 * Check if the map is ready 
+	 */
+	pthread_mutex_lock(&(map_ready));
+
+	*next_host_ip = NULL;
+	int lowest_value = -1;
+	for(int i =0;i<total_servers;i++)
+	{
+		if(!server_details[i].is_running)
+			continue;
+		
+		if((topology_keys==NULL)||YBtopologyCheck(topology_keys,server_details[i].topology))
+		{
+			if(*next_host_ip==NULL)
+			{
+				
+				*next_host_ip = server_details[i].host_ip;
+				lowest_value = server_details[i].connections;
+			}else if(lowest_value > server_details[i].connections)
+			{
+				*next_host_ip = server_details[i].host_ip;
+				lowest_value = server_details[i].connections;
+			} 
+		}
+	}
+
+	if(*next_host_ip != NULL)
+	{
+		/*
+		 * Since no other thread is iterating the server_details the 
+		 * YBupdateMap can be called with check_thread_safe as false.
+		 */
+		YBupdateMap( *next_host_ip,1,false);
+
+		/*
+		 * Unlock the map_ready thread lock.
+		 */
+		pthread_mutex_unlock(&(map_ready));	
+		return 1;	
+	}else
+	{	
+		/*
+		 * Unlock the map_ready thread lock.
+		 */
+		pthread_mutex_unlock(&(map_ready));
+		return 0;
+	}
+}
+
+/*
  *		YBserverStatusChange
  *
  * YBserverStatusChange() changes the is_running  status of the server 
