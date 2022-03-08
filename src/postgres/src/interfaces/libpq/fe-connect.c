@@ -1074,6 +1074,75 @@ bool YBcheckControlConnection(PGconn *conn)
 }
 
 /*
+ *		YBconnectLoadBalance
+ *
+ * YBconnectLoadBalance function will be used to make any   LoadBalanced connection
+ * Input - PGconn connection object
+ * 1.	Check that the control connection is established
+ * 2.	Consider the host with lowest number of connections and try to connect with it.
+ * 3. 	If the connection fails goto step 2 and repeat until all the available hosts are checked.
+ * 4.	Once a connection is established return true else false if unable to establish connection with any host.
+ */
+bool YBconnectLoadBalance(PGconn *conn) 
+{	
+	/*
+	 * Check the control connection
+	 */
+	if(!YBcheckControlConnection(conn))
+	{
+		conn->pghost = NULL;
+		return 0;
+	}
+
+	conn->pghost = NULL;
+	conn->pghostaddr = NULL;
+	char *next_least_connection ;
+		
+	next_server_for_connection:
+
+	/* 
+	 * Allocate the host with least number of connection
+	 */
+	if(YBnextHost(conn->topology_keys , &next_least_connection))
+	{
+		if(conn->pghost)
+			free(conn->pghost);
+		conn->pghost = (char *) malloc((strlen(next_least_connection)+1) * sizeof(char));
+		strcpy(conn->pghost , next_least_connection);
+	}
+	else
+	{
+		/*
+		 * If next_host returns false then the map was not updated
+		 */
+		conn->status = CONNECTION_BAD;
+		return 0;
+	}
+
+	/*
+	 * Compute derived options
+	 */
+	if (!connectOptions2(conn) || !connectDBStart( conn))
+	{
+		/* 
+		 * Update the server's is_running status to false 
+		 */
+	    YBserverStatusChange(next_least_connection,false,true);
+		
+		/*
+		 * Since the connection count was optimistically incremented, decrement the count.
+		 */
+		YBupdateMap(conn->pghost,-1,true) ;
+
+		/*
+		 * Try connecting with the next host
+		 */
+	    goto next_server_for_connection;
+	}
+	return 1 ;
+}
+
+/*
  *		PQconnectdb
  *
  * establishes a connection to a postgres backend through the postmaster
