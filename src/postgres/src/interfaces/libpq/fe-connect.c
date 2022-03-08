@@ -324,6 +324,16 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	/* For Smart driver */
+	{"load_balance" , "YBLOAD_BALANCE", NULL, NULL, 
+	"Load-Balancing" , "D" ,  20 , 
+	offsetof(struct pg_conn, load_balance) },
+	
+	{"topology_keys" , "YBTOPOLOGY_KEYS", NULL, NULL, 
+	"topology_keys" , "D" ,  20 , 
+	offsetof(struct pg_conn, topology_keys) },
+
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}

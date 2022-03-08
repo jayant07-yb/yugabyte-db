@@ -358,6 +358,8 @@ struct pg_conn
 	char	   *sslcrl;			/* certificate revocation list filename */
 	char	   *requirepeer;	/* required peer credentials for local sockets */
 
+	char 	   *load_balance;	/* load balance feature for YB smart driver */
+	char	   *topology_keys;  /* Topology keys for YB smart driver */
 #if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
 	char	   *krbsrvname;		/* Kerberos service name */
 #endif
