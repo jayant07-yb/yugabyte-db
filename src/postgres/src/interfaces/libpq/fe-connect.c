@@ -949,6 +949,131 @@ bool YBupdateClusterinfo(PGconn *conn)
 }
 
 /*
+ * control_connection is the backend connection that will 
+ * be used to update the information about the servers in the cluster.
+ */
+PGconn * control_connection = NULL;
+
+/*
+ * thread_lock mutex for YBcheckControlConnection function
+ */
+static   pthread_mutex_t sync_control_connection = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+ *		YBcheckControlConnection
+ *
+ * YBcheckControlConnection is used to establish the control connection and
+ * update the server_details.
+ * 	1.	Establish the control connection
+ * 	2.	Initialize the map
+ * 	3.	Update the clusters in the map
+ */
+bool YBcheckControlConnection(PGconn *conn)
+{
+	/*
+	 * Thread lock
+	 */
+  	pthread_mutex_lock(&sync_control_connection);
+	
+	start_control_connection :
+
+	/*
+	 * Check if the control_connection has already been established or not.
+	 */
+	if(control_connection == NULL)   
+	{
+		/*
+		 * Allocate the memory for the control_connection.
+		 */
+		if(!control_connection)
+			control_connection = makeEmptyPGconn();
+
+		/*
+		 * Unable to allocate the memory
+		 */
+		if (control_connection == NULL)
+		{
+			/*
+			 * Thread unlock
+			 */
+			pthread_mutex_unlock(&sync_control_connection);
+			return 0;
+		}
+		
+		/* 
+		 * Copy the connection info 
+		 */
+		*control_connection = *conn;
+
+		/* 
+		 * Modify the load_balance feature to false 
+		 */ 
+		control_connection->load_balance = "false";
+		control_connection->topology_keys = NULL;	 
+
+		/*
+		 * try_next_server is the index of the server 
+		 * we are trying to connect in the list server_details.
+		 * Its value is -1 for the ip address provided by the user.
+		 */
+		int try_next_server = -1 ;
+
+		/* 
+		 * Try connecting with the server
+		 */
+		next_server_for_control_connection: 
+		/*
+		 * Compute derived options
+	 	 */
+		if (!connectOptions2(control_connection) 	|| 
+			!connectDBStart( control_connection) 	|| 
+			!connectDBComplete(control_connection) 	|| 
+			!YBupdateClusterinfo(control_connection))
+		{
+			/*
+			 * Try connecting with next server available in the cluster
+			 */
+			try_next_server++;
+			if(try_next_server < total_servers)
+			{
+				/*
+				 * Try connecting to the next server
+				 */
+				control_connection->pghost = server_details[try_next_server].host_ip;
+				goto next_server_for_control_connection;
+			}else
+			{
+				/*
+				 * We are unable to establish any control_connection
+				 */
+				control_connection = NULL;
+				
+				/*
+				 * Thread unlock
+				 */
+				pthread_mutex_unlock(&sync_control_connection);
+				return 0;
+			}
+		}	
+	}
+
+	if(!YBupdateClusterinfo(control_connection))
+	{	
+		/*
+		 * Unable to connect/retrieve data
+		 */
+		control_connection = NULL;
+		goto start_control_connection;
+	} 
+
+	/*
+	 * Thread unlock
+	 */
+	pthread_mutex_unlock(&sync_control_connection);
+	return 1;
+}
+
+/*
  *		PQconnectdb
  *
  * establishes a connection to a postgres backend through the postmaster
