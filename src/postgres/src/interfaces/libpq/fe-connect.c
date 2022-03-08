@@ -629,6 +629,32 @@ PQpingParams(const char *const *keywords,
 }
 
 /*
+ * node_details will store the details regarding the connection count for any server
+ */
+struct node_details {
+	char	*host_ip;
+	int 	connections;
+	char 	*topology;
+	bool 	is_running;
+} *server_details = NULL;
+
+/*
+ * YBclientNetworkStatus
+ * 1 if the client is identified inside the YB network
+ * -1 if the client is identified outside the YB network
+ * 0 network status is not yet found
+ */
+int	   YBclientNetworkStatus = 0;
+
+/*
+ * Before iterating over the map the map_ready mutex must be checked
+ */
+static pthread_mutex_t map_ready = PTHREAD_MUTEX_INITIALIZER;
+int total_servers =0;
+time_t yb_last_update_time = 0;
+
+
+/*
  *		PQconnectdb
  *
  * establishes a connection to a postgres backend through the postmaster
