@@ -1308,20 +1308,27 @@ PQconnectStart(const char *conninfo)
 	 */
 	if (!connectOptions1(conn, conninfo))
 		return conn;
-
+	
 	/*
-	 * Compute derived options
+	 * Check for the load_balance 
 	 */
-	if (!connectOptions2(conn))
-		return conn;
-
-	/*
-	 * Connect to the database
-	 */
-	if (!connectDBStart(conn))
+	if (conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0) 
 	{
-		/* Just in case we failed to set it in connectDBStart */
-		conn->status = CONNECTION_BAD;
+		/*
+		 * Make the smart connection with the loadbalance feature 
+		 */
+		if (!YBconnectLoadBalance(conn)) 
+			conn->status = CONNECTION_BAD;
+	}else
+	{
+		/*
+		 * Compute derived options
+	 	 */
+		if (!connectOptions2(conn))
+			return conn;
+
+		if (!connectDBStart( conn))
+			conn->status = CONNECTION_BAD;		/* Just in case we failed to set it in connectDBStart */
 	}
 
 	return conn;
@@ -4270,8 +4277,11 @@ closePGconn(PGconn *conn)
 void
 PQfinish(PGconn *conn)
 {
-	if (conn)
-	{
+	if (conn!=NULL)
+	{	
+		if((conn->load_balance!= NULL)&&(strcmp(conn->load_balance,"true")==0))
+			YBupdateMap(conn->pghost,-1,true);
+		
 		closePGconn(conn);
 		freePGconn(conn);
 	}
