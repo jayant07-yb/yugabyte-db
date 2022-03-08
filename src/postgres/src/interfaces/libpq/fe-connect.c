@@ -653,6 +653,241 @@ static pthread_mutex_t map_ready = PTHREAD_MUTEX_INITIALIZER;
 int total_servers =0;
 time_t yb_last_update_time = 0;
 
+/* 
+ *		YBupdateClusterinfo
+ *
+ * YBupdateClusterinfo populates the data regarding the server into the 
+ * server_details map/list.
+ * If the last update happened before 5 minutes the update will be skipped.
+ * Use contro_connection to execute the query : "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();"
+ * Once the query's results has been received the yb_last_update_time is modified.
+ * If any server that is present in server_details but is absent in the result 
+ * of the above query it is considered to be down. All other servers present in
+ * the result are considered to be running.
+ * It returns 1 for every successful update and 0 for any failure.
+ */
+bool YBupdateClusterinfo(PGconn *conn)
+{	
+	/*
+	 * Check for the last update time 
+	 */
+	const int 	refresh_time = 5*60;	/*	5 mins	*/ 
+	time_t 		temp_time = time(NULL);
+
+	if((yb_last_update_time!=0)&&(temp_time-yb_last_update_time<refresh_time))	
+		return 1;
+	
+	/*
+	 * Collect the data using the query "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();"
+	 */
+
+	PGresult   *res;
+	/* 
+	 * Check to see that the backend connection was successfully made 
+	 */
+  	if (PQstatus(conn) != CONNECTION_OK)
+      	return 0;
+
+	/*
+	 * Execute the query
+	 */
+  	res = PQexec(conn , "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();");
+  	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+  	{	
+		/*
+		 * Incase if any error occurs
+		 */
+    	PQclear(res);
+		conn->status = CONNECTION_BAD;
+       	return 0;
+  	}
+	
+	int  	nServers = PQntuples(res);	/* Total number of servers found in the query's result */
+	int 	increase_map_size = 0;	/* For keeping the count of servers to be added. */
+	bool 	server_to_add[nServers];	/* For keeping the mark of servers to be added. */
+
+	/*
+	 * If the Network status is not yet decided.
+	 * Identify if the Client is inside the Private network.
+	 */
+	if (YBclientNetworkStatus==0)
+	{
+		int itr;
+		for(itr=0;itr<nServers;itr++)
+		{
+			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 0))==0 ) || (conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 0))==0) )
+			{
+				YBclientNetworkStatus=1;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * If the Network status is not yet decided.
+	 * Identify if the Client is outside the Private network.
+	 */
+	if (YBclientNetworkStatus==0)
+	{
+		int itr;
+	 	for(itr=0;itr<nServers;itr++)
+		{
+			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 7))==0) || (conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 7)))==0)
+			{
+				YBclientNetworkStatus=-1;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * If the Network status is not yet decided.
+	 * Try connecting with all the Private IP address.
+	 */
+	if (YBclientNetworkStatus==0)
+	{
+		int itr;
+		for(itr=0;itr<nServers;itr++)
+		{
+			if(YBtestNetwork(conn,PQgetvalue(res, itr , 0)))
+			{
+				YBclientNetworkStatus=1;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Since the Client was unable to connect with the Private ips.
+	 * It must not have access to it. Thus we need to make the connection
+	 * to with the public ip.
+	 */
+	if (YBclientNetworkStatus==0)
+		YBclientNetworkStatus=-1;
+
+	/*
+	 * Locking the map_ready so that no other thread can start iterating it.
+	 */
+	pthread_mutex_lock(&(map_ready));
+
+	/*
+	 * Update the yb_last_update_time
+	 */
+	yb_last_update_time = time(NULL);
+
+	/*
+	 * 1. Assign the value of is_running as false for all the servers.
+	 * 2. Iterate the result and update the is_running as true.
+	 * 3. Maintain the count of the servers which were not found in the server_details.
+	 * 4. If this count is not zero reallocate the map memory and add the values to it.  
+	 */
+
+	/*
+	 * Assign the value of is_running as false for all the servers.
+	 */
+	for(int i =0;i< total_servers;i++)
+	{
+		server_details[i].is_running = false;
+	}
+
+	/*
+	 * Iterate the result and update the is_running as true.
+	 */
+  	for (int i = 0;i < nServers;i++)
+  	{
+	  
+		char  *server;
+		if(YBclientNetworkStatus==1) 
+			server= PQgetvalue(res, i , 0);	
+		else 
+			server= PQgetvalue(res, i , 7);
+		
+		/*
+		 * Since no other thread is iterating the server_details (map_ready is locked),
+		 * YBserverStatusChange can be called without considering the 
+		 * thread_safe (keeping the value of check_thread_safe as false).	If kept true 
+		 * will endup in a deadlock.
+		 */
+		if (!YBserverStatusChange(server,true,false))
+		{
+			/*
+		 	* Maintain the count of the servers which were not found in the map.
+		 	*/
+			increase_map_size++;
+			server_to_add[i] = true;
+		}else
+			server_to_add[i] = false;
+
+	}
+
+	/*
+	 * 4. If count is not zero reallocate the map memory and add the values to it.  
+	 */
+	if(increase_map_size != 0)
+	{
+		/*
+		 * Allocate the space
+		 */
+		struct node_details *temp_server_details = (struct node_details *) malloc ( (increase_map_size + total_servers) * sizeof (struct node_details));
+		for(int i =0;i < total_servers;i++)
+		{
+			temp_server_details[i] = server_details[i];
+		} 
+
+		/*
+		 * Add the server details
+		 */
+		for(int i =0;i < nServers;i++)
+		{
+			if(!server_to_add[i])
+				continue;
+			
+			/* 
+			 * Store the ip address
+			 */
+			char  *temp_host_id;
+			if(YBclientNetworkStatus==1)
+				temp_host_id= PQgetvalue(res, i, 0);
+			else
+				temp_host_id= PQgetvalue(res, i, 7);
+				
+			temp_server_details[total_servers].host_ip = (char *)malloc(sizeof(char)*(strlen(temp_host_id)+1));
+			strcpy(temp_server_details[total_servers].host_ip ,  temp_host_id)	;	
+			
+			/*
+			 * Reset the connection count
+			 */
+			temp_server_details[total_servers].connections = 0;
+
+			/*
+			 * Create the topology key 
+			 */
+			int topology_len = strlen(PQgetvalue(res, i , 4)) +  strlen(PQgetvalue(res, i , 5)) +  strlen(PQgetvalue(res, i , 6)) + 3;
+			temp_server_details[total_servers].topology = (char *) malloc(sizeof(char)*topology_len);
+			strcpy( temp_server_details[total_servers].topology , PQgetvalue(res, i , 4));
+			strcat(temp_server_details[total_servers].topology , ".");
+			strcat(temp_server_details[total_servers].topology , PQgetvalue(res, i , 5));
+			strcat(temp_server_details[total_servers].topology , ".");
+			strcat(temp_server_details[total_servers].topology , PQgetvalue(res, i , 6));
+			temp_server_details[total_servers].is_running = true;
+			total_servers++;
+		}
+
+		/*
+		 * Delete the previous data structure 
+		 */
+		free(server_details);
+		server_details = temp_server_details;
+	}
+
+	PQclear(res);
+
+	/*
+	 * thread_unlock
+	 */
+	pthread_mutex_unlock(&(map_ready));
+	return 1;
+}
 
 /*
  *		PQconnectdb
