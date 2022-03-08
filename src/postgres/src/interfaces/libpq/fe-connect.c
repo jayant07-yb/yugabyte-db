@@ -809,6 +809,39 @@ void  YBupdateMap(const char *ip_address , int change , bool check_thread_safe)
 		pthread_mutex_unlock(&(map_ready));	
 }
 
+/*
+ *		YBtestNetwork
+ * Checks whether the Client is inside the network of the YB cluster for a given control connection and IP address
+ */
+bool YBtestNetwork(const PGconn *control_connection,char* private_ip)
+{
+	if(!(private_ip) || private_ip==NULL)
+		return 0;
+
+	PGconn	*new_conn = makeEmptyPGconn();
+	*new_conn = *control_connection;
+
+	new_conn->pghostaddr=NULL;
+	free(new_conn->pghost);
+	new_conn->pghost  = (char*)malloc(sizeof(private_ip)+1);
+	strcpy(new_conn->pghost,private_ip);
+
+
+	new_conn->load_balance="false";
+
+	if (!connectOptions2(new_conn)	||
+		!connectDBComplete(new_conn)||
+		!connectDBStart( new_conn))
+	{
+		PQfinish(new_conn);
+		return 	0;
+	}else
+	{
+		PQfinish(new_conn);
+		return	1;
+	}
+}
+
 /* 
  *		YBupdateClusterinfo
  *
