@@ -653,6 +653,65 @@ static pthread_mutex_t map_ready = PTHREAD_MUTEX_INITIALIZER;
 int total_servers =0;
 time_t yb_last_update_time = 0;
 
+/*
+ *		YBserverStatusChange
+ *
+ * YBserverStatusChange() changes the is_running  status of the server 
+ * returns true if the chage is successful else false
+ */
+bool YBserverStatusChange(char *server_address , bool new_status , bool check_thread_safe)
+{
+
+	/*
+	 * Check if the map is ready to iterate 
+	 */
+	if(check_thread_safe)
+		pthread_mutex_lock(&(map_ready));
+
+	for(int i = 0;i < total_servers;i++) 
+	{
+		if(strcmp(server_details[i].host_ip,server_address)==0)
+		{
+			server_details[i].is_running = new_status;
+			if(check_thread_safe)
+				pthread_mutex_unlock(&(map_ready));
+			return  true;
+		}	
+	}
+
+	if(check_thread_safe)
+		pthread_mutex_unlock(&(map_ready));
+	
+	return false;
+}
+
+/*
+ *		YBupdateMap
+ *
+ * YBupdateMap will be used to increase or decrease the count of connection for any server
+ * Input: The ip_address of the server
+ *		    change: +1 to increment / -1 to decrement the connection count.
+ *		    check_thread_safe: Boolean value, if true then lock the map_ready thread lock 
+ *		    				   before iterating. 
+ */
+void  YBupdateMap(const char *ip_address , int change , bool check_thread_safe) 
+{
+	/* In case if the ip_address is NULL */
+	if(!ip_address)
+		return;
+
+	/* Add a thread lock for the map	*/
+	if(check_thread_safe)
+		pthread_mutex_lock(&(map_ready));
+	
+	for(int i =0;i <  total_servers;i++)
+		if(strcmp(server_details[i].host_ip , ip_address) == 0)
+			server_details[i].connections += change;	/* Update the connection count	*/
+
+	if(check_thread_safe)
+		pthread_mutex_unlock(&(map_ready));	
+}
+
 /* 
  *		YBupdateClusterinfo
  *
