@@ -793,53 +793,47 @@ PQconnectStartParams(const char *const *keywords,
 	PQconninfoFree(connOptions);
 
 	/*
-	 * Check for the load_balance 
+	 * Compute derived options
 	 */
-	if(conn->load_balance != NULL && strcmp(conn->load_balance , "true") == 0) 
+	if (!connectOptions2(conn))
+		return conn;
+	if (!connectDBStart( conn))
 	{
 		/*
-		 * Make the smart connection with the loadbalance feature 
+		 * Just in case we failed to set it in connectDBStart 
 		 */
-		if(!YBconnectLoadBalance(conn))
-			conn->status = CONNECTION_BAD;
-
-	}else
-	{
-		/*
-		 * Compute derived options
-	 	 */
-		if (!connectOptions2(conn))
-			return conn;
-
-		if (!connectDBStart( conn))
-		{
-			/*
-			 * Just in case we failed to set it in connectDBStart 
-			 */
-			conn->status = CONNECTION_BAD;
-		}	
-	}
+		conn->status = CONNECTION_BAD;
+	}	
 	
 	return conn;
 }
+
+
+/*
+ * control_connection is the backend connection that will 
+ * be used to update the information about the servers in the cluster.
+ */
+PGconn * control_connection = NULL;
+char *control_connection_string;
 
 /*
  *		YBtestNetwork
  * Checks whether the Client is inside the network of the YB cluster for a given control connection and IP address
  */
-bool YBtestNetwork(const PGconn *control_connection,char* private_ip)
+bool YBtestNetwork(char* private_ip)
 {
 	if(!(private_ip) || private_ip==NULL)
 		return 0;
 
 	PGconn	*new_conn = makeEmptyPGconn();
-	*new_conn = *control_connection;
+	connectOptions1(new_conn,control_connection_string);
 
 	new_conn->pghostaddr=NULL;
-	free(new_conn->pghost);
-	new_conn->pghost  = (char*)malloc(sizeof(private_ip)+1);
-	strcpy(new_conn->pghost,private_ip);
+	if(new_conn->pghost)
+		free(new_conn->pghost);
 
+	new_conn->pghost  = (char*)malloc(sizeof(char)*(strlen(private_ip)+1));
+	strcpy(new_conn->pghost,private_ip);
 
 	new_conn->load_balance="false";
 
@@ -919,7 +913,8 @@ bool YBupdateClusterinfo(PGconn *conn)
 		int itr;
 		for(itr=0;itr<nServers;itr++)
 		{
-			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 0))==0 ) || (conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 0))==0) )
+			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 0))==0 ) ||
+			(conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 0))==0))
 			{
 				YBclientNetworkStatus=1;
 				break;
@@ -936,7 +931,8 @@ bool YBupdateClusterinfo(PGconn *conn)
 		int itr;
 	 	for(itr=0;itr<nServers;itr++)
 		{
-			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 7))==0) || (conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 7)))==0)
+			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 7))==0) ||
+			(conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 7))==0))
 			{
 				YBclientNetworkStatus=-1;
 				break;
@@ -953,7 +949,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 		int itr;
 		for(itr=0;itr<nServers;itr++)
 		{
-			if(YBtestNetwork(conn,PQgetvalue(res, itr , 0)))
+			if(YBtestNetwork(PQgetvalue(res, itr , 0)))
 			{
 				YBclientNetworkStatus=1;
 				break;
@@ -1223,12 +1219,6 @@ bool YBserverStatusChange(char *server_address , bool new_status , bool check_th
 }
 
 /*
- * control_connection is the backend connection that will 
- * be used to update the information about the servers in the cluster.
- */
-PGconn * control_connection = NULL;
-
-/*
  * thread_lock mutex for YBcheckControlConnection function
  */
 static   pthread_mutex_t sync_control_connection = PTHREAD_MUTEX_INITIALIZER;
@@ -1242,7 +1232,7 @@ static   pthread_mutex_t sync_control_connection = PTHREAD_MUTEX_INITIALIZER;
  * 	2.	Initialize the map
  * 	3.	Update the clusters in the map
  */
-bool YBcheckControlConnection(PGconn *conn)
+bool YBcheckControlConnection()
 {
 	/*
 	 * Thread lock
@@ -1274,11 +1264,7 @@ bool YBcheckControlConnection(PGconn *conn)
 			return 0;
 		}
 		
-		/* 
-		 * Copy the connection info 
-		 */
-		*control_connection = *conn;
-
+		connectOptions1(control_connection,control_connection_string);
 		/* 
 		 * Modify the load_balance feature to false 
 		 */ 
@@ -1362,7 +1348,7 @@ bool YBconnectLoadBalance(PGconn *conn)
 	/*
 	 * Check the control connection
 	 */
-	if(!YBcheckControlConnection(conn))
+	if(!YBcheckControlConnection())
 	{
 		conn->pghost = NULL;
 		return 0;
@@ -1461,6 +1447,7 @@ PQconnectStart(const char *conninfo)
 		/*
 		 * Make the smart connection with the loadbalance feature 
 		 */
+		control_connection_string = (char*)malloc(sizeof(char)*(1+strlen(conninfo)));
 		if (!YBconnectLoadBalance(conn)) 
 			conn->status = CONNECTION_BAD;
 	}else
