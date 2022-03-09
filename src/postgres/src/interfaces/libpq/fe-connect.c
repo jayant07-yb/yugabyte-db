@@ -1448,6 +1448,7 @@ PQconnectStart(const char *conninfo)
 		 * Make the smart connection with the loadbalance feature 
 		 */
 		control_connection_string = (char*)malloc(sizeof(char)*(1+strlen(conninfo)));
+		strcpy(control_connection_string,conninfo);
 		if (!YBconnectLoadBalance(conn)) 
 			conn->status = CONNECTION_BAD;
 	}else
