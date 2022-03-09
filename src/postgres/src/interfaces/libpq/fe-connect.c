@@ -2707,7 +2707,7 @@ PQconnectPoll(PGconn *conn)
 								 libpq_gettext(
 											   "invalid connection state, "
 											   "probably indicative of memory corruption\n"
-										));
+												));
 			goto error_return;
 	}
 
@@ -4409,7 +4409,7 @@ closePGconn(PGconn *conn)
 void
 PQfinish(PGconn *conn)
 {
-	if (conn!=NULL)
+	if (conn)
 	{	
 		if((conn->load_balance!= NULL)&&(strcmp(conn->load_balance,"true")==0))
 			YBupdateMap(conn->pghost,-1,true);
