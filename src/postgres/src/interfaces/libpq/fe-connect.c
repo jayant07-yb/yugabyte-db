@@ -561,7 +561,7 @@ pqDropServerData(PGconn *conn)
  *
  * If it is desired to connect in a synchronous (blocking) manner, use the
  * function PQconnectdb or PQconnectdbParams. The former accepts a string of
- * option = value pairs (or a URI) which must be parsed;the latter takes two
+ * option = value pairs (or a URI) which must be parsed; the latter takes two
  * NULL terminated arrays instead.
  *
  * To connect in an asynchronous (non-blocking) manner, use the functions
@@ -672,7 +672,7 @@ void  YBupdateMap(const char *ip_address , int change , bool check_thread_safe)
 	if(check_thread_safe)
 		pthread_mutex_lock(&(map_ready));
 	
-	for(int i =0;i <  total_servers;i++)
+	for(int i =0; i <  total_servers; i++)
 		if(strcmp(server_details[i].host_ip , ip_address) == 0)
 			server_details[i].connections += change;	/* Update the connection count	*/
 
@@ -911,7 +911,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 	if (YBclientNetworkStatus==0)
 	{
 		int itr;
-		for(itr=0;itr<nServers;itr++)
+		for(itr=0; itr<nServers; itr++)
 		{
 			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 0))==0 ) ||
 			(conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 0))==0))
@@ -929,7 +929,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 	if (YBclientNetworkStatus==0)
 	{
 		int itr;
-	 	for(itr=0;itr<nServers;itr++)
+	 	for(itr=0; itr<nServers; itr++)
 		{
 			if((conn->pghost && strcmp(conn->pghost,PQgetvalue(res, itr , 7))==0) ||
 			(conn->pghostaddr && strcmp(conn->pghostaddr,PQgetvalue(res, itr , 7))==0))
@@ -947,7 +947,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 	if (YBclientNetworkStatus==0)
 	{
 		int itr;
-		for(itr=0;itr<nServers;itr++)
+		for(itr=0; itr<nServers; itr++)
 		{
 			if(YBtestNetwork(PQgetvalue(res, itr , 0)))
 			{
@@ -985,7 +985,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 	/*
 	 * Assign the value of is_running as false for all the servers.
 	 */
-	for(int i =0;i< total_servers;i++)
+	for(int i =0; i< total_servers; i++)
 	{
 		server_details[i].is_running = false;
 	}
@@ -993,7 +993,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 	/*
 	 * Iterate the result and update the is_running as true.
 	 */
-  	for (int i = 0;i < nServers;i++)
+  	for (int i = 0; i < nServers; i++)
   	{
 	  
 		char  *server;
@@ -1029,7 +1029,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 		 * Allocate the space
 		 */
 		struct node_details *temp_server_details = (struct node_details *) malloc ( (increase_map_size + total_servers) * sizeof (struct node_details));
-		for(int i =0;i < total_servers;i++)
+		for(int i =0; i < total_servers; i++)
 		{
 			temp_server_details[i] = server_details[i];
 		} 
@@ -1037,7 +1037,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 		/*
 		 * Add the server details
 		 */
-		for(int i =0;i < nServers;i++)
+		for(int i =0; i < nServers; i++)
 		{
 			if(!server_to_add[i])
 				continue;
@@ -1103,12 +1103,12 @@ bool YBtopologyCheck(const char* topology_keys , const char* server_topology)
 		return true;
 	int toplogy_keys_len = strlen(topology_keys);
 	int server_topology_len = strlen(server_topology);
-	for(int i =0;i+server_topology_len  <= toplogy_keys_len;i++)
+	for(int i =0; i+server_topology_len  <= toplogy_keys_len; i++)
 	{
 		if(i==0 ||  topology_keys[i-1]==',')
 		{
 			bool found = 1;
-			for(int  j = 0;j < server_topology_len;j++)
+			for(int  j = 0; j < server_topology_len; j++)
 			{
 				if(topology_keys[i+j] != server_topology[j])
 				{
@@ -1143,7 +1143,7 @@ bool YBnextHost(const char *topology_keys , char **next_host_ip)
 
 	*next_host_ip = NULL;
 	int lowest_value = -1;
-	for(int i =0;i<total_servers;i++)
+	for(int i =0; i<total_servers; i++)
 	{
 		if(!server_details[i].is_running)
 			continue;
@@ -1201,7 +1201,7 @@ bool YBserverStatusChange(char *server_address , bool new_status , bool check_th
 	if(check_thread_safe)
 		pthread_mutex_lock(&(map_ready));
 
-	for(int i = 0;i < total_servers;i++) 
+	for(int i = 0; i < total_servers; i++) 
 	{
 		if(strcmp(server_details[i].host_ip,server_address)==0)
 		{
@@ -1478,7 +1478,7 @@ fillPGconn(PGconn *conn, PQconninfoOption *connOptions)
 {
 	const internalPQconninfoOption *option;
 
-	for (option = PQconninfoOptions;option->keyword;option++)
+	for (option = PQconninfoOptions; option->keyword; option++)
 	{
 		if (option->connofs >= 0)
 		{
@@ -1558,7 +1558,7 @@ count_comma_separated_elems(const char *input)
 	int			n;
 
 	n = 1;
-	for (;*input != '\0';input++)
+	for (; *input != '\0'; input++)
 	{
 		if (*input == ',')
 			n++;
@@ -1585,7 +1585,7 @@ parse_comma_separated_list(char **startptr, bool *more)
 	int			len;
 
 	/*
-	 * Search for the end of the current element;a comma or end-of-string
+	 * Search for the end of the current element; a comma or end-of-string
 	 * acts as a terminator.
 	 */
 	e = s;
@@ -1644,7 +1644,7 @@ connectOptions2(PGconn *conn)
 		char	   *s = conn->pghostaddr;
 		bool		more = true;
 
-		for (i = 0;i < conn->nconnhost && more;i++)
+		for (i = 0; i < conn->nconnhost && more; i++)
 		{
 			conn->connhost[i].hostaddr = parse_comma_separated_list(&s, &more);
 			if (conn->connhost[i].hostaddr == NULL)
@@ -1665,7 +1665,7 @@ connectOptions2(PGconn *conn)
 		char	   *s = conn->pghost;
 		bool		more = true;
 
-		for (i = 0;i < conn->nconnhost && more;i++)
+		for (i = 0; i < conn->nconnhost && more; i++)
 		{
 			conn->connhost[i].host = parse_comma_separated_list(&s, &more);
 			if (conn->connhost[i].host == NULL)
@@ -1687,7 +1687,7 @@ connectOptions2(PGconn *conn)
 	 * Now, for each host slot, identify the type of address spec, and fill in
 	 * the default address if nothing was given.
 	 */
-	for (i = 0;i < conn->nconnhost;i++)
+	for (i = 0; i < conn->nconnhost; i++)
 	{
 		pg_conn_host *ch = &conn->connhost[i];
 
@@ -1738,7 +1738,7 @@ connectOptions2(PGconn *conn)
 		char	   *s = conn->pgport;
 		bool		more = true;
 
-		for (i = 0;i < conn->nconnhost && more;i++)
+		for (i = 0; i < conn->nconnhost && more; i++)
 		{
 			conn->connhost[i].port = parse_comma_separated_list(&s, &more);
 			if (conn->connhost[i].port == NULL)
@@ -1751,7 +1751,7 @@ connectOptions2(PGconn *conn)
 		 */
 		if (i == 1 && !more)
 		{
-			for (i = 1;i < conn->nconnhost;i++)
+			for (i = 1; i < conn->nconnhost; i++)
 			{
 				conn->connhost[i].port = strdup(conn->connhost[0].port);
 				if (conn->connhost[i].port == NULL)
@@ -1823,7 +1823,7 @@ connectOptions2(PGconn *conn)
 
 		if (conn->pgpassfile != NULL && conn->pgpassfile[0] != '\0')
 		{
-			for (i = 0;i < conn->nconnhost;i++)
+			for (i = 0; i < conn->nconnhost; i++)
 			{
 				/*
 				 * Try to get a password for this host from file.  We use host
@@ -2707,7 +2707,7 @@ PQconnectPoll(PGconn *conn)
 								 libpq_gettext(
 											   "invalid connection state, "
 											   "probably indicative of memory corruption\n"
-											));
+										));
 			goto error_return;
 	}
 
@@ -2859,7 +2859,7 @@ keep_going:						/* We will come back to here until there is
 #ifdef USE_SSL
 		/* initialize these values based on SSL mode */
 		conn->allow_ssl_try = (conn->sslmode[0] != 'd');	/* "disable" */
-		conn->wait_ssl_try = (conn->sslmode[0] == 'a');/* "allow" */
+		conn->wait_ssl_try = (conn->sslmode[0] == 'a'); /* "allow" */
 #endif
 
 		reset_connection_state_machine = false;
@@ -2922,7 +2922,7 @@ keep_going:						/* We will come back to here until there is
 					{
 						/*
 						 * Silently ignore socket() failure if we have more
-						 * addresses to try;this reduces useless chatter in
+						 * addresses to try; this reduces useless chatter in
 						 * cases where the address list includes both IPv4 and
 						 * IPv6 but kernel only accepts one family.
 						 */
@@ -3503,7 +3503,7 @@ keep_going:						/* We will come back to here until there is
 				 * auth requests may not be that small.  Errors can be a
 				 * little larger, but not huge.  If we see a large apparent
 				 * length in an error, it means we're really talking to a
-				 * pre-3.0-protocol server;cope.
+				 * pre-3.0-protocol server; cope.
 				 */
 				if (beresp == 'R' && (msgLength < 8 || msgLength > 2000))
 				{
@@ -3524,7 +3524,7 @@ keep_going:						/* We will come back to here until there is
 						/* We'll come back when there is more data */
 						return PGRES_POLLING_READING;
 					}
-					/* OK, we read the message;mark data consumed */
+					/* OK, we read the message; mark data consumed */
 					conn->inStart = conn->inCursor;
 
 					/*
@@ -3559,7 +3559,7 @@ keep_going:						/* We will come back to here until there is
 				{
 					/*
 					 * Before returning, try to enlarge the input buffer if
-					 * needed to hold the whole message;see notes in
+					 * needed to hold the whole message; see notes in
 					 * pqParseInput3.
 					 */
 					if (pqCheckInBufferSpace(conn->inCursor + (size_t) msgLength,
@@ -3588,7 +3588,7 @@ keep_going:						/* We will come back to here until there is
 							return PGRES_POLLING_READING;
 						}
 					}
-					/* OK, we read the message;mark data consumed */
+					/* OK, we read the message; mark data consumed */
 					conn->inStart = conn->inCursor;
 
 					/* Check to see if we should mention pgpassfile */
@@ -3657,7 +3657,7 @@ keep_going:						/* We will come back to here until there is
 					{
 						/*
 						 * Before returning, try to enlarge the input buffer
-						 * if needed to hold the whole message;see notes in
+						 * if needed to hold the whole message; see notes in
 						 * pqParseInput3.
 						 */
 						if (pqCheckInBufferSpace(conn->inCursor + (size_t) 4,
@@ -3678,7 +3678,7 @@ keep_going:						/* We will come back to here until there is
 				res = pg_fe_sendauth(areq, msgLength, conn);
 				conn->errorMessage.len = strlen(conn->errorMessage.data);
 
-				/* OK, we have processed the message;mark data consumed */
+				/* OK, we have processed the message; mark data consumed */
 				conn->inStart = conn->inCursor;
 
 				if (res != STATUS_OK)
@@ -3747,7 +3747,7 @@ keep_going:						/* We will come back to here until there is
 						 * close the connection and retry without sending
 						 * application_name.  We could possibly get a false
 						 * SQLSTATE match here and retry uselessly, but there
-						 * seems no great harm in that;we'll just get the
+						 * seems no great harm in that; we'll just get the
 						 * same error again if it's unrelated.
 						 */
 						const char *sqlstate;
@@ -3765,7 +3765,7 @@ keep_going:						/* We will come back to here until there is
 
 					/*
 					 * if the resultStatus is FATAL, then conn->errorMessage
-					 * already has a copy of the error;needn't copy it back.
+					 * already has a copy of the error; needn't copy it back.
 					 * But add a newline if it's not there already, since
 					 * postmaster error messages may not have one.
 					 */
@@ -3949,7 +3949,7 @@ keep_going:						/* We will come back to here until there is
 					val = PQgetvalue(res, 0, 0);
 					if (strncmp(val, "on", 2) == 0)
 					{
-						/* Not writable;fail this connection. */
+						/* Not writable; fail this connection. */
 						const char *displayed_host;
 						const char *displayed_port;
 
@@ -4110,7 +4110,7 @@ internal_ping(PGconn *conn)
 
 	/*
 	 * Any other SQLSTATE can be taken to indicate that the server is up.
-	 * Presumably it didn't like our username, password, or database name;or
+	 * Presumably it didn't like our username, password, or database name; or
 	 * perhaps it had some transient failure, but that should not be taken as
 	 * meaning "it's down".
 	 */
@@ -4206,7 +4206,7 @@ makeEmptyPGconn(void)
  *	 - free an idle (closed) PGconn data structure
  *
  * NOTE: this should not overlap any functionality with closePGconn().
- * Clearing/resetting of transient state belongs there;what we do here is
+ * Clearing/resetting of transient state belongs there; what we do here is
  * release data that is to be held for the life of the PGconn structure.
  * If a value ought to be cleared/freed during PQreset(), do it there not here.
  */
@@ -4216,7 +4216,7 @@ freePGconn(PGconn *conn)
 	int			i;
 
 	/* let any event procs clean up their state data */
-	for (i = 0;i < conn->nEvents;i++)
+	for (i = 0; i < conn->nEvents; i++)
 	{
 		PGEventConnDestroy evt;
 
@@ -4229,7 +4229,7 @@ freePGconn(PGconn *conn)
 	/* clean up pg_conn_host structures */
 	if (conn->connhost != NULL)
 	{
-		for (i = 0;i < conn->nconnhost;++i)
+		for (i = 0; i < conn->nconnhost;++i)
 		{
 			if (conn->connhost[i].host != NULL)
 				free(conn->connhost[i].host);
@@ -4438,7 +4438,7 @@ PQreset(PGconn *conn)
 			 */
 			int			i;
 
-			for (i = 0;i < conn->nEvents;i++)
+			for (i = 0; i < conn->nEvents; i++)
 			{
 				PGEventConnReset evt;
 
@@ -4498,7 +4498,7 @@ PQresetPoll(PGconn *conn)
 			 */
 			int			i;
 
-			for (i = 0;i < conn->nEvents;i++)
+			for (i = 0; i < conn->nEvents; i++)
 			{
 				PGEventConnReset evt;
 
@@ -4703,7 +4703,7 @@ PQcancel(PGcancel *cancel, char *errbuf, int errbufsize)
  *
  * Returns true if able to send the cancel request, false if not.
  *
- * On failure, the error message is saved in conn->errorMessage;this means
+ * On failure, the error message is saved in conn->errorMessage; this means
  * that this can't be used when there might be other active operations on
  * the connection object.
  *
@@ -4746,7 +4746,7 @@ PQrequestCancel(PGconn *conn)
  * packets, which have no message type code.)
  *
  * buf, buf_len: contents of message.  The given length includes only what
- * is in buf;the message type and message length fields are added here.
+ * is in buf; the message type and message length fields are added here.
  *
  * RETURNS: STATUS_ERROR if the write fails, STATUS_OK otherwise.
  * SIDE_EFFECTS: may block.
@@ -5089,7 +5089,7 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 
 	/* concatenate values into a single string with newline terminators */
 	size = 1;					/* for the trailing null */
-	for (i = 0;values[i] != NULL;i++)
+	for (i = 0; values[i] != NULL; i++)
 		size += values[i]->bv_len + 1;
 	if ((result = malloc(size)) == NULL)
 	{
@@ -5100,7 +5100,7 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 		return 3;
 	}
 	p = result;
-	for (i = 0;values[i] != NULL;i++)
+	for (i = 0; values[i] != NULL; i++)
 	{
 		memcpy(p, values[i]->bv_val, values[i]->bv_len);
 		p += values[i]->bv_len;
@@ -5113,7 +5113,7 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 
 	/* parse result string */
 	oldstate = state = 0;
-	for (p = result;*p != '\0';++p)
+	for (p = result; *p != '\0';++p)
 	{
 		switch (state)
 		{
@@ -5203,7 +5203,7 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 		if (state == 0 && oldstate != 0)
 		{
 			found_keyword = false;
-			for (i = 0;options[i].keyword;i++)
+			for (i = 0; options[i].keyword; i++)
 			{
 				if (strcmp(options[i].keyword, optname) == 0)
 				{
@@ -5454,7 +5454,7 @@ parseServiceFile(const char *serviceFile,
 				 * explicit setting.
 				 */
 				found_keyword = false;
-				for (i = 0;options[i].keyword;i++)
+				for (i = 0; options[i].keyword; i++)
 				{
 					if (strcmp(options[i].keyword, key) == 0)
 					{
@@ -5548,7 +5548,7 @@ conninfo_init(PQExpBuffer errorMessage)
 	}
 	opt_dest = options;
 
-	for (cur_opt = PQconninfoOptions;cur_opt->keyword;cur_opt++)
+	for (cur_opt = PQconninfoOptions; cur_opt->keyword; cur_opt++)
 	{
 		/* Only copy the public part of the struct, not the full internal */
 		memcpy(opt_dest, cur_opt, sizeof(PQconninfoOption));
@@ -5856,7 +5856,7 @@ conninfo_array_parse(const char *const *keywords, const char *const *values,
 		if (pvalue != NULL && pvalue[0] != '\0')
 		{
 			/* Search for the param record */
-			for (option = options;option->keyword != NULL;option++)
+			for (option = options; option->keyword != NULL; option++)
 			{
 				if (strcmp(option->keyword, pname) == 0)
 					break;
@@ -5882,13 +5882,13 @@ conninfo_array_parse(const char *const *keywords, const char *const *values,
 			{
 				PQconninfoOption *str_option;
 
-				for (str_option = dbname_options;str_option->keyword != NULL;str_option++)
+				for (str_option = dbname_options; str_option->keyword != NULL; str_option++)
 				{
 					if (str_option->val != NULL)
 					{
 						int			k;
 
-						for (k = 0;options[k].keyword;k++)
+						for (k = 0; options[k].keyword; k++)
 						{
 							if (strcmp(options[k].keyword, str_option->keyword) == 0)
 							{
@@ -5959,7 +5959,7 @@ conninfo_array_parse(const char *const *keywords, const char *const *values,
  *
  * Defaults are obtained from a service file, environment variables, etc.
  *
- * Returns true if successful, otherwise false;errorMessage, if supplied,
+ * Returns true if successful, otherwise false; errorMessage, if supplied,
  * is filled in upon failure.  Note that failure to locate a default value
  * is not an error condition here --- we just leave the option's value as
  * NULL.
@@ -5982,7 +5982,7 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 	 * Get the fallback resources for parameters not specified in the conninfo
 	 * string nor the service.
 	 */
-	for (option = options;option->keyword != NULL;option++)
+	for (option = options; option->keyword != NULL; option++)
 	{
 		if (option->val != NULL)
 			continue;			/* Value was in conninfo or service */
@@ -6010,7 +6010,7 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 		 * Interpret the deprecated PGREQUIRESSL environment variable.  Per
 		 * tradition, translate values starting with "1" to sslmode=require,
 		 * and ignore other values.  Given both PGREQUIRESSL=1 and PGSSLMODE,
-		 * PGSSLMODE takes precedence;the opposite was true before v9.3.
+		 * PGSSLMODE takes precedence; the opposite was true before v9.3.
 		 */
 		if (strcmp(option->keyword, "sslmode") == 0)
 		{
@@ -6049,7 +6049,7 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 
 		/*
 		 * Special handling for "user" option.  Note that if pg_fe_getauthname
-		 * fails, we just leave the value as NULL;there's no need for this to
+		 * fails, we just leave the value as NULL; there's no need for this to
 		 * be an error condition if the caller provides a user name.  The only
 		 * reason we do this now at all is so that callers of PQconndefaults
 		 * will see a correct default (barring error, of course).
@@ -6412,7 +6412,7 @@ conninfo_uri_parse_params(char *params,
 			else if (*p == '&' || *p == '\0')
 			{
 				/*
-				 * If not at the end, cut off value and advance;leave p
+				 * If not at the end, cut off value and advance; leave p
 				 * pointing to start of the next parameter, if any.
 				 */
 				if (*p != '\0')
@@ -6462,7 +6462,7 @@ conninfo_uri_parse_params(char *params,
 		}
 
 		/*
-		 * Store the value if the corresponding option exists;ignore
+		 * Store the value if the corresponding option exists; ignore
 		 * otherwise.  At this point both keyword and value are not
 		 * URI-encoded.
 		 */
@@ -6693,7 +6693,7 @@ conninfo_find(PQconninfoOption *connOptions, const char *keyword)
 {
 	PQconninfoOption *option;
 
-	for (option = connOptions;option->keyword != NULL;option++)
+	for (option = connOptions; option->keyword != NULL; option++)
 	{
 		if (strcmp(option->keyword, keyword) == 0)
 			return option;
@@ -6726,7 +6726,7 @@ PQconninfo(PGconn *conn)
 	{
 		const internalPQconninfoOption *option;
 
-		for (option = PQconninfoOptions;option->keyword;option++)
+		for (option = PQconninfoOptions; option->keyword; option++)
 		{
 			char	  **connmember;
 
@@ -6755,7 +6755,7 @@ PQconninfoFree(PQconninfoOption *connOptions)
 	if (connOptions == NULL)
 		return;
 
-	for (option = connOptions;option->keyword != NULL;option++)
+	for (option = connOptions; option->keyword != NULL; option++)
 	{
 		if (option->val != NULL)
 			free(option->val);
@@ -6870,7 +6870,7 @@ PQparameterStatus(const PGconn *conn, const char *paramName)
 
 	if (!conn || !paramName)
 		return NULL;
-	for (pstatus = conn->pstatus;pstatus != NULL;pstatus = pstatus->next)
+	for (pstatus = conn->pstatus; pstatus != NULL; pstatus = pstatus->next)
 	{
 		if (strcmp(pstatus->name, paramName) == 0)
 			return pstatus->value;
@@ -7094,7 +7094,7 @@ PQsetNoticeProcessor(PGconn *conn, PQnoticeProcessor proc, void *arg)
 /*
  * The default notice message receiver just gets the standard notice text
  * and sends it to the notice processor.  This two-level setup exists
- * mostly for backwards compatibility;perhaps we should deprecate use of
+ * mostly for backwards compatibility; perhaps we should deprecate use of
  * PQsetNoticeProcessor?
  */
 static void
@@ -7210,7 +7210,7 @@ passwordFromFile(const char *hostname, const char *port, const char *dbname,
 	if (stat_buf.st_mode & (S_IRWXG | S_IRWXO))
 	{
 		fprintf(stderr,
-				libpq_gettext("WARNING: password file \"%s\" has group or world access;permissions should be u=rw (0600) or less\n"),
+				libpq_gettext("WARNING: password file \"%s\" has group or world access; permissions should be u=rw (0600) or less\n"),
 				pgpassfile);
 		return NULL;
 	}
@@ -7268,7 +7268,7 @@ passwordFromFile(const char *hostname, const char *port, const char *dbname,
 		}
 
 		/* De-escape password. */
-		for (p1 = p2 = ret;*p1 != ':' && *p1 != '\0';++p1, ++p2)
+		for (p1 = p2 = ret; *p1 != ':' && *p1 != '\0';++p1, ++p2)
 		{
 			if (*p1 == '\\' && p1[1] != '\0')
 				++p1;
@@ -7372,7 +7372,7 @@ default_threadlock(int acquire)
 	if (singlethread_lock == NULL)
 	{
 		while (InterlockedExchange(&mutex_initlock, 1) == 1)
-			 /* loop, another thread own the lock */;
+			 /* loop, another thread own the lock */ ;
 		if (singlethread_lock == NULL)
 		{
 			if (pthread_mutex_init(&singlethread_lock, NULL))
