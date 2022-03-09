@@ -3518,7 +3518,7 @@ keep_going:						/* We will come back to here until there is
 				if (beresp == 'E' && (msgLength < 8 || msgLength > 30000))
 				{
 					/* Handle error from a pre-3.0 server */
-					conn->inCursor = conn->inStart + 1;/* reread data */
+					conn->inCursor = conn->inStart + 1; /* reread data */
 					if (pqGets_append(&conn->errorMessage, conn))
 					{
 						/* We'll come back when there is more data */
@@ -4229,7 +4229,7 @@ freePGconn(PGconn *conn)
 	/* clean up pg_conn_host structures */
 	if (conn->connhost != NULL)
 	{
-		for (i = 0; i < conn->nconnhost;++i)
+		for (i = 0; i < conn->nconnhost; ++i)
 		{
 			if (conn->connhost[i].host != NULL)
 				free(conn->connhost[i].host);
@@ -4863,7 +4863,7 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 	/* hostname */
 	hostname = url + strlen(LDAP_URL);
 	if (*hostname == '/')		/* no hostname? */
-		hostname = DefaultHost;/* the default */
+		hostname = DefaultHost; /* the default */
 
 	/* dn, "distinguished name" */
 	p = strchr(url + strlen(LDAP_URL), '/');
@@ -5113,7 +5113,7 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 
 	/* parse result string */
 	oldstate = state = 0;
-	for (p = result; *p != '\0';++p)
+	for (p = result; *p != '\0'; ++p)
 	{
 		switch (state)
 		{
@@ -5167,7 +5167,7 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 				}
 				else if (ld_is_nl_cr(*p))
 				{
-					optval = optname + strlen(optname);/* empty */
+					optval = optname + strlen(optname); /* empty */
 					state = 0;
 				}
 				else if (!ld_is_sp_tab(*p))
@@ -6298,7 +6298,7 @@ conninfo_uri_parse_options(PQconninfoOption *options, const char *uri,
 
 		if (prevchar == ':')
 		{
-			const char *port = ++p;/* advance past host terminator */
+			const char *port = ++p; /* advance past host terminator */
 
 			while (*p && *p != '/' && *p != '?' && *p != ',')
 				++p;
@@ -7268,7 +7268,7 @@ passwordFromFile(const char *hostname, const char *port, const char *dbname,
 		}
 
 		/* De-escape password. */
-		for (p1 = p2 = ret; *p1 != ':' && *p1 != '\0';++p1, ++p2)
+		for (p1 = p2 = ret; *p1 != ':' && *p1 != '\0'; ++p1, ++p2)
 		{
 			if (*p1 == '\\' && p1[1] != '\0')
 				++p1;
