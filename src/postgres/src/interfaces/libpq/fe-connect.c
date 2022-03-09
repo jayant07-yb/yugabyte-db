@@ -838,8 +838,8 @@ bool YBtestNetwork(char* private_ip)
 	new_conn->load_balance="false";
 
 	if (!connectOptions2(new_conn)	||
-		!connectDBComplete(new_conn)||
-		!connectDBStart( new_conn))
+		!connectDBStart( new_conn)	||
+		!connectDBComplete(new_conn))
 	{
 		PQfinish(new_conn);
 		return 	0;
