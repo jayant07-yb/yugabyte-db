@@ -814,7 +814,7 @@ PQconnectStartParams(const char *const *keywords,
  * be used to update the information about the servers in the cluster.
  */
 PGconn * control_connection = NULL;
-char *control_connection_string;
+char *control_connection_string = NULL;
 
 /*
  *		YBtestNetwork
@@ -1249,8 +1249,7 @@ bool YBcheckControlConnection()
 		/*
 		 * Allocate the memory for the control_connection.
 		 */
-		if(!control_connection)
-			control_connection = makeEmptyPGconn();
+		control_connection = makeEmptyPGconn();
 
 		/*
 		 * Unable to allocate the memory
@@ -1318,10 +1317,11 @@ bool YBcheckControlConnection()
 	}
 
 	if(!YBupdateClusterinfo(control_connection))
-	{	
+	{
 		/*
 		 * Unable to connect/retrieve data
 		 */
+		PQfinish(control_connection);
 		control_connection = NULL;
 		goto start_control_connection;
 	} 
