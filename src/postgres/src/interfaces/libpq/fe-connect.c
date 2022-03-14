@@ -797,14 +797,16 @@ PQconnectStartParams(const char *const *keywords,
 	 */
 	if (!connectOptions2(conn))
 		return conn;
-	if (!connectDBStart( conn))
+
+	/*
+	 * Connect to the database
+	 */
+	if (!connectDBStart(conn))
 	{
-		/*
-		 * Just in case we failed to set it in connectDBStart 
-		 */
+		/* Just in case we failed to set it in connectDBStart */
 		conn->status = CONNECTION_BAD;
-	}	
-	
+	}
+
 	return conn;
 }
 
@@ -1305,6 +1307,7 @@ bool YBcheckControlConnection()
 				/*
 				 * We are unable to establish any control_connection
 				 */
+				PQfinish(control_connection);
 				control_connection = NULL;
 				
 				/*
@@ -2708,7 +2711,7 @@ PQconnectPoll(PGconn *conn)
 								 libpq_gettext(
 											   "invalid connection state, "
 											   "probably indicative of memory corruption\n"
-												));
+											   ));
 			goto error_return;
 	}
 
@@ -4315,7 +4318,6 @@ freePGconn(PGconn *conn)
 		free(conn->rowBuf);
 	if (conn->target_session_attrs)
 		free(conn->target_session_attrs);
-
 	termPQExpBuffer(&conn->errorMessage);
 	termPQExpBuffer(&conn->workBuffer);
 
@@ -4411,7 +4413,7 @@ void
 PQfinish(PGconn *conn)
 {
 	if (conn)
-	{	
+	{
 		if((conn->load_balance!= NULL)&&(strcmp(conn->load_balance,"true")==0))
 			YBupdateMap(conn->pghost,-1,true);
 		
