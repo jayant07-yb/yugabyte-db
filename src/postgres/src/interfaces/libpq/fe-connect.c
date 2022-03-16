@@ -837,10 +837,13 @@ bool YBtestNetwork(char* private_ip)
 	new_conn->pghost  = (char*)malloc(sizeof(char)*(strlen(private_ip)+1));
 	strcpy(new_conn->pghost,private_ip);
 
-	new_conn->load_balance="false";
+	if(new_conn->load_balance)
+		free(new_conn->load_balance);
+	new_conn->load_balance = (char*)malloc(sizeof(char)*6);
+	strcpy(new_conn->load_balance,"false");
 
 	if (!connectOptions2(new_conn)	||
-		!connectDBStart( new_conn)	||
+		!connectDBStart(new_conn) 	||
 		!connectDBComplete(new_conn))
 	{
 		PQfinish(new_conn);
@@ -1032,9 +1035,7 @@ bool YBupdateClusterinfo(PGconn *conn)
 		 */
 		struct node_details *temp_server_details = (struct node_details *) malloc ( (increase_map_size + total_servers) * sizeof (struct node_details));
 		for(int i =0; i < total_servers; i++)
-		{
 			temp_server_details[i] = server_details[i];
-		} 
 
 		/*
 		 * Add the server details
@@ -1269,8 +1270,10 @@ bool YBcheckControlConnection()
 		/* 
 		 * Modify the load_balance feature to false 
 		 */ 
-		control_connection->load_balance = "false";
-		control_connection->topology_keys = NULL;	 
+		if(control_connection->load_balance)
+			free(control_connection->load_balance);
+		control_connection->load_balance = (char*)malloc(sizeof(char)*6);
+		control_connection->load_balance="false";
 
 		/*
 		 * try_next_server is the index of the server 
@@ -4217,6 +4220,11 @@ makeEmptyPGconn(void)
 static void
 freePGconn(PGconn *conn)
 {
+	if(conn->load_balance)
+		free(conn->load_balance);
+	if(conn->topology_keys)
+		free(conn->topology_keys);
+
 	int			i;
 
 	/* let any event procs clean up their state data */
