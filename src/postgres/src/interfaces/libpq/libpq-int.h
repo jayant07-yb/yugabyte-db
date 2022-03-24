@@ -522,15 +522,12 @@ struct pg_cancel
 extern char *const pgresStatus[];
 
 /*
- *  yb_connectLoadBalance function will be used to make any   LoadBalanced connection
- *	Input - PGconn connection object
- *		1.	Check that the control connection is established
- *  	2.	Consider the host with lowest number of connections and try to connect with it.
- *		3. 	If the connection fails goto step 2 and repeat until all the available hosts are checked.
- * 		4.	Once a connection is established return true else false if unable to establish connection with any host.
+ * Function for making a load balanced connection
  */
-
 bool YBconnectLoadBalance(PGconn *conn  )  ; 
+/* 
+ * Function for changing the status of a given server
+ */
 bool YBserverStatusChange(char *server_address , bool new_status , bool check_map_ready ) ; 
 
 #ifdef USE_SSL

@@ -629,7 +629,7 @@ PQpingParams(const char *const *keywords,
 
 
 /*
- * node_details will store the details regarding the connection count for any server
+ * node_details stores the details regarding the connection count for any server.
  */
 struct node_details {
 	char	*host_ip;
@@ -656,8 +656,8 @@ time_t yb_last_update_time = 0;
 /*
  *		YBupdateMap
  *
- * YBupdateMap will be used to increase or decrease the count of connection for any server
- * Input: The ip_address of the server
+ * YBupdateMap increases or decreases the count of connection for any server
+ * Input: 	The ip_address of the server
  *		    change: +1 to increment / -1 to decrement the connection count.
  *		    check_thread_safe: Boolean value, if true then lock the map_ready thread lock 
  *		    				   before iterating. 
@@ -812,8 +812,8 @@ PQconnectStartParams(const char *const *keywords,
 
 
 /*
- * control_connection is the backend connection that will 
- * be used to update the information about the servers in the cluster.
+ * control_connection is the backend connection that is
+ * used to polpulate the information about the servers in the cluster.
  */
 PGconn * control_connection = NULL;
 char *control_connection_string = NULL;
@@ -862,7 +862,7 @@ bool YBtestNetwork(char* private_ip)
  * YBupdateClusterinfo populates the data regarding the server into the 
  * server_details map/list.
  * If the last update happened before 5 minutes the update will be skipped.
- * Use contro_connection to execute the query : "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();"
+ * Use control_connection to execute the query : "SELECT host , port , num_connections , node_type , cloud , region , zone , public_ip from yb_servers();"
  * Once the query's results has been received the yb_last_update_time is modified.
  * If any server that is present in server_details but is absent in the result 
  * of the above query it is considered to be down. All other servers present in
@@ -1010,8 +1010,8 @@ bool YBupdateClusterinfo(PGconn *conn)
 		/*
 		 * Since no other thread is iterating the server_details (map_ready is locked),
 		 * YBserverStatusChange can be called without considering the 
-		 * thread_safe (keeping the value of check_thread_safe as false).	If kept true 
-		 * will endup in a deadlock.
+		 * thread_safe (keeping the value of check_thread_safe as false).
+		 * If kept true will endup in a deadlock.
 		 */
 		if (!YBserverStatusChange(server,true,false))
 		{
@@ -1356,12 +1356,19 @@ bool YBconnectLoadBalance(PGconn *conn)
 	 */
 	if(!YBcheckControlConnection())
 	{
-		conn->pghost = NULL;
+		if(conn->pghost)
+			free(conn->pghost);
+		conn->pghost=NULL;
 		return 0;
 	}
 
+	if(conn->pghost)
+		free(conn->pghost);
 	conn->pghost = NULL;
+	if(conn->pghostaddr)
+		free(conn->pghostaddr);	
 	conn->pghostaddr = NULL;
+
 	char *next_least_connection ;
 		
 	next_server_for_connection:
