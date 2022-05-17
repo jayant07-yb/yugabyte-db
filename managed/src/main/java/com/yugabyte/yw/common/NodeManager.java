@@ -34,8 +34,11 @@ import com.yugabyte.yw.commissioner.tasks.subtasks.InstanceActions;
 import com.yugabyte.yw.commissioner.tasks.subtasks.PauseServer;
 import com.yugabyte.yw.commissioner.tasks.subtasks.ReplaceRootVolume;
 import com.yugabyte.yw.commissioner.tasks.subtasks.ResumeServer;
+import com.yugabyte.yw.commissioner.tasks.subtasks.TransferXClusterCerts;
 import com.yugabyte.yw.commissioner.tasks.subtasks.UpdateMountedDisks;
+import com.yugabyte.yw.common.certmgmt.CertConfigType;
 import com.yugabyte.yw.common.certmgmt.CertificateHelper;
+import com.yugabyte.yw.common.certmgmt.EncryptionInTransitUtil;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
 import com.yugabyte.yw.forms.CertificateParams;
 import com.yugabyte.yw.forms.CertsRotateParams.CertRotationType;
@@ -43,9 +46,10 @@ import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.UserIntent;
 import com.yugabyte.yw.forms.UniverseTaskParams;
 import com.yugabyte.yw.forms.UpgradeTaskParams;
+import com.yugabyte.yw.forms.VMImageUpgradeParams.VmUpgradeTaskType;
 import com.yugabyte.yw.models.AccessKey;
 import com.yugabyte.yw.models.CertificateInfo;
-import com.yugabyte.yw.common.certmgmt.CertConfigType;
+import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.InstanceType;
 import com.yugabyte.yw.models.NodeInstance;
 import com.yugabyte.yw.models.Provider;
@@ -55,15 +59,16 @@ import com.yugabyte.yw.models.helpers.DeviceInfo;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -72,8 +77,6 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
-import com.yugabyte.yw.common.certmgmt.EncryptionInTransitUtil;
-
 import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.validator.routines.InetAddressValidator;
@@ -108,7 +111,7 @@ public class NodeManager extends DevopsBase {
     return YB_CLOUD_COMMAND_TYPE;
   }
 
-  // Currently we need to define the enum such that the lower case value matches the action
+  // We need to define the enum such that the lower case value matches the action.
   public enum NodeCommandType {
     Provision,
     Create,
@@ -126,7 +129,9 @@ public class NodeManager extends DevopsBase {
     Pause,
     Resume,
     Create_Root_Volumes,
-    Replace_Root_Volume
+    Replace_Root_Volume,
+    Delete_Root_Volumes,
+    Transfer_XCluster_Certs
   }
 
   public enum CertRotateAction {
@@ -152,7 +157,11 @@ public class NodeManager extends DevopsBase {
   private UserIntent getUserIntentFromParams(Universe universe, NodeTaskParams nodeTaskParam) {
     NodeDetails nodeDetails = universe.getNode(nodeTaskParam.nodeName);
     if (nodeDetails == null) {
-      nodeDetails = universe.getUniverseDetails().nodeDetailsSet.iterator().next();
+      Iterator<NodeDetails> nodeIter = universe.getUniverseDetails().nodeDetailsSet.iterator();
+      if (!nodeIter.hasNext()) {
+        throw new RuntimeException("No node is found in universe " + universe.name);
+      }
+      nodeDetails = nodeIter.next();
       LOG.info("Node {} not found, so using {}.", nodeTaskParam.nodeName, nodeDetails.nodeName);
     }
     return universe.getUniverseDetails().getClusterByUuid(nodeDetails.placementUuid).userIntent;
@@ -175,9 +184,11 @@ public class NodeManager extends DevopsBase {
     }
 
     if (userIntent.providerType.equals(Common.CloudType.onprem)) {
-      NodeInstance node = NodeInstance.getByName(nodeTaskParam.nodeName);
+      // Instance may not be present if it is deleted from NodeInstance table after a release
+      // action. Node UUID is not available in 2.6.
+      Optional<NodeInstance> node = NodeInstance.maybeGetByName(nodeTaskParam.getNodeName());
       command.add("--node_metadata");
-      command.add(node.getDetailsJson());
+      command.add(node.isPresent() ? node.get().getDetailsJson() : "{}");
     }
     return command;
   }
@@ -259,7 +270,9 @@ public class NodeManager extends DevopsBase {
     if ((type == NodeCommandType.Provision
             || type == NodeCommandType.Destroy
             || type == NodeCommandType.Create
-            || type == NodeCommandType.Disk_Update)
+            || type == NodeCommandType.Disk_Update
+            || type == NodeCommandType.Update_Mounted_Disks
+            || type == NodeCommandType.Transfer_XCluster_Certs)
         && keyInfo.sshUser != null) {
       subCommand.add("--ssh_user");
       subCommand.add(keyInfo.sshUser);
@@ -279,6 +292,9 @@ public class NodeManager extends DevopsBase {
         }
       }
 
+      if (keyInfo.setUpChrony) {
+        subCommand.add("--skip_ntp_check");
+      }
       if (keyInfo.airGapInstall) {
         subCommand.add("--air_gap");
       }
@@ -298,6 +314,16 @@ public class NodeManager extends DevopsBase {
         subCommand.add(Integer.toString(keyInfo.nodeExporterPort));
         subCommand.add("--node_exporter_user");
         subCommand.add(keyInfo.nodeExporterUser);
+      }
+
+      if (keyInfo.setUpChrony) {
+        subCommand.add("--use_chrony");
+        if (keyInfo.ntpServers != null && !keyInfo.ntpServers.isEmpty()) {
+          for (String server : keyInfo.ntpServers) {
+            subCommand.add("--ntp_server");
+            subCommand.add(server);
+          }
+        }
       }
     }
     return subCommand;
@@ -911,11 +937,25 @@ public class NodeManager extends DevopsBase {
     subcommand.add("--redis_proxy_rpc_port");
     subcommand.add(Integer.toString(node.redisServerRpcPort));
 
-    // Custom cluster creation flow with prebuilt AMI
-    if (userIntent.providerType.equals(Common.CloudType.aws)
-        && taskParam.getRegion().ybPrebuiltAmi) {
-      subcommand.add("--skip_tags");
-      subcommand.add("yb-prebuilt-ami");
+    // Custom cluster creation flow with prebuilt AMI for cloud
+    if (config.getBoolean("yb.cloud.enabled")
+        && taskParam.type != UpgradeTaskParams.UpgradeTaskType.Software) {
+      if ((userIntent.providerType.equals(Common.CloudType.aws)
+          || userIntent.providerType.equals(Common.CloudType.gcp))) {
+        if (taskParam.vmUpgradeTaskType != VmUpgradeTaskType.None) {
+          if (taskParam.vmUpgradeTaskType == VmUpgradeTaskType.VmUpgradeWithCustomImages) {
+            subcommand.add("--skip_tags");
+            subcommand.add("yb-prebuilt-ami");
+          }
+        } else if (universe
+                .getConfig()
+                .getOrDefault(Universe.USE_CUSTOM_IMAGE, "false")
+                .equals("true")
+            && !taskParam.ignoreUseCustomImageConfig) {
+          subcommand.add("--skip_tags");
+          subcommand.add("yb-prebuilt-ami");
+        }
+      }
     }
 
     boolean useHostname =
@@ -940,6 +980,18 @@ public class NodeManager extends DevopsBase {
         }
         subcommand.add("--package");
         subcommand.add(ybServerPackage);
+        subcommand.add("--num_releases_to_keep");
+        if (config.getBoolean("yb.cloud.enabled")) {
+          subcommand.add(
+              runtimeConfigFactory
+                  .forUniverse(universe)
+                  .getString("yb.releases.num_releases_to_keep_cloud"));
+        } else {
+          subcommand.add(
+              runtimeConfigFactory
+                  .forUniverse(universe)
+                  .getString("yb.releases.num_releases_to_keep_default"));
+        }
         if ((taskParam.enableNodeToNodeEncrypt || taskParam.enableClientToNodeEncrypt)) {
           subcommand.addAll(
               getCertificatePaths(
@@ -975,6 +1027,18 @@ public class NodeManager extends DevopsBase {
           } else if (taskSubType.equals(UpgradeTaskParams.UpgradeTaskSubType.Install.toString())) {
             subcommand.add("--tags");
             subcommand.add("install-software");
+          }
+          subcommand.add("--num_releases_to_keep");
+          if (config.getBoolean("yb.cloud.enabled")) {
+            subcommand.add(
+                runtimeConfigFactory
+                    .forUniverse(universe)
+                    .getString("yb.releases.num_releases_to_keep_cloud"));
+          } else {
+            subcommand.add(
+                runtimeConfigFactory
+                    .forUniverse(universe)
+                    .getString("yb.releases.num_releases_to_keep_default"));
           }
         }
         break;
@@ -1216,8 +1280,7 @@ public class NodeManager extends DevopsBase {
 
   static boolean isIpAddress(String maybeIp) {
     InetAddressValidator ipValidator = InetAddressValidator.getInstance();
-    return InetAddressValidator.getInstance().isValidInet4Address(maybeIp)
-        || InetAddressValidator.getInstance().isValidInet6Address(maybeIp);
+    return ipValidator.isValidInet4Address(maybeIp) || ipValidator.isValidInet6Address(maybeIp);
   }
 
   enum SkipCertValidationType {
@@ -1364,13 +1427,32 @@ public class NodeManager extends DevopsBase {
     return bootScriptFile;
   }
 
+  private void addInstanceTags(
+      Universe universe,
+      UserIntent userIntent,
+      NodeTaskParams nodeTaskParam,
+      List<String> commandArgs) {
+    if (Provider.InstanceTagsEnabledProviders.contains(userIntent.providerType)) {
+      // Create an ordered shallow copy of the tags.
+      Map<String, String> useTags =
+          MapUtils.isEmpty(userIntent.instanceTags)
+              ? new TreeMap<>()
+              : new TreeMap<>(userIntent.getInstanceTagsForInstanceOps());
+      addAdditionalInstanceTags(universe, nodeTaskParam, useTags);
+      if (!useTags.isEmpty()) {
+        commandArgs.add("--instance_tags");
+        commandArgs.add(Json.stringify(Json.toJson(useTags)));
+      }
+    }
+  }
+
   public ShellResponse nodeCommand(NodeCommandType type, NodeTaskParams nodeTaskParam) {
     Universe universe = Universe.getOrBadRequest(nodeTaskParam.universeUUID);
+    populateNodeUuidFromUniverse(universe, nodeTaskParam);
     List<String> commandArgs = new ArrayList<>();
     UserIntent userIntent = getUserIntentFromParams(nodeTaskParam);
     Path bootScriptFile = null;
     Map<String, String> sensitiveData = new HashMap<>();
-
     switch (type) {
       case Replace_Root_Volume:
         if (!(nodeTaskParam instanceof ReplaceRootVolume.Params)) {
@@ -1453,20 +1535,7 @@ public class NodeManager extends DevopsBase {
               commandArgs.add("--assign_static_public_ip");
             }
           }
-
-          if (Provider.InstanceTagsEnabledProviders.contains(cloudType)) {
-            // Create an ordered shallow copy of the tags.
-            Map<String, String> useTags =
-                MapUtils.isEmpty(userIntent.instanceTags)
-                    ? new TreeMap<>()
-                    : new TreeMap<>(userIntent.getInstanceTagsForInstanceOps());
-            addAdditionalInstanceTags(nodeTaskParam, useTags);
-            if (!useTags.isEmpty()) {
-              commandArgs.add("--instance_tags");
-              commandArgs.add(Json.stringify(Json.toJson(useTags)));
-            }
-          }
-
+          addInstanceTags(universe, userIntent, nodeTaskParam, commandArgs);
           if (cloudType.equals(Common.CloudType.aws)) {
             if (taskParam.cmkArn != null) {
               commandArgs.add("--cmk_res_name");
@@ -1521,12 +1590,6 @@ public class NodeManager extends DevopsBase {
             // aws uses instance_type to determine device names for mounting
             commandArgs.add("--instance_type");
             commandArgs.add(taskParam.instanceType);
-
-            // Custom cluster creation flow with prebuilt AMI
-            if (taskParam.getRegion().ybPrebuiltAmi) {
-              commandArgs.add("--skip_tags");
-              commandArgs.add("yb-prebuilt-ami");
-            }
           }
 
           // gcp uses machine_image for ansible preprovision.yml
@@ -1536,6 +1599,26 @@ public class NodeManager extends DevopsBase {
             if (ybImage != null && !ybImage.isEmpty()) {
               commandArgs.add("--machine_image");
               commandArgs.add(ybImage);
+            }
+          }
+
+          // Custom cluster creation flow with prebuilt AMI for cloud
+          if (runtimeConfigFactory.forUniverse(universe).getBoolean("yb.cloud.enabled")) {
+            if ((cloudType.equals(Common.CloudType.aws)
+                || cloudType.equals(Common.CloudType.gcp))) {
+              if (taskParam.vmUpgradeTaskType != VmUpgradeTaskType.None) {
+                if (taskParam.vmUpgradeTaskType == VmUpgradeTaskType.VmUpgradeWithCustomImages) {
+                  commandArgs.add("--skip_tags");
+                  commandArgs.add("yb-prebuilt-ami");
+                }
+              } else if (universe
+                      .getConfig()
+                      .getOrDefault(Universe.USE_CUSTOM_IMAGE, "false")
+                      .equals("true")
+                  && !taskParam.ignoreUseCustomImageConfig) {
+                commandArgs.add("--skip_tags");
+                commandArgs.add("yb-prebuilt-ami");
+              }
             }
           }
 
@@ -1552,7 +1635,8 @@ public class NodeManager extends DevopsBase {
 
           if (taskParam.useTimeSync
               && (cloudType.equals(Common.CloudType.aws)
-                  || cloudType.equals(Common.CloudType.gcp))) {
+                  || cloudType.equals(Common.CloudType.gcp)
+                  || cloudType.equals(Common.CloudType.azu))) {
             commandArgs.add("--use_chrony");
           }
 
@@ -1653,7 +1737,7 @@ public class NodeManager extends DevopsBase {
             commandArgs.addAll(getDeviceArgs(taskParam));
           }
           commandArgs.addAll(getAccessKeySpecificCommand(taskParam, type));
-          if (appConfig.getBoolean("yb.cloud.enabled") && userIntent.assignStaticPublicIP) {
+          if (userIntent.assignStaticPublicIP) {
             commandArgs.add("--delete_static_public_ip");
           }
           break;
@@ -1696,6 +1780,16 @@ public class NodeManager extends DevopsBase {
           if (taskParam.useSystemd) {
             commandArgs.add("--systemd_services");
           }
+          if (taskParam.checkVolumesAttached) {
+            UniverseDefinitionTaskParams.Cluster cluster =
+                universe.getCluster(taskParam.placementUuid);
+            if (cluster != null
+                && cluster.userIntent.deviceInfo != null
+                && cluster.userIntent.providerType != Common.CloudType.onprem) {
+              commandArgs.add("--num_volumes");
+              commandArgs.add(String.valueOf(cluster.userIntent.deviceInfo.numVolumes));
+            }
+          }
           commandArgs.addAll(getAccessKeySpecificCommand(taskParam, type));
           break;
         }
@@ -1709,13 +1803,7 @@ public class NodeManager extends DevopsBase {
             if (MapUtils.isEmpty(userIntent.instanceTags)) {
               throw new RuntimeException("Invalid instance tags");
             }
-            // Create an ordered shallow copy of the tags.
-            Map<String, String> useTags = new TreeMap<>(userIntent.getInstanceTagsForInstanceOps());
-            addAdditionalInstanceTags(nodeTaskParam, useTags);
-            if (!useTags.isEmpty()) {
-              commandArgs.add("--instance_tags");
-              commandArgs.add(Json.stringify(Json.toJson(useTags)));
-            }
+            addInstanceTags(universe, userIntent, nodeTaskParam, commandArgs);
             if (!taskParam.deleteTags.isEmpty()) {
               commandArgs.add("--remove_tags");
               commandArgs.add(taskParam.deleteTags);
@@ -1768,6 +1856,27 @@ public class NodeManager extends DevopsBase {
           commandArgs.addAll(getAccessKeySpecificCommand(taskParam, type));
           break;
         }
+      case Transfer_XCluster_Certs:
+        {
+          if (!(nodeTaskParam instanceof TransferXClusterCerts.Params)) {
+            throw new RuntimeException("NodeTaskParams is not TransferXClusterCerts.Params");
+          }
+          TransferXClusterCerts.Params taskParam = (TransferXClusterCerts.Params) nodeTaskParam;
+          commandArgs.add("--action");
+          commandArgs.add(taskParam.action.toString());
+          if (taskParam.action == TransferXClusterCerts.Params.Action.COPY) {
+            commandArgs.add("--root_cert_path");
+            commandArgs.add(taskParam.rootCertPath.toString());
+          }
+          commandArgs.add("--replication_config_name");
+          commandArgs.add(taskParam.replicationGroupName);
+          if (taskParam.producerCertsDirOnTarget != null) {
+            commandArgs.add("--producer_certs_dir");
+            commandArgs.add(taskParam.producerCertsDirOnTarget.toString());
+          }
+          commandArgs.addAll(getAccessKeySpecificCommand(taskParam, type));
+          break;
+        }
       case CronCheck:
         {
           if (!(nodeTaskParam instanceof AnsibleConfigureServers.Params)) {
@@ -1810,6 +1919,11 @@ public class NodeManager extends DevopsBase {
             commandArgs.add(skipType.name());
           }
 
+          break;
+        }
+      case Delete_Root_Volumes:
+        {
+          addInstanceTags(universe, userIntent, nodeTaskParam, commandArgs);
           break;
         }
     }
@@ -1882,7 +1996,7 @@ public class NodeManager extends DevopsBase {
       result.add("--cql_proxy_rpc_port");
       result.add(Integer.toString(ports.yqlServerRpcPort));
     }
-    if (userIntent.enableYCQL) {
+    if (userIntent.enableYSQL) {
       result.add("--ysql_proxy_http_port");
       result.add(Integer.toString(ports.ysqlServerHttpPort));
       result.add("--ysql_proxy_rpc_port");
@@ -1917,13 +2031,30 @@ public class NodeManager extends DevopsBase {
     return lowMemInstanceTypePrefixes.contains(instanceTypePrefix);
   }
 
-  private void addAdditionalInstanceTags(NodeTaskParams nodeTaskParam, Map<String, String> tags) {
-    if (nodeTaskParam.nodeUuid != null) {
-      tags.put("node-uuid", nodeTaskParam.nodeUuid.toString());
+  // Set the nodeUuid in nodeTaskParam if it is not set.
+  private void populateNodeUuidFromUniverse(Universe universe, NodeTaskParams nodeTaskParam) {
+    if (nodeTaskParam.nodeUuid == null) {
+      NodeDetails nodeDetails = universe.getNode(nodeTaskParam.nodeName);
+      if (nodeDetails != null) {
+        nodeTaskParam.nodeUuid = nodeDetails.nodeUuid;
+      }
     }
-    if (nodeTaskParam.universeUUID != null) {
-      tags.put("universe-uuid", nodeTaskParam.universeUUID.toString());
+    if (nodeTaskParam.nodeUuid == null) {
+      UserIntent userIntent = getUserIntentFromParams(universe, nodeTaskParam);
+      if (!Common.CloudType.onprem.equals(userIntent.providerType)) {
+        // This is for backward compatibility where node UUID is not set in the Universe.
+        nodeTaskParam.nodeUuid =
+            Util.generateNodeUUID(universe.universeUUID, nodeTaskParam.nodeName);
+      }
     }
+  }
+
+  private void addAdditionalInstanceTags(
+      Universe universe, NodeTaskParams nodeTaskParam, Map<String, String> tags) {
+    Customer customer = Customer.get(universe.customerId);
+    tags.put("customer-uuid", customer.uuid.toString());
+    tags.put("universe-uuid", universe.universeUUID.toString());
+    tags.put("node-uuid", nodeTaskParam.nodeUuid.toString());
   }
 
   private Map<String, String> getReleaseSensitiveData(AnsibleConfigureServers.Params taskParam) {

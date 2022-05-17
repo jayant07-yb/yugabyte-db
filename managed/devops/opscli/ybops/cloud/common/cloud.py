@@ -22,7 +22,7 @@ from ybops.cloud.common.ansible import AnsibleProcess
 from ybops.cloud.common.base import AbstractCommandParser
 from ybops.utils import (YB_HOME_DIR, YBOpsRuntimeError, get_datafile_path,
                          get_internal_datafile_path, get_ssh_host_port, remote_exec_command,
-                         scp_to_tmp)
+                         scp_to_tmp, wait_for_ssh)
 from ybops.utils.remote_shell import RemoteShell
 
 
@@ -41,14 +41,16 @@ class AbstractCloud(AbstractCommandParser):
     YSQLSH_CERT_DIR = os.path.join(YB_HOME_DIR, ".yugabytedb")
     ROOT_CERT_NAME = "ca.crt"
     ROOT_CERT_NEW_NAME = "ca_new.crt"
+    PRODUCER_CERTS_DIR_NAME = "yugabyte-tls-producer"
     CLIENT_ROOT_NAME = "root.crt"
     CLIENT_CERT_NAME = "yugabytedb.crt"
     CLIENT_KEY_NAME = "yugabytedb.key"
     CERT_LOCATION_NODE = "node"
     CERT_LOCATION_PLATFORM = "platform"
-    SSH_RETRY_COUNT = 30
-    SSH_WAIT_SECONDS = 30
+    SSH_RETRY_COUNT = 180
+    SSH_WAIT_SECONDS = 5
     SSH_TIMEOUT_SECONDS = 10
+    MOUNT_PATH_PREFIX = "/mnt/d"
 
     def __init__(self, name):
         super(AbstractCloud, self).__init__(name)
@@ -165,6 +167,18 @@ class AbstractCloud(AbstractCommandParser):
         updated_vars.update(extra_vars)
         updated_vars.update(get_ssh_host_port(host_info, args.custom_ssh_port))
         remote_shell = RemoteShell(updated_vars)
+        if args.num_volumes:
+            volume_cnt = remote_shell.run_command(
+                "df | awk '{{print $6}}' | egrep '^{}[0-9]+' | wc -l".format(
+                    AbstractCloud.MOUNT_PATH_PREFIX
+                )
+            )
+            if int(volume_cnt.stdout) < int(args.num_volumes):
+                raise YBOpsRuntimeError(
+                    "Not all data volumes attached: needed {} found {}".format(
+                        args.num_volumes, volume_cnt.stdout
+                    )
+                )
 
         if process == "thirdparty" or process == "platform-services":
             self.setup_ansible(args).run("yb-server-ctl.yml", updated_vars, host_info)
@@ -242,6 +256,13 @@ class AbstractCloud(AbstractCommandParser):
             extra_vars["ssh_host"], extra_vars["ssh_port"], extra_vars["ssh_user"],
             args.private_key_file, 'sudo reboot')
         self.wait_for_ssh_port(extra_vars["ssh_host"], args.search_pattern, extra_vars["ssh_port"])
+        # Make sure we can ssh into the node after the reboot as well.
+        if wait_for_ssh(extra_vars["ssh_host"], extra_vars["ssh_port"],
+                        extra_vars["ssh_user"], args.private_key_file, num_retries=120):
+            pass
+        else:
+            raise YBOpsRuntimeError("Could not ssh into node {}".format(extra_vars["ssh_host"]))
+
         # Verify that the command ran successfully:
         rc, stdout, stderr = remote_exec_command(extra_vars["ssh_host"], extra_vars["ssh_port"],
                                                  extra_vars["ssh_user"], args.private_key_file,
@@ -479,6 +500,59 @@ class AbstractCloud(AbstractCommandParser):
         # Reset the write permission as a sanity check.
         remote_shell.run_command('chmod 400 {}/*'.format(certs_dir))
 
+    def copy_xcluster_root_cert(
+            self,
+            ssh_options,
+            root_cert_path,
+            replication_config_name,
+            producer_certs_dir):
+        if producer_certs_dir is None:
+            producer_certs_dir = self.PRODUCER_CERTS_DIR_NAME
+        remote_shell = RemoteShell(ssh_options)
+        node_ip = ssh_options["ssh_host"]
+        src_root_cert_dir_path = os.path.join(producer_certs_dir, replication_config_name)
+        src_root_cert_path = os.path.join(src_root_cert_dir_path, self.ROOT_CERT_NAME)
+        logging.info("Moving server cert located at {} to {}:{}.".format(
+            root_cert_path, node_ip, src_root_cert_dir_path))
+
+        remote_shell.run_command('mkdir -p ' + src_root_cert_dir_path)
+        # Give write permissions. If the command fails, ignore.
+        remote_shell.run_command('chmod -f 666 {}/* || true'.format(src_root_cert_dir_path))
+        remote_shell.put_file(root_cert_path, src_root_cert_path)
+
+        # Reset the write permission as a sanity check.
+        remote_shell.run_command('chmod 400 {}/*'.format(src_root_cert_dir_path))
+
+    def remove_xcluster_root_cert(
+            self,
+            ssh_options,
+            replication_config_name,
+            producer_certs_dir):
+        def check_rm_result(rm_result):
+            if rm_result.exited and rm_result.stderr.find("No such file or directory") == -1:
+                raise YBOpsRuntimeError(
+                    "Remote shell command 'rm' failed with "
+                    "return code '{}' and error '{}'".format(rm_result.stderr.encode('utf-8'),
+                                                             rm_result.exited))
+
+        if producer_certs_dir is None:
+            producer_certs_dir = self.PRODUCER_CERTS_DIR_NAME
+        remote_shell = RemoteShell(ssh_options)
+        node_ip = ssh_options["ssh_host"]
+        src_root_cert_dir_path = os.path.join(producer_certs_dir, replication_config_name)
+        src_root_cert_path = os.path.join(src_root_cert_dir_path, self.ROOT_CERT_NAME)
+        logging.info("Removing server cert located at {} from server {}.".format(
+            src_root_cert_dir_path, node_ip))
+
+        remote_shell.run_command('chmod -f 666 {}/* || true'.format(src_root_cert_dir_path))
+        result = remote_shell.run_command_raw('rm ' + src_root_cert_path)
+        check_rm_result(result)
+        # Remove the directory only if it is empty.
+        result = remote_shell.run_command_raw('rm -d ' + src_root_cert_dir_path)
+        check_rm_result(result)
+        # No need to check the result of this command.
+        remote_shell.run_command_raw('rm -d ' + producer_certs_dir)
+
     def copy_client_certs(
             self,
             ssh_options,
@@ -575,7 +649,8 @@ class AbstractCloud(AbstractCommandParser):
         if args.mount_points:
             return args.mount_points
         else:
-            return ",".join(["/mnt/d{}".format(i) for i in range(args.num_volumes)])
+            return ",".join(["{}{}".format(AbstractCloud.MOUNT_PATH_PREFIX, i)
+                             for i in range(args.num_volumes)])
 
     def expand_file_system(self, args, ssh_options):
         remote_shell = RemoteShell(ssh_options)

@@ -79,11 +79,13 @@ class TabletSplitITestBase : public client::TransactionTestBase<MiniClusterType>
   // Writes `num_rows` rows into the specified table using `CreateInsertRequest`.
   // Returns a pair with min and max hash code written.
   Result<std::pair<docdb::DocKeyHash, docdb::DocKeyHash>> WriteRows(
-      client::TableHandle* table, uint32_t num_rows, int32_t start_key, int32_t start_value);
+      client::TableHandle* table, uint32_t num_rows, int32_t start_key, int32_t start_value,
+      client::YBSessionPtr session = nullptr);
 
   Result<std::pair<docdb::DocKeyHash, docdb::DocKeyHash>> WriteRows(
-      client::TableHandle* table, uint32_t num_rows = 2000, int32_t start_key = 1) {
-    return WriteRows(table, num_rows, start_key, start_key);
+      client::TableHandle* table, uint32_t num_rows = 2000, int32_t start_key = 1,
+      client::YBSessionPtr session = nullptr) {
+    return WriteRows(table, num_rows, start_key, start_key, session);
   }
 
   Result<std::pair<docdb::DocKeyHash, docdb::DocKeyHash>> WriteRows(
@@ -123,7 +125,7 @@ class TabletSplitITestBase : public client::TransactionTestBase<MiniClusterType>
   virtual int64_t GetRF() { return 3; }
 
   std::unique_ptr<rpc::ProxyCache> proxy_cache_;
-
+  MonoDelta split_completion_timeout_sec_ = std::chrono::seconds(40) * kTimeMultiplier;
 };
 // Let compiler know about these explicit specializations since below subclasses inherit from them.
 extern template class TabletSplitITestBase<MiniCluster>;
@@ -195,7 +197,6 @@ class TabletSplitITest : public TabletSplitITestBase<MiniCluster> {
       size_t num_rows, size_t num_replicas_online = 0, size_t num_active_tablets = 2);
 
  protected:
-  MonoDelta split_completion_timeout_ = std::chrono::seconds(40) * kTimeMultiplier;
   std::unique_ptr<client::SnapshotTestUtil> snapshot_util_;
 };
 

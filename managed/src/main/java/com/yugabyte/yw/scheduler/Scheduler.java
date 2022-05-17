@@ -27,7 +27,7 @@ import com.yugabyte.yw.commissioner.Commissioner;
 import com.yugabyte.yw.commissioner.tasks.BackupUniverse;
 import com.yugabyte.yw.commissioner.tasks.CreateBackup;
 import com.yugabyte.yw.commissioner.tasks.MultiTableBackup;
-import com.yugabyte.yw.commissioner.tasks.subtasks.DeleteBackup;
+import com.yugabyte.yw.commissioner.tasks.subtasks.DeleteBackupYb;
 import com.yugabyte.yw.commissioner.tasks.subtasks.RunExternalScript;
 import com.yugabyte.yw.common.Util;
 import com.yugabyte.yw.models.Backup;
@@ -60,8 +60,8 @@ import scala.concurrent.duration.Duration;
 @Slf4j
 public class Scheduler {
 
-  private final int YB_SCHEDULER_INTERVAL = 2;
-  private final int MIN_TO_SEC = 60;
+  private static final int YB_SCHEDULER_INTERVAL = 2;
+  private static final int MIN_TO_SEC = 60;
 
   private final ActorSystem actorSystem;
   private final ExecutionContext executionContext;
@@ -128,8 +128,7 @@ public class Scheduler {
           schedule.setRunningState(true);
           TaskType taskType = schedule.getTaskType();
           // TODO: Come back and maybe address if using relations between schedule and
-          //  schedule_task is
-          // a better approach.
+          //  schedule_task is a better approach.
           ScheduleTask lastTask = ScheduleTask.getLastTask(schedule.getScheduleUUID());
           Date lastScheduledTime = null;
           Date lastCompletedTime = null;
@@ -139,7 +138,7 @@ public class Scheduler {
           }
           boolean shouldRunTask = false;
           boolean alreadyRunning = false;
-          long diff = 0;
+          long diff;
 
           // Check if task needs to be scheduled again.
           if (lastScheduledTime != null) {
@@ -283,14 +282,14 @@ public class Scheduler {
   }
 
   private void runDeleteBackupTask(Customer customer, Backup backup) {
-    if (backup.state != Backup.BackupState.Completed) {
-      log.warn("Cannot delete backup {} since it is not in completed state.", backup.backupUUID);
+    if (Backup.IN_PROGRESS_STATES.contains(backup.state)) {
+      log.warn("Cannot delete backup {} since it is in a progress state");
       return;
     }
-    DeleteBackup.Params taskParams = new DeleteBackup.Params();
+    DeleteBackupYb.Params taskParams = new DeleteBackupYb.Params();
     taskParams.customerUUID = customer.getUuid();
     taskParams.backupUUID = backup.backupUUID;
-    UUID taskUUID = commissioner.submit(TaskType.DeleteBackup, taskParams);
+    UUID taskUUID = commissioner.submit(TaskType.DeleteBackupYb, taskParams);
     log.info("Submitted task to delete backup {}, task uuid = {}.", backup.backupUUID, taskUUID);
     CustomerTask.create(
         customer,

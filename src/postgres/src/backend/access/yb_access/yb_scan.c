@@ -433,8 +433,8 @@ ybcSetupScanPlan(bool xs_want_itup, YbScanDesc ybScan, YbScanPlan scan_plan)
 	/*
 	 * Setup control-parameters for Yugabyte preparing statements for different
 	 * types of scan.
-	 * - "querying_colocated_table": Support optimizations for (system and
-	 *   user) colocated tables
+	 * - "querying_colocated_table": Support optimizations for (system,
+	 *   user database and tablegroup) colocated tables
 	 * - "index_oid, index_only_scan, use_secondary_index": Different index
 	 *   scans.
 	 * NOTE: Primary index is a special case as there isn't a primary index
@@ -443,23 +443,12 @@ ybcSetupScanPlan(bool xs_want_itup, YbScanDesc ybScan, YbScanPlan scan_plan)
 
 	ybScan->prepare_params.querying_colocated_table =
 		IsSystemRelation(relation);
-	if (!ybScan->prepare_params.querying_colocated_table &&
-		MyDatabaseColocated)
+
+	if (!ybScan->prepare_params.querying_colocated_table)
 	{
-		bool colocated = false;
-		bool notfound;
-		HandleYBStatusIgnoreNotFound(YBCPgIsTableColocated(MyDatabaseId,
-														   YbGetStorageRelid(relation),
-														   &colocated),
-									 &notfound);
+		bool colocated = YbIsUserTableColocated(MyDatabaseId,
+												YbGetStorageRelid(relation));
 		ybScan->prepare_params.querying_colocated_table |= colocated;
-	}
-	else if (!ybScan->prepare_params.querying_colocated_table)
-	{
-		Oid tablegroupId = InvalidOid;
-		if (YbTablegroupCatalogExists)
-			tablegroupId = get_tablegroup_oid_by_table_oid(RelationGetRelid(relation));
-		ybScan->prepare_params.querying_colocated_table |= (tablegroupId != InvalidOid);
 	}
 
 	if (index)
@@ -831,9 +820,12 @@ static void
 ybcBindScanKeys(YbScanDesc ybScan, YbScanPlan scan_plan) {
 	Relation relation = ybScan->relation;
 	Relation index = ybScan->index;
-	Oid		 dboid = YBCGetDatabaseOid(relation);
 
-	HandleYBStatus(YBCPgNewSelect(dboid, YbGetStorageRelid(relation), &ybScan->prepare_params, &ybScan->handle));
+	HandleYBStatus(YBCPgNewSelect(YBCGetDatabaseOid(relation),
+								  YbGetStorageRelid(relation),
+								  &ybScan->prepare_params,
+								  YBCIsRegionLocal(relation),
+								  &ybScan->handle));
 
 	if (IsSystemRelation(relation))
 	{
@@ -921,16 +913,16 @@ ybcBindScanKeys(YbScanDesc ybScan, YbScanPlan scan_plan) {
 		if (ybScan->key[i].sk_flags & SK_ROW_HEADER)
 		{
 			int j = 0;
-			ScanKey subkeys = (ScanKey) 
+			ScanKey subkeys = (ScanKey)
 					DatumGetPointer(ybScan->key[i].sk_argument);
 			int last_att_no = YBFirstLowInvalidAttributeNumber;
 
-			/* 
-				* We can only push down right now if the full primary key
-				* is specified in the correct order and the primary key 
-				* has no hashed columns. We also need to ensure that 
-				* the same comparison operation is done to all subkeys.
-				*/
+			/*
+			 * We can only push down right now if the primary key columns
+			 * are specified in the correct order and the primary key
+			 * has no hashed columns. We also need to ensure that
+			 * the same comparison operation is done to all subkeys.
+			 */
 			bool can_pushdown = true;
 
 			int strategy = subkeys[0].sk_strategy;
@@ -945,9 +937,9 @@ ybcBindScanKeys(YbScanDesc ybScan, YbScanPlan scan_plan) {
 				}
 
 				/*
-					* Make sure that the same comparator is applied to
-					* all subkeys.
-					*/
+				 * Make sure that the same comparator is applied to
+				 * all subkeys.
+				 */
 				if (strategy != current->sk_strategy)
 				{
 					can_pushdown = false;
@@ -956,19 +948,29 @@ ybcBindScanKeys(YbScanDesc ybScan, YbScanPlan scan_plan) {
 				last_att_no = current->sk_attno;
 
 				/* Make sure that there are no hash key columns. */
-				if (index->rd_indoption[current->sk_attno - 1] 
-					& INDOPTION_HASH) {
+				if (index->rd_indoption[current->sk_attno - 1]
+					& INDOPTION_HASH)
+				{
 					can_pushdown = false;
 					break;
 				}
 				count++;
 			}
 			while((subkeys[j++].sk_flags & SK_ROW_END) == 0);
-			
+
 			/*
-				* Make sure that the full primary key is specified in order
-				* to push down.
-				*/
+			 * Make sure that the primary key has no hash columns in order
+			 * to push down.
+			 */
+
+			for (int i = 0; i < index->rd_index->indnkeyatts; i++)
+			{
+				if (index->rd_indoption[i] & INDOPTION_HASH)
+				{
+					can_pushdown = false;
+					break;
+				}
+			}
 
 			if (can_pushdown)
 			{
@@ -976,42 +978,42 @@ ybcBindScanKeys(YbScanDesc ybScan, YbScanPlan scan_plan) {
 				YBCPgExpr *col_values = palloc(sizeof(YBCPgExpr)
 											* index->rd_index->indnkeyatts);
 				/*
-					* Prepare upper/lower bound tuples determined from this
-					* clause for bind. Care must be taken in the case 
-					* that primary key columns in the index are ordered
-					* differently from each other. For example, consider
-					* if the underlying index has primary key
-					* (r1 ASC, r2 DESC, r3 ASC) and we are dealing with
-					* a clause like (r1, r2, r3) <= (40, 35, 12).
-					* We cannot simply bind (40, 35, 12) as an upper bound
-					* as that will miss tuples such as (40, 32, 0).
-					* Instead we must push down (40, Inf, 12) in this case 
-					* for correctness. (Note that +Inf in this context
-					* is higher in STORAGE order than all other values not
-					* necessarily logical order, similar to the role of
-					* docdb::ValueType::kHighest.
-					*/
+				 * Prepare upper/lower bound tuples determined from this
+				 * clause for bind. Care must be taken in the case
+				 * that primary key columns in the index are ordered
+				 * differently from each other. For example, consider
+				 * if the underlying index has primary key
+				 * (r1 ASC, r2 DESC, r3 ASC) and we are dealing with
+				 * a clause like (r1, r2, r3) <= (40, 35, 12).
+				 * We cannot simply bind (40, 35, 12) as an upper bound
+				 * as that will miss tuples such as (40, 32, 0).
+				 * Instead we must push down (40, Inf, 12) in this case
+				 * for correctness. (Note that +Inf in this context
+				 * is higher in STORAGE order than all other values not
+				 * necessarily logical order, similar to the role of
+				 * docdb::ValueType::kHighest.
+				 */
 
 				/*
-					* Is the first column in ascending order in the index?
-					* This is important because whether or not the RHS of a
-					* (row key) >= (row key values) expression is
-					* considered an upper bound is dependent on the answer
-					* to this question. The RHS of such an expression will
-					* be the scan upper bound if the first column is in
-					* descending order and lower if else. Similar logic
-					* applies to the RHS of (row key) <= (row key values)
-					* expressions.
-					*/
-				bool is_direction_asc = 
+				 * Is the first column in ascending order in the index?
+				 * This is important because whether or not the RHS of a
+				 * (row key) >= (row key values) expression is
+				 * considered an upper bound is dependent on the answer
+				 * to this question. The RHS of such an expression will
+				 * be the scan upper bound if the first column is in
+				 * descending order and lower if else. Similar logic
+				 * applies to the RHS of (row key) <= (row key values)
+				 * expressions.
+				 */
+				bool is_direction_asc =
 									(index->rd_indoption[
-										subkeys[0].sk_attno - 1] 
+										subkeys[0].sk_attno - 1]
 										& INDOPTION_DESC) == 0;
 				bool gt = strategy == BTGreaterEqualStrategyNumber
 								|| strategy == BTGreaterStrategyNumber;
 				bool is_inclusive = strategy != BTGreaterStrategyNumber
 										&& strategy != BTLessStrategyNumber;
-				
+
 				bool is_point_scan = (count == index->rd_index->indnatts)
 										&& (strategy == BTEqualStrategyNumber);
 
@@ -1025,16 +1027,16 @@ ybcBindScanKeys(YbScanDesc ybScan, YbScanPlan scan_plan) {
 											&& (subkeys[subkey_index]
 												.sk_attno - 1) == j;
 					/*
-						* Is the current column stored in ascending order in the
-						* underlying index?
-						*/
+					 * Is the current column stored in ascending order in the
+					 * underlying index?
+					 */
 					bool asc = (index->rd_indoption[j] & INDOPTION_DESC) == 0;
 
 					/*
-						* If this column has different directionality than the
-						* first column then we have to adjust the bounds on this
-						* column.
-						*/
+					 * If this column has different directionality than the
+					 * first column then we have to adjust the bounds on this
+					 * column.
+					 */
 					if(!is_column_specified
 						|| (asc != is_direction_asc &&
 							!is_point_scan))
@@ -2104,6 +2106,7 @@ HeapTuple YBCFetchTuple(Relation relation, Datum ybctid)
 	HandleYBStatus(YBCPgNewSelect(YBCGetDatabaseOid(relation),
 								  YbGetStorageRelid(relation),
 								  NULL /* prepare_params */,
+								  YBCIsRegionLocal(relation),
 								  &ybc_stmt));
 
 	/* Bind ybctid to identify the current row. */
@@ -2192,9 +2195,10 @@ YBCLockTuple(Relation relation, Datum ybctid, RowMarkType mode, LockWaitPolicy w
 
 	YBCPgStatement ybc_stmt;
 	HandleYBStatus(YBCPgNewSelect(YBCGetDatabaseOid(relation),
-																RelationGetRelid(relation),
-																NULL /* prepare_params */,
-																&ybc_stmt));
+								RelationGetRelid(relation),
+								NULL /* prepare_params */,
+								YBCIsRegionLocal(relation),
+								&ybc_stmt));
 
 	/* Bind ybctid to identify the current row. */
 	YBCPgExpr ybctid_expr = YBCNewConstant(ybc_stmt, BYTEAOID, InvalidOid, ybctid, false);
@@ -2281,7 +2285,11 @@ ybBeginSample(Relation rel, int targrows)
 	/*
 	 * Create new sampler command
 	 */
-	HandleYBStatus(YBCPgNewSample(dboid, relid, targrows, &ybSample->handle));
+	HandleYBStatus(YBCPgNewSample(dboid,
+								  relid,
+								  targrows,
+								  YBCIsRegionLocal(rel),
+								  &ybSample->handle));
 
 	/*
 	 * Set up the scan targets. We need to return all "real" columns.

@@ -86,6 +86,7 @@
 #include "yb/util/promise.h"
 #include "yb/util/random.h"
 #include "yb/util/rw_mutex.h"
+#include "yb/util/status_callback.h"
 #include "yb/util/status_fwd.h"
 #include "yb/util/test_macros.h"
 #include "yb/util/version_tracker.h"
@@ -203,7 +204,8 @@ class CatalogManager :
   // Create a transaction status table with the given name.
   CHECKED_STATUS CreateTransactionStatusTableInternal(rpc::RpcContext* rpc,
                                                       const string& table_name,
-                                                      const TablespaceId* tablespace_id);
+                                                      const TablespaceId* tablespace_id,
+                                                      const ReplicationInfoPB* replication_info);
 
   // Check if there is a transaction table whose tablespace id matches the given tablespace id.
   bool DoesTransactionTableExistForTablespace(
@@ -227,12 +229,12 @@ class CatalogManager :
       GetTransactionStatusTabletsResponsePB* resp) EXCLUDES(mutex_);
 
   // Get ids of transaction status tables matching a given placement.
-  Result<std::vector<TableId>> GetPlacementLocalTransactionStatusTables(
+  Result<std::vector<TableInfoPtr>> GetPlacementLocalTransactionStatusTables(
       const CloudInfoPB& placement) EXCLUDES(mutex_);
 
   // Get tablet ids of local transaction status tables matching a given placement.
   CHECKED_STATUS GetPlacementLocalTransactionStatusTablets(
-      const CloudInfoPB& placement,
+      const std::vector<TableInfoPtr>& placement_local_tables,
       GetTransactionStatusTabletsResponsePB* resp) EXCLUDES(mutex_);
 
   // Get tablet ids of the global transaction status table and local transaction status tables
@@ -254,17 +256,17 @@ class CatalogManager :
                                          CoarseTimePoint deadline,
                                          bool* create_in_progress);
 
-  CHECKED_STATUS WaitForCreateTableToFinish(const TableId& table_id);
+  CHECKED_STATUS WaitForCreateTableToFinish(const TableId& table_id, CoarseTimePoint deadline);
 
   // Check if the transaction status table creation is done.
   //
   // This is called at the end of IsCreateTableDone if the table has transactions enabled.
-  CHECKED_STATUS IsTransactionStatusTableCreated(IsCreateTableDoneResponsePB* resp);
+  Result<bool> IsTransactionStatusTableCreated();
 
   // Check if the metrics snapshots table creation is done.
   //
   // This is called at the end of IsCreateTableDone.
-  CHECKED_STATUS IsMetricsSnapshotsTableCreated(IsCreateTableDoneResponsePB* resp);
+  Result<bool> IsMetricsSnapshotsTableCreated();
 
   // Called when transaction associated with table create finishes. Verifies postgres layer present.
   CHECKED_STATUS VerifyTablePgLayer(scoped_refptr<TableInfo> table, bool txn_query_succeeded);
@@ -342,9 +344,6 @@ class CatalogManager :
   // List all the running tables.
   CHECKED_STATUS ListTables(const ListTablesRequestPB* req,
                             ListTablesResponsePB* resp) override;
-
-  // Find the tablegroup associated with the given table.
-  boost::optional<TablegroupId> FindTablegroupByTableId(const TableId& table_id);
 
   CHECKED_STATUS GetTableLocations(const GetTableLocationsRequestPB* req,
                                    GetTableLocationsResponsePB* resp) override;
@@ -451,8 +450,6 @@ class CatalogManager :
                                  ListTablegroupsResponsePB* resp,
                                  rpc::RpcContext* rpc);
 
-  bool HasTablegroups() override;
-
   // Create a new User-Defined Type with the specified attributes.
   //
   // The RPC context is provided for logging/tracing purposes,
@@ -477,6 +474,17 @@ class CatalogManager :
   CHECKED_STATUS GetUDTypeInfo(const GetUDTypeInfoRequestPB* req,
                                GetUDTypeInfoResponsePB* resp,
                                rpc::RpcContext* rpc);
+
+  // Disables tablet splitting for a specified amount of time.
+  CHECKED_STATUS DisableTabletSplitting(
+      const DisableTabletSplittingRequestPB* req, DisableTabletSplittingResponsePB* resp,
+      rpc::RpcContext* rpc);
+
+  // Returns true if there are no outstanding tablets and the tablet split manager is not currently
+  // processing tablet splits.
+  CHECKED_STATUS IsTabletSplittingComplete(
+      const IsTabletSplittingCompleteRequestPB* req, IsTabletSplittingCompleteResponsePB* resp,
+      rpc::RpcContext* rpc);
 
   // Delete CDC streams for a table.
   virtual CHECKED_STATUS DeleteCDCStreamsForTable(const TableId& table_id) EXCLUDES(mutex_);
@@ -585,12 +593,6 @@ class CatalogManager :
 
   // Is the table a special sequences system table?
   bool IsSequencesSystemTable(const TableInfo& table) const;
-
-  // Is the table id from a tablegroup?
-  bool IsTablegroupParentTableId(const TableId& table_id) const;
-
-  // Is the table id from a table created for colocated database?
-  bool IsColocatedParentTableId(const TableId& table_id) const;
 
   // Is the table created by user?
   // Note that table can be regular table or index in this case.
@@ -732,7 +734,7 @@ class CatalogManager :
                                            AreLeadersOnPreferredOnlyResponsePB* resp);
 
   // Return the placement uuid of the primary cluster containing this master.
-  string placement_uuid() const;
+  Result<string> placement_uuid() const;
 
   // Clears out the existing metadata ('table_names_map_', 'table_ids_map_',
   // and 'tablet_map_'), loads tables metadata into memory and if successful
@@ -815,43 +817,46 @@ class CatalogManager :
     return *universe_key_client_;
   }
 
-  CHECKED_STATUS FlushSysCatalog(const FlushSysCatalogRequestPB* req,
-                                 FlushSysCatalogResponsePB* resp,
-                                 rpc::RpcContext* rpc);
+  Status FlushSysCatalog(const FlushSysCatalogRequestPB* req,
+                         FlushSysCatalogResponsePB* resp,
+                         rpc::RpcContext* rpc);
 
-  CHECKED_STATUS CompactSysCatalog(const CompactSysCatalogRequestPB* req,
-                                   CompactSysCatalogResponsePB* resp,
-                                   rpc::RpcContext* rpc);
+  Status CompactSysCatalog(const CompactSysCatalogRequestPB* req,
+                           CompactSysCatalogResponsePB* resp,
+                           rpc::RpcContext* rpc);
 
-  CHECKED_STATUS SplitTablet(const TabletId& tablet_id, bool select_all_tablets_for_split) override;
+  Status SplitTablet(const TabletId& tablet_id, ManualSplit is_manual_split) override;
 
   // Splits tablet specified in the request using middle of the partition as a split point.
-  CHECKED_STATUS SplitTablet(
+  Status SplitTablet(
       const SplitTabletRequestPB* req, SplitTabletResponsePB* resp, rpc::RpcContext* rpc);
 
   // Deletes a tablet that is no longer serving user requests. This would require that the tablet
   // has been split and both of its children are now in RUNNING state and serving user requests
   // instead.
-  CHECKED_STATUS DeleteNotServingTablet(
+  Status DeleteNotServingTablet(
       const DeleteNotServingTabletRequestPB* req, DeleteNotServingTabletResponsePB* resp,
       rpc::RpcContext* rpc);
 
-  CHECKED_STATUS DdlLog(
+  Status DdlLog(
       const DdlLogRequestPB* req, DdlLogResponsePB* resp, rpc::RpcContext* rpc);
 
   // Test wrapper around protected DoSplitTablet method.
-  CHECKED_STATUS TEST_SplitTablet(
+  Status TEST_SplitTablet(
       const scoped_refptr<TabletInfo>& source_tablet_info,
       docdb::DocKeyHash split_hash_code) override;
 
-  CHECKED_STATUS TEST_SplitTablet(
+  Status TEST_SplitTablet(
       const TabletId& tablet_id, const std::string& split_encoded_key,
       const std::string& split_partition_key) override;
 
-  CHECKED_STATUS TEST_IncrementTablePartitionListVersion(const TableId& table_id) override;
+  Status TEST_IncrementTablePartitionListVersion(const TableId& table_id) override;
+
+  Status TEST_SendTestRetryRequest(
+      const PeerId& peer_id, int32_t num_retries, StdStatusCallback callback);
 
   // Schedule a task to run on the async task thread pool.
-  CHECKED_STATUS ScheduleTask(std::shared_ptr<RetryingTSRpcTask> task) override;
+  Status ScheduleTask(std::shared_ptr<RetryingTSRpcTask> task) override;
 
   // Time since this peer became master leader. Caller should verify that it is leader before.
   MonoDelta TimeSinceElectedLeader();
@@ -884,7 +889,9 @@ class CatalogManager :
   bool ShouldSplitValidCandidate(
       const TabletInfo& tablet_info, const TabletReplicaDriveInfo& drive_info) const override;
 
-  BlacklistSet BlacklistSetFromPB() const override;
+  Status GetAllAffinitizedZones(vector<AffinitizedZonesSet>* affinitized_zones) override;
+  Result<vector<BlacklistSet>> GetAffinitizedZoneSet();
+  Result<BlacklistSet> BlacklistSetFromPB(bool leader_blacklist = false) const override;
 
   std::vector<std::string> GetMasterAddresses();
 
@@ -1334,12 +1341,12 @@ class CatalogManager :
 
   CHECKED_STATUS DoSplitTablet(
       const scoped_refptr<TabletInfo>& source_tablet_info, std::string split_encoded_key,
-      std::string split_partition_key, bool select_all_tablets_for_split);
+      std::string split_partition_key, ManualSplit is_manual_split);
 
   // Splits tablet using specified split_hash_code as a split point.
   CHECKED_STATUS DoSplitTablet(
       const scoped_refptr<TabletInfo>& source_tablet_info, docdb::DocKeyHash split_hash_code,
-      bool select_all_tablets_for_split);
+      ManualSplit is_manual_split);
 
   // Calculate the total number of replicas which are being handled by servers in state.
   int64_t GetNumRelevantReplicas(const BlacklistPB& state, bool leaders_only);
@@ -1370,8 +1377,12 @@ class CatalogManager :
 
   virtual void SysCatalogLoaded(int64_t term) {}
 
-  // Respect leader affinity with master sys catalog tablet by stepping down if we don't match
-  // the cluster config affinity specification.
+  // Ensure the sys catalog tablet respects the leader affinity and blacklist configuration.
+  // Chooses an unblacklisted master in the highest priority affinity location to step down to. If
+  // this master is not blacklisted and there is no unblacklisted master in a higher priority
+  // affinity location than this one, does nothing.
+  // If there is no unblacklisted master in an affinity zone, chooses an arbitrary master to step
+  // down to.
   CHECKED_STATUS SysCatalogRespectLeaderAffinity();
 
   virtual Result<bool> IsTablePartOfSomeSnapshotSchedule(const TableInfo& table_info) override {
@@ -1394,9 +1405,18 @@ class CatalogManager :
     return SnapshotSchedulesToObjectIdsMap();
   }
 
+  Result<SnapshotScheduleId> FindCoveringScheduleForObject(
+      SysRowEntryType type, const std::string& object_id);
+
   Status DoDeleteNamespace(const DeleteNamespaceRequestPB* req,
                            DeleteNamespaceResponsePB* resp,
                            rpc::RpcContext* rpc);
+
+  std::shared_ptr<ClusterConfigInfo> ClusterConfig() const;
+
+  Result<TableInfoPtr> GetGlobalTransactionStatusTable();
+
+  Result<bool> IsCreateTableDone(const TableInfoPtr& table);
 
   // TODO: the maps are a little wasteful of RAM, since the TableInfo/TabletInfo
   // objects have a copy of the string key. But STL doesn't make it
@@ -1443,7 +1463,8 @@ class CatalogManager :
   RedisConfigInfoMap redis_config_map_ GUARDED_BY(mutex_);
 
   // Config information.
-  scoped_refptr<ClusterConfigInfo> cluster_config_ = nullptr; // No GUARD, only write on Load.
+  mutable rw_spinlock config_mutex_;
+  std::shared_ptr<ClusterConfigInfo> cluster_config_ GUARDED_BY(config_mutex_) = nullptr;
 
   // YSQL Catalog information.
   scoped_refptr<SysConfigInfo> ysql_catalog_config_ = nullptr; // No GUARD, only write on Load.
@@ -1536,16 +1557,11 @@ class CatalogManager :
   // Tablets of system tables on the master indexed by the tablet id.
   std::unordered_map<std::string, std::shared_ptr<tablet::AbstractTablet>> system_tablets_;
 
-  // Tablet of colocated namespaces indexed by the namespace id.
-  std::unordered_map<NamespaceId, scoped_refptr<TabletInfo>> colocated_tablet_ids_map_
+  // Tablet of colocated databases indexed by the namespace id.
+  std::unordered_map<NamespaceId, scoped_refptr<TabletInfo>> colocated_db_tablets_map_
       GUARDED_BY(mutex_);
 
-  typedef std::unordered_map<TablegroupId, scoped_refptr<TabletInfo>> TablegroupTabletMap;
-
-  std::unordered_map<NamespaceId, TablegroupTabletMap> tablegroup_tablet_ids_map_
-      GUARDED_BY(mutex_);
-
-  std::unordered_map<TablegroupId, scoped_refptr<TablegroupInfo>> tablegroup_ids_map_
+  std::unique_ptr<YsqlTablegroupManager> tablegroup_manager_
       GUARDED_BY(mutex_);
 
   std::unordered_map<TableId, TableId> matview_pg_table_ids_map_
@@ -1575,7 +1591,7 @@ class CatalogManager :
   // Handles querying and processing YSQL DDL Transactions as a catalog manager background task.
   std::unique_ptr<YsqlTransactionDdl> ysql_transaction_;
 
-  MonoTime time_elected_leader_;
+  std::atomic<MonoTime> time_elected_leader_;
 
   std::unique_ptr<client::YBClient> cdc_state_client_;
 
@@ -1589,20 +1605,24 @@ class CatalogManager :
   // Performs the provided action with the sys catalog shared tablet instance, or sets up an error
   // if the tablet is not found.
   template <class Req, class Resp, class F>
-  CHECKED_STATUS PerformOnSysCatalogTablet(
-      const Req& req, Resp* resp, const F& f);
+  Status PerformOnSysCatalogTablet(const Req& req, Resp* resp, const F& f);
 
   virtual bool CDCStreamExistsUnlocked(const CDCStreamId& id) REQUIRES_SHARED(mutex_);
 
-  CHECKED_STATUS CollectTable(
+  Status CollectTable(
       const TableDescription& table_description,
       CollectFlags flags,
       std::vector<TableDescription>* all_tables,
       std::unordered_set<NamespaceId>* parent_colocated_table_ids);
 
+  Status SplitTablet(const scoped_refptr<TabletInfo>& tablet, ManualSplit is_manual_split);
+
   void SplitTabletWithKey(
       const scoped_refptr<TabletInfo>& tablet, const std::string& split_encoded_key,
-      const std::string& split_partition_key, bool select_all_tablets_for_split);
+      const std::string& split_partition_key, ManualSplit is_manual_split);
+
+  Status ValidateSplitCandidate(
+      const scoped_refptr<TabletInfo>& tablet, ManualSplit is_manual_split);
 
   // From the list of TServers in 'ts_descs', return the ones that match any placement policy
   // in 'placement_info'. Returns error if there are insufficient TServers to match the
@@ -1622,7 +1642,7 @@ class CatalogManager :
 
   bool IsReplicationInfoSet(const ReplicationInfoPB& replication_info);
 
-  CHECKED_STATUS ValidateTableReplicationInfo(const ReplicationInfoPB& replication_info);
+  Status ValidateTableReplicationInfo(const ReplicationInfoPB& replication_info);
 
   // Return the id of the tablespace associated with a transaction status table, if any.
   boost::optional<TablespaceId> GetTransactionStatusTableTablespace(
@@ -1639,7 +1659,7 @@ class CatalogManager :
       const TablespaceIdToReplicationInfoMap& tablespace_info) EXCLUDES(mutex_);
 
   // Updates transaction tables' tablespace ids for tablespaces that don't exist.
-  CHECKED_STATUS UpdateTransactionStatusTableTablespaces(
+  Status UpdateTransactionStatusTableTablespaces(
       const TablespaceIdToReplicationInfoMap& tablespace_info) EXCLUDES(mutex_);
 
   // Return the tablespaces in the system and their associated replication info from
@@ -1659,7 +1679,7 @@ class CatalogManager :
   void ScheduleRefreshTablespaceInfoTask(const bool schedule_now = false);
 
   // Helper function to refresh the tablespace info.
-  CHECKED_STATUS DoRefreshTablespaceInfo();
+  Status DoRefreshTablespaceInfo();
 
   // Processes committed consensus state for specified tablet from ts_desc.
   // Returns true if tablet was mutated.
@@ -1667,24 +1687,26 @@ class CatalogManager :
       TSDescriptor* ts_desc,
       bool is_incremental,
       const ReportedTabletPB& report,
-      const TableInfo::WriteLock& table_lock,
+      const std::map<TableId, TableInfo::WriteLock>& table_write_locks,
       const TabletInfoPtr& tablet,
       const TabletInfo::WriteLock& tablet_lock,
+      const std::map<TableId, scoped_refptr<TableInfo>>& tables,
       std::vector<RetryingTSRpcTaskPtr>* rpcs);
 
   struct ReportedTablet {
     TabletId tablet_id;
     TabletInfoPtr info;
     const ReportedTabletPB* report;
+    std::map<TableId, scoped_refptr<TableInfo>> tables;
   };
   using ReportedTablets = std::vector<ReportedTablet>;
 
   // Process tablets batch while processing tablet report.
-  CHECKED_STATUS ProcessTabletReportBatch(
+  Status ProcessTabletReportBatch(
       TSDescriptor* ts_desc,
       bool is_incremental,
-      ReportedTablets::const_iterator begin,
-      ReportedTablets::const_iterator end,
+      ReportedTablets::iterator begin,
+      ReportedTablets::iterator end,
       TabletReportUpdatesPB* full_report_update,
       std::vector<RetryingTSRpcTaskPtr>* rpcs);
 
@@ -1699,6 +1721,15 @@ class CatalogManager :
 
   void InitializeGlobalLoadState(
       TSDescriptorVector ts_descs, CMGlobalLoadState* state);
+
+  // Send a step down request for the sys catalog tablet to the specified master. If the step down
+  // RPC response has an error, returns false. If the step down RPC is successful, returns true.
+  // For any other failure, returns a non-OK status.
+  Result<bool> SysCatalogLeaderStepDown(const ServerEntryPB& master);
+
+  // Attempts to remove a colocated table from tablegroup.
+  // NOOP if the table does not belong to one.
+  Status TryRemoveFromTablegroup(const TableId& table_id);
 
   // Should be bumped up when tablet locations are changed.
   std::atomic<uintptr_t> tablet_locations_version_{0};

@@ -15,13 +15,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.inject.Inject;
-import com.yugabyte.yw.common.Util;
 import com.yugabyte.yw.common.kms.algorithms.SupportedAlgorithmInterface;
 import com.yugabyte.yw.common.kms.services.EncryptionAtRestService;
 import com.yugabyte.yw.common.kms.util.EncryptionAtRestUtil;
 import com.yugabyte.yw.common.kms.util.EncryptionAtRestUtil.BackupEntry;
+import com.yugabyte.yw.common.utils.FileUtils;
 import com.yugabyte.yw.common.kms.util.KeyProvider;
-import com.yugabyte.yw.forms.UniverseTaskParams.EncryptionAtRestConfig;
+import com.yugabyte.yw.forms.EncryptionAtRestConfig;
 import com.yugabyte.yw.models.KmsConfig;
 import java.io.File;
 import java.lang.reflect.Constructor;
@@ -219,7 +219,7 @@ public class EncryptionAtRestManager {
         throw new RuntimeException("Error creating backup encryption key file!");
       }
 
-      Util.writeStringToFile(backupKeysFile, backupContent);
+      FileUtils.writeStringToFile(backupKeysFile, backupContent);
     }
   }
 

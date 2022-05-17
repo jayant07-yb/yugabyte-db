@@ -104,6 +104,7 @@
 #include "yb/util/status.h"
 #include "yb/util/status_callback.h"
 #include "yb/util/status_format.h"
+#include "yb/util/status_fwd.h"
 #include "yb/util/status_log.h"
 #include "yb/util/string_util.h"
 #include "yb/util/trace.h"
@@ -202,6 +203,7 @@ DEFINE_test_flag(bool, pause_tserver_get_split_key, false,
                  "Pause before processing a GetSplitKey request.");
 
 DECLARE_int32(heartbeat_interval_ms);
+DECLARE_uint64(rocksdb_max_file_size_for_compaction);
 
 DECLARE_int32(ysql_transaction_abort_timeout_ms);
 
@@ -209,6 +211,12 @@ DEFINE_test_flag(bool, fail_alter_schema_after_abort_transactions, false,
                  "If true, setup an error status in AlterSchema and respond success to rpc call. "
                  "This failure should not cause the TServer to crash but "
                  "instead return an error message on the YSQL connection.");
+
+DEFINE_test_flag(bool, txn_status_moved_rpc_force_fail, false,
+                 "Force updates in transaction status location to fail.");
+
+DEFINE_test_flag(int32, txn_status_moved_rpc_handle_delay_ms, 0,
+                 "Inject delay to slowdown handling of updates in transaction status location.");
 
 double TEST_delay_create_transaction_probability = 0;
 
@@ -810,7 +818,7 @@ void TabletServiceAdminImpl::AlterSchema(const tablet::ChangeMetadataRequestPB* 
   } else {
     table_info = tablet.peer->tablet_metadata()->primary_table_info();
   }
-  const Schema& tablet_schema = *table_info->schema;
+  const Schema& tablet_schema = table_info->schema();
   uint32_t schema_version = table_info->schema_version;
   // Sanity check, to verify that the tablet should have the same schema
   // specified in the request.
@@ -1192,6 +1200,76 @@ void TabletServiceImpl::AbortTransaction(const AbortTransactionRequestPB* req,
       });
 }
 
+void TabletServiceImpl::UpdateTransactionStatusLocation(
+    const UpdateTransactionStatusLocationRequestPB* req,
+    UpdateTransactionStatusLocationResponsePB* resp,
+    rpc::RpcContext context) {
+  TRACE("UpdateTransactionStatusLocation");
+
+  VLOG(1) << "UpdateTransactionStatusLocation: " << req->ShortDebugString()
+          << ", context: " << context.ToString();
+
+  auto context_ptr = std::make_shared<rpc::RpcContext>(std::move(context));
+  auto status = HandleUpdateTransactionStatusLocation(req, resp, context_ptr);
+  if (!status.ok()) {
+    LOG(WARNING) << status;
+    SetupErrorAndRespond(resp->mutable_error(), status, context_ptr.get());
+  }
+}
+
+Status TabletServiceImpl::HandleUpdateTransactionStatusLocation(
+    const UpdateTransactionStatusLocationRequestPB* req,
+    UpdateTransactionStatusLocationResponsePB* resp,
+    std::shared_ptr<rpc::RpcContext> context) {
+  LOG_IF(DFATAL, !req->has_propagated_hybrid_time())
+      << __func__ << " missing propagated hybrid time for transaction status location update";
+  UpdateClock(*req, server_->Clock());
+
+  if (PREDICT_FALSE(FLAGS_TEST_txn_status_moved_rpc_handle_delay_ms > 0)) {
+    std::this_thread::sleep_for(FLAGS_TEST_txn_status_moved_rpc_handle_delay_ms * 1ms);
+  }
+
+  if (PREDICT_FALSE(FLAGS_TEST_txn_status_moved_rpc_force_fail)) {
+    return STATUS(IllegalState, "UpdateTransactionStatusLocation forced to fail");
+  }
+
+  auto txn_id = VERIFY_RESULT(FullyDecodeTransactionId(req->transaction_id()));
+
+  auto tablet = LookupLeaderTabletOrRespond(
+      server_->tablet_peer_lookup(), req->tablet_id(), resp, context.get());
+  if (!tablet) {
+    return Status::OK();
+  }
+
+  auto* participant = tablet.peer->tablet()->transaction_participant();
+  if (!participant) {
+    return STATUS(InvalidArgument, "No transaction participant to process transaction status move");
+  }
+
+  auto metadata = participant->UpdateTransactionStatusLocation(txn_id, req->new_status_tablet_id());
+  if (!metadata.ok()) {
+    return metadata.status();
+  }
+
+  auto query = std::make_unique<tablet::WriteQuery>(
+      tablet.leader_term, context->GetClientDeadline(), tablet.peer.get(),
+      tablet.peer->tablet());
+  auto* request = query->operation().AllocateRequest();
+  metadata->ToPB(request->mutable_write_batch()->mutable_transaction());
+
+  query->set_callback([resp, context](const Status& status) {
+    if (!status.ok()) {
+      LOG(WARNING) << status;
+      SetupErrorAndRespond(resp->mutable_error(), status, context.get());
+    } else {
+      context->RespondSuccess();
+    }
+  });
+  tablet.peer->WriteAsync(std::move(query));
+
+  return Status::OK();
+}
+
 void TabletServiceImpl::Truncate(const TruncateRequestPB* req,
                                  TruncateResponsePB* resp,
                                  rpc::RpcContext context) {
@@ -1260,8 +1338,8 @@ Status TabletServiceAdminImpl::DoCreateTablet(const CreateTabletRequestPB* req,
   VLOG(1) << "Full request: " << req->DebugString();
 
   auto table_info = std::make_shared<tablet::TableInfo>(
-      req->table_id(), req->namespace_name(), req->table_name(), req->table_type(), schema,
-      IndexMap(),
+      tablet::Primary::kTrue, req->table_id(), req->namespace_name(), req->table_name(),
+      req->table_type(), schema, IndexMap(),
       req->has_index_info() ? boost::optional<IndexInfo>(req->index_info()) : boost::none,
       0 /* schema_version */, partition_schema);
   std::vector<SnapshotScheduleId> snapshot_schedules;
@@ -1311,11 +1389,13 @@ void TabletServiceAdminImpl::DeleteTablet(const DeleteTabletRequestPB* req,
     cas_config_opid_index_less_or_equal = req->cas_config_opid_index_less_or_equal();
   }
   boost::optional<TabletServerErrorPB::Code> error_code;
-  Status s = server_->tablet_manager()->DeleteTablet(req->tablet_id(),
-                                                     delete_type,
-                                                     cas_config_opid_index_less_or_equal,
-                                                     req->hide_only(),
-                                                     &error_code);
+  Status s = server_->tablet_manager()->DeleteTablet(
+      req->tablet_id(),
+      delete_type,
+      tablet::ShouldAbortActiveTransactions(req->should_abort_active_txns()),
+      cas_config_opid_index_less_or_equal,
+      req->hide_only(),
+      &error_code);
   if (PREDICT_FALSE(!s.ok())) {
     HandleErrorResponse(resp, &context, s, error_code);
     return;
@@ -1502,13 +1582,25 @@ void TabletServiceAdminImpl::SplitTablet(
     }
   }
 
-  auto state = std::make_unique<tablet::SplitOperation>(
-      leader_tablet_peer.peer->tablet(), server_->tablet_manager(), req);
+  const auto consensus = leader_tablet_peer.peer->shared_consensus();
+  if (consensus == nullptr) {
+    SetupErrorAndRespond(
+        resp->mutable_error(),
+        STATUS_FORMAT(InvalidArgument, "Tablet $0 has no consensus", req->tablet_id()),
+        TabletServerErrorPB::TABLET_NOT_RUNNING, &context);
+    return;
+  }
 
-  state->set_completion_callback(
+  auto operation = std::make_unique<tablet::SplitOperation>(
+      leader_tablet_peer.peer->tablet(), server_->tablet_manager(), req);
+  *operation->AllocateRequest() = *req;
+  operation->mutable_request()->set_split_parent_leader_uuid(
+      leader_tablet_peer.peer->permanent_uuid());
+
+  operation->set_completion_callback(
       MakeRpcOperationCompletionCallback(std::move(context), resp, server_->Clock()));
 
-  leader_tablet_peer.peer->Submit(std::move(state), leader_tablet_peer.leader_term);
+  leader_tablet_peer.peer->Submit(std::move(operation), leader_tablet_peer.leader_term);
 }
 
 void TabletServiceAdminImpl::UpgradeYsql(
@@ -1863,7 +1955,7 @@ void ConsensusServiceImpl::GetNodeInstance(const GetNodeInstanceRequestPB* req,
 
 namespace {
 
-class RpcScope {
+class NODISCARD_CLASS RpcScope {
  public:
   template<class Req, class Resp>
   RpcScope(TabletPeerLookupIf* tablet_manager,
@@ -2042,16 +2134,25 @@ void ConsensusServiceImpl::StartRemoteBootstrap(const StartRemoteBootstrapReques
     // split_parent_tablet_id. However, our local tablet manager should only know about the parent
     // if it was part of the raft group which committed the split to the parent, and if the parent
     // tablet has yet to be deleted across the cluster.
-    TabletPeerTablet result;
-    if (tablet_manager_->GetTabletPeer(req->split_parent_tablet_id(), &result.tablet_peer).ok()) {
-      YB_LOG_EVERY_N_SECS(WARNING, 30)
-          << "Start remote bootstrap rejected: parent tablet not yet split.";
-      SetupErrorAndRespond(
-          resp->mutable_error(),
-          STATUS(Incomplete, "Rejecting bootstrap request while parent tablet is present."),
-          TabletServerErrorPB::TABLET_SPLIT_PARENT_STILL_LIVE,
-          &context);
-      return;
+    TabletPeerPtr tablet_peer;
+    if (tablet_manager_->GetTabletPeer(req->split_parent_tablet_id(), &tablet_peer).ok()) {
+      auto tablet = tablet_peer->shared_tablet();
+      // If local parent tablet replica has been already split or remote bootstrapped from remote
+      // replica that has been already split - allow RBS of child tablets.
+      // In this case we can't rely on local parent tablet replica split to create child tablet
+      // replicas on the current node, because local bootstrap is not replaying already applied
+      // SPLIT_OP (it has op_id <= flushed_op_id).
+      if (!tablet || tablet->metadata()->tablet_data_state() !=
+                         tablet::TabletDataState::TABLET_DATA_SPLIT_COMPLETED) {
+        YB_LOG_EVERY_N_SECS(WARNING, 30)
+            << "Start remote bootstrap rejected: parent tablet not yet split.";
+        SetupErrorAndRespond(
+            resp->mutable_error(),
+            STATUS(Incomplete, "Rejecting bootstrap request while parent tablet is present."),
+            TabletServerErrorPB::TABLET_SPLIT_PARENT_STILL_LIVE,
+            &context);
+        return;
+      }
     }
   }
 
@@ -2234,7 +2335,8 @@ void TabletServiceImpl::TakeTransaction(const TakeTransactionRequestPB* req,
                                         TakeTransactionResponsePB* resp,
                                         rpc::RpcContext context) {
   auto transaction = server_->TransactionPool()->Take(
-      client::ForceGlobalTransaction(req->has_is_global() && req->is_global()));
+      client::ForceGlobalTransaction(req->has_is_global() && req->is_global()),
+      context.GetClientDeadline());
   auto metadata = transaction->Release();
   if (!metadata.ok()) {
     LOG(INFO) << "Take failed: " << metadata.status();
@@ -2250,9 +2352,15 @@ void TabletServiceImpl::GetSplitKey(
     const GetSplitKeyRequestPB* req, GetSplitKeyResponsePB* resp, RpcContext context) {
   TEST_PAUSE_IF_FLAG(TEST_pause_tserver_get_split_key);
   PerformAtLeader(req, resp, &context,
-      [resp](const LeaderTabletPeer& leader_tablet_peer) -> Status {
+      [req, resp](const LeaderTabletPeer& leader_tablet_peer) -> Status {
         const auto& tablet = leader_tablet_peer.tablet;
-
+        if (!req->is_manual_split() &&
+            FLAGS_rocksdb_max_file_size_for_compaction > 0 &&
+            tablet->schema()->table_properties().HasDefaultTimeToLive()) {
+          auto s = STATUS(NotSupported, "Tablet splitting not supported for TTL tables.");
+          return s.CloneAndAddErrorCode(
+              TabletServerError(TabletServerErrorPB::TABLET_SPLIT_DISABLED_TTL_EXPIRY));
+        }
         if (tablet->MayHaveOrphanedPostSplitData()) {
           return STATUS(IllegalState, "Tablet has orphaned post-split data");
         }
@@ -2275,6 +2383,21 @@ void TabletServiceImpl::GetSharedData(const GetSharedDataRequestPB* req,
   auto& data = server_->SharedObject();
   resp->mutable_data()->assign(pointer_cast<const char*>(&data), sizeof(data));
   context.RespondSuccess();
+}
+
+void TabletServiceAdminImpl::TestRetry(
+    const TestRetryRequestPB* req, TestRetryResponsePB* resp, rpc::RpcContext context) {
+  if (!CheckUuidMatchOrRespond(server_->tablet_manager(), "TestRetry", req, resp, &context)) {
+    return;
+  }
+  auto num_calls = num_test_retry_calls.fetch_add(1) + 1;
+  if (num_calls < req->num_retries()) {
+    SetupErrorAndRespond(
+        resp->mutable_error(),
+        STATUS_FORMAT(TryAgain, "Got $0 calls of $1", num_calls, req->num_retries()), &context);
+  } else {
+    context.RespondSuccess();
+  }
 }
 
 void TabletServiceImpl::Shutdown() {

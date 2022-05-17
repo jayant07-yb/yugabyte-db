@@ -15,6 +15,7 @@ import com.yugabyte.yw.forms.SystemdUpgradeParams;
 import com.yugabyte.yw.forms.TlsToggleParams;
 import com.yugabyte.yw.forms.UpgradeTaskParams;
 import com.yugabyte.yw.forms.VMImageUpgradeParams;
+import com.yugabyte.yw.models.Audit;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.Universe;
 import io.swagger.annotations.Api;
@@ -59,6 +60,7 @@ public class UpgradeUniverseController extends AuthenticatedController {
     return requestHandler(
         upgradeUniverseHandler::restartUniverse,
         UpgradeTaskParams.class,
+        Audit.ActionType.Restart,
         customerUuid,
         universeUuid);
   }
@@ -87,6 +89,7 @@ public class UpgradeUniverseController extends AuthenticatedController {
     return requestHandler(
         upgradeUniverseHandler::upgradeSoftware,
         SoftwareUpgradeParams.class,
+        Audit.ActionType.UpgradeSoftware,
         customerUuid,
         universeUuid);
   }
@@ -115,6 +118,7 @@ public class UpgradeUniverseController extends AuthenticatedController {
     return requestHandler(
         upgradeUniverseHandler::upgradeGFlags,
         GFlagsUpgradeParams.class,
+        Audit.ActionType.UpgradeGFlags,
         customerUuid,
         universeUuid);
   }
@@ -141,7 +145,11 @@ public class UpgradeUniverseController extends AuthenticatedController {
           paramType = "body"))
   public Result upgradeCerts(UUID customerUuid, UUID universeUuid) {
     return requestHandler(
-        upgradeUniverseHandler::rotateCerts, CertsRotateParams.class, customerUuid, universeUuid);
+        upgradeUniverseHandler::rotateCerts,
+        CertsRotateParams.class,
+        Audit.ActionType.UpgradeCerts,
+        customerUuid,
+        universeUuid);
   }
 
   /**
@@ -166,7 +174,11 @@ public class UpgradeUniverseController extends AuthenticatedController {
           paramType = "body"))
   public Result upgradeTls(UUID customerUuid, UUID universeUuid) {
     return requestHandler(
-        upgradeUniverseHandler::toggleTls, TlsToggleParams.class, customerUuid, universeUuid);
+        upgradeUniverseHandler::toggleTls,
+        TlsToggleParams.class,
+        Audit.ActionType.ToggleTls,
+        customerUuid,
+        universeUuid);
   }
 
   /**
@@ -190,7 +202,11 @@ public class UpgradeUniverseController extends AuthenticatedController {
           paramType = "body"))
   public Result resizeNode(UUID customerUuid, UUID universeUuid) {
     return requestHandler(
-        upgradeUniverseHandler::resizeNode, ResizeNodeParams.class, customerUuid, universeUuid);
+        upgradeUniverseHandler::resizeNode,
+        ResizeNodeParams.class,
+        Audit.ActionType.ResizeNode,
+        customerUuid,
+        universeUuid);
   }
 
   /**
@@ -217,13 +233,17 @@ public class UpgradeUniverseController extends AuthenticatedController {
     Customer customer = Customer.getOrBadRequest(customerUuid);
     Universe universe = Universe.getValidUniverseOrBadRequest(universeUuid, customer);
 
-    if (!runtimeConfigFactory.forUniverse(universe).getBoolean("yb.cloud.enabled")) {
+    // TODO yb.cloud.enabled is redundant here because many tests set it during runtime,
+    // to enable this method in cloud. Clean it up later when the tests are fixed.
+    if (!runtimeConfigFactory.forUniverse(universe).getBoolean("yb.cloud.enabled")
+        && !runtimeConfigFactory.forUniverse(universe).getBoolean("yb.upgrade.vmImage")) {
       throw new PlatformServiceException(METHOD_NOT_ALLOWED, "VM image upgrade is disabled.");
     }
 
     return requestHandler(
         upgradeUniverseHandler::upgradeVMImage,
         VMImageUpgradeParams.class,
+        Audit.ActionType.UpgradeVmImage,
         customerUuid,
         universeUuid);
   }
@@ -252,6 +272,7 @@ public class UpgradeUniverseController extends AuthenticatedController {
     return requestHandler(
         upgradeUniverseHandler::upgradeSystemd,
         SystemdUpgradeParams.class,
+        Audit.ActionType.UpgradeSystemd,
         customerUUID,
         universeUUID);
   }
@@ -259,6 +280,7 @@ public class UpgradeUniverseController extends AuthenticatedController {
   private <T extends UpgradeTaskParams> Result requestHandler(
       IUpgradeUniverseHandlerMethod<T> serviceMethod,
       Class<T> type,
+      Audit.ActionType auditActionType,
       UUID customerUuid,
       UUID universeUuid) {
     Customer customer = Customer.getOrBadRequest(customerUuid);
@@ -273,7 +295,9 @@ public class UpgradeUniverseController extends AuthenticatedController {
         customer.uuid);
 
     UUID taskUuid = serviceMethod.upgrade(requestParams, customer, universe);
-    auditService().createAuditEntryWithReqBody(ctx(), taskUuid);
+    auditService()
+        .createAuditEntryWithReqBody(
+            ctx(), Audit.TargetType.Universe, universeUuid.toString(), auditActionType, taskUuid);
     return new YBPTask(taskUuid, universe.universeUUID).asResult();
   }
 }

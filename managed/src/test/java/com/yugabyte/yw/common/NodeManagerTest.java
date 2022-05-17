@@ -23,10 +23,10 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyString;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -49,9 +49,11 @@ import com.yugabyte.yw.commissioner.tasks.subtasks.ChangeInstanceType;
 import com.yugabyte.yw.commissioner.tasks.subtasks.CreateRootVolumes;
 import com.yugabyte.yw.commissioner.tasks.subtasks.InstanceActions;
 import com.yugabyte.yw.commissioner.tasks.subtasks.ReplaceRootVolume;
+import com.yugabyte.yw.commissioner.tasks.subtasks.TransferXClusterCerts;
 import com.yugabyte.yw.common.NodeManager.CertRotateAction;
-import com.yugabyte.yw.common.NodeManager.NodeCommandType;
+import com.yugabyte.yw.common.certmgmt.CertConfigType;
 import com.yugabyte.yw.common.certmgmt.CertificateHelper;
+import com.yugabyte.yw.common.certmgmt.EncryptionInTransitUtil;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
 import com.yugabyte.yw.forms.CertificateParams;
 import com.yugabyte.yw.forms.CertsRotateParams.CertRotationType;
@@ -65,7 +67,6 @@ import com.yugabyte.yw.forms.UpgradeTaskParams.UpgradeTaskSubType;
 import com.yugabyte.yw.models.AccessKey;
 import com.yugabyte.yw.models.AvailabilityZone;
 import com.yugabyte.yw.models.CertificateInfo;
-import com.yugabyte.yw.common.certmgmt.CertConfigType;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.NodeInstance;
 import com.yugabyte.yw.models.Provider;
@@ -110,8 +111,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import play.libs.Json;
 
-import com.yugabyte.yw.common.certmgmt.EncryptionInTransitUtil;
-
 @RunWith(JUnitParamsRunner.class)
 public class NodeManagerTest extends FakeDBApplication {
 
@@ -151,6 +150,7 @@ public class NodeManagerTest extends FakeDBApplication {
           "--skip_cert_validation");
 
   private class TestData {
+    public final Customer customer;
     public final Common.CloudType cloudType;
     public final PublicCloudConstants.StorageType storageType;
     public final Provider provider;
@@ -163,7 +163,12 @@ public class NodeManagerTest extends FakeDBApplication {
     public final String NewInstanceType = "test-c5.2xlarge";
 
     public TestData(
-        Provider p, Common.CloudType cloud, PublicCloudConstants.StorageType storageType, int idx) {
+        Customer customer,
+        Provider p,
+        Common.CloudType cloud,
+        PublicCloudConstants.StorageType storageType,
+        int idx) {
+      this.customer = customer;
       cloudType = cloud;
       this.storageType = storageType;
       provider = p;
@@ -205,11 +210,13 @@ public class NodeManagerTest extends FakeDBApplication {
     List<TestData> testDataList = new ArrayList<>();
     Provider provider = ModelFactory.newProvider(customer, cloud);
     if (cloud.equals(Common.CloudType.aws)) {
-      testDataList.add(new TestData(provider, cloud, PublicCloudConstants.StorageType.GP2, 1));
+      testDataList.add(
+          new TestData(customer, provider, cloud, PublicCloudConstants.StorageType.GP2, 1));
     } else if (cloud.equals(Common.CloudType.gcp)) {
-      testDataList.add(new TestData(provider, cloud, PublicCloudConstants.StorageType.IO1, 2));
+      testDataList.add(
+          new TestData(customer, provider, cloud, PublicCloudConstants.StorageType.IO1, 2));
     } else {
-      testDataList.add(new TestData(provider, cloud, null, 3));
+      testDataList.add(new TestData(customer, provider, cloud, null, 3));
     }
     return testDataList;
   }
@@ -638,7 +645,7 @@ public class NodeManagerTest extends FakeDBApplication {
     String clientToNodeString = String.valueOf(configureParams.enableClientToNodeEncrypt);
     String allowInsecureString = String.valueOf(configureParams.allowInsecure);
     String ybHomeDir = configureParams.getProvider().getYbHome();
-    ;
+
     String certsDir = ybHomeDir + "/yugabyte-tls-config";
     String certsForClientDir = ybHomeDir + "/yugabyte-client-tls-config";
 
@@ -674,13 +681,30 @@ public class NodeManagerTest extends FakeDBApplication {
     return nodeCommand(type, params, testData, new UserIntent());
   }
 
-  void addAdditionalInstanceTags(NodeTaskParams nodeTaskParam, Map<String, String> tags) {
-    if (nodeTaskParam.nodeUuid != null) {
-      tags.put("node-uuid", nodeTaskParam.nodeUuid.toString());
+  private void addInstanceTags(
+      TestData testData,
+      NodeTaskParams nodeTaskParam,
+      Map<String, String> customTags,
+      List<String> commandArgs) {
+    if (testData.cloudType != Common.CloudType.onprem) {
+      Map<String, String> instanceTags =
+          (nodeTaskParam.clusters.isEmpty() || nodeTaskParam.clusters.get(0) == null)
+              ? new TreeMap<>()
+              : new TreeMap<>(nodeTaskParam.clusters.get(0).userIntent.instanceTags);
+      if (customTags != null) {
+        instanceTags.putAll(customTags);
+      }
+      addAdditionalInstanceTags(testData, nodeTaskParam, instanceTags);
+      commandArgs.add("--instance_tags");
+      commandArgs.add(Json.stringify(Json.toJson(instanceTags)));
     }
-    if (nodeTaskParam.universeUUID != null) {
-      tags.put("universe-uuid", nodeTaskParam.universeUUID.toString());
-    }
+  }
+
+  void addAdditionalInstanceTags(
+      TestData testData, NodeTaskParams nodeTaskParam, Map<String, String> tags) {
+    tags.put("customer-uuid", testData.customer.uuid.toString());
+    tags.put("universe-uuid", nodeTaskParam.universeUUID.toString());
+    tags.put("node-uuid", nodeTaskParam.nodeUuid.toString());
   }
 
   private List<String> nodeCommand(
@@ -690,7 +714,6 @@ public class NodeManagerTest extends FakeDBApplication {
       UserIntent userIntent) {
     Common.CloudType cloud = testData.cloudType;
     List<String> expectedCommand = new ArrayList<>();
-
     expectedCommand.add("instance");
     expectedCommand.add(type.toString().toLowerCase());
     switch (type) {
@@ -730,13 +753,7 @@ public class NodeManagerTest extends FakeDBApplication {
           if (createParams.assignPublicIP) {
             expectedCommand.add("--assign_public_ip");
           }
-          Map<String, String> instanceTags =
-              (createParams.clusters.isEmpty() || createParams.clusters.get(0) == null)
-                  ? new TreeMap<>()
-                  : new TreeMap<>(createParams.clusters.get(0).userIntent.instanceTags);
-          addAdditionalInstanceTags(createParams, instanceTags);
-          expectedCommand.add("--instance_tags");
-          expectedCommand.add(Json.stringify(Json.toJson(instanceTags)));
+          addInstanceTags(testData, params, null, expectedCommand);
         }
 
         if (cloud.equals(Common.CloudType.aws)) {
@@ -820,6 +837,11 @@ public class NodeManagerTest extends FakeDBApplication {
             case None:
               break;
           }
+        }
+
+        if (configureParams.ybSoftwareVersion != null) {
+          expectedCommand.add("--num_releases_to_keep");
+          expectedCommand.add("3");
         }
 
         Map<String, String> gflags = new HashMap<>(configureParams.gflags);
@@ -1002,17 +1024,7 @@ public class NodeManagerTest extends FakeDBApplication {
       case Tags:
         InstanceActions.Params tagsParams = (InstanceActions.Params) params;
         if (Provider.InstanceTagsEnabledProviders.contains(cloud)) {
-          Map<String, String> instanceTags =
-              (tagsParams.clusters.isEmpty() || tagsParams.clusters.get(0) == null)
-                  ? new TreeMap<>()
-                  : new TreeMap<>(tagsParams.clusters.get(0).userIntent.instanceTags);
-
-          instanceTags.put("Cust", "Test");
-          addAdditionalInstanceTags(tagsParams, instanceTags);
-
-          expectedCommand.add("--instance_tags");
-          expectedCommand.add(Json.stringify(Json.toJson(instanceTags)));
-
+          addInstanceTags(testData, params, ImmutableMap.of("Cust", "Test"), expectedCommand);
           if (!tagsParams.deleteTags.isEmpty()) {
             expectedCommand.add("--remove_tags");
             expectedCommand.add(tagsParams.deleteTags);
@@ -1028,6 +1040,26 @@ public class NodeManagerTest extends FakeDBApplication {
         ChangeInstanceType.Params citTaskParams = (ChangeInstanceType.Params) params;
         expectedCommand.add("--instance_type");
         expectedCommand.add(citTaskParams.instanceType);
+        break;
+      case Transfer_XCluster_Certs:
+        TransferXClusterCerts.Params txccTaskParams = (TransferXClusterCerts.Params) params;
+        expectedCommand.add("--action");
+        expectedCommand.add(txccTaskParams.action.toString());
+        if (txccTaskParams.action == TransferXClusterCerts.Params.Action.COPY) {
+          expectedCommand.add("--root_cert_path");
+          expectedCommand.add(txccTaskParams.rootCertPath.toString());
+        }
+        expectedCommand.add("--replication_config_name");
+        expectedCommand.add(txccTaskParams.replicationGroupName);
+        if (txccTaskParams.producerCertsDirOnTarget != null) {
+          expectedCommand.add("--producer_certs_dir");
+          expectedCommand.add(txccTaskParams.producerCertsDirOnTarget.toString());
+        }
+        break;
+      case Delete_Root_Volumes:
+        if (Provider.InstanceTagsEnabledProviders.contains(cloud)) {
+          addInstanceTags(testData, params, null, expectedCommand);
+        }
         break;
     }
     if (params.deviceInfo != null) {
@@ -1085,7 +1117,6 @@ public class NodeManagerTest extends FakeDBApplication {
         }
       }
     }
-
     expectedCommand.add(params.nodeName);
     return expectedCommand;
   }
@@ -1105,6 +1136,36 @@ public class NodeManagerTest extends FakeDBApplication {
           nodeCommand(NodeManager.NodeCommandType.Change_Instance_Type, params, t));
 
       nodeManager.nodeCommand(NodeManager.NodeCommandType.Change_Instance_Type, params);
+      verify(shellProcessHandler, times(1)).run(eq(expectedCommand), anyMap(), anyString());
+    }
+  }
+
+  @Test
+  @Parameters({"true, false", "false, false", "true, true", "false, true"})
+  @TestCaseName("{method}(isCopy:{0},isCustomProducerCertsDir:{1}) [{index}]")
+  public void testTransferXClusterCertsCommand(boolean isCopy, boolean isCustomProducerCertsDir) {
+    for (TestData t : testData) {
+      TransferXClusterCerts.Params params = new TransferXClusterCerts.Params();
+      buildValidParams(
+          t,
+          params,
+          Universe.saveDetails(
+              createUniverse().universeUUID, ApiUtils.mockUniverseUpdater(t.cloudType)));
+      List<String> expectedCommand = t.baseCommand;
+      if (isCopy) {
+        params.action = TransferXClusterCerts.Params.Action.COPY;
+        params.rootCertPath = new File("rootCertPath");
+      } else {
+        params.action = TransferXClusterCerts.Params.Action.REMOVE;
+      }
+      params.replicationGroupName = "universe-uuid_MyRepl1";
+      if (isCustomProducerCertsDir) {
+        params.producerCertsDirOnTarget = new File("custom-producer-dir");
+      }
+      expectedCommand.addAll(
+          nodeCommand(NodeManager.NodeCommandType.Transfer_XCluster_Certs, params, t));
+
+      nodeManager.nodeCommand(NodeManager.NodeCommandType.Transfer_XCluster_Certs, params);
       verify(shellProcessHandler, times(1)).run(eq(expectedCommand), anyMap(), anyString());
     }
   }
@@ -1285,7 +1346,7 @@ public class NodeManagerTest extends FakeDBApplication {
   private void runAndTestProvisionWithAccessKeyAndSG(String sgId) {
     for (TestData t : testData) {
       t.region.setSecurityGroupId(sgId);
-      t.region.save();
+      t.region.update();
       // Create AccessKey
       AccessKey.KeyInfo keyInfo = new AccessKey.KeyInfo();
       keyInfo.privateKey = "/path/to/private.key";
@@ -1483,7 +1544,7 @@ public class NodeManagerTest extends FakeDBApplication {
   private void runAndTestCreateWithAccessKeyAndSG(String sgId) {
     for (TestData t : testData) {
       t.region.setSecurityGroupId(sgId);
-      t.region.save();
+      t.region.update();
       // Create AccessKey
       AccessKey.KeyInfo keyInfo = new AccessKey.KeyInfo();
       keyInfo.privateKey = "/path/to/private.key";
@@ -2050,7 +2111,9 @@ public class NodeManagerTest extends FakeDBApplication {
   }
 
   @Test
-  public void testEnableYSQLNodeCommand() {
+  @Parameters({"true, false", "false, true", "true, true"})
+  @TestCaseName("{method}(enabledYSQL:{0},enabledYCQL:{1}) [{index}]")
+  public void testEnableYSQLNodeCommand(boolean ysqlEnabled, boolean ycqlEnabled) {
     for (TestData t : testData) {
       AnsibleConfigureServers.Params params = new AnsibleConfigureServers.Params();
       buildValidParams(
@@ -2060,7 +2123,8 @@ public class NodeManagerTest extends FakeDBApplication {
               createUniverse().universeUUID, ApiUtils.mockUniverseUpdater(t.cloudType)));
       params.type = Everything;
       params.ybSoftwareVersion = "0.0.1";
-      params.enableYSQL = true;
+      params.enableYSQL = ysqlEnabled;
+      params.enableYCQL = ycqlEnabled;
       params.deviceInfo = new DeviceInfo();
       params.deviceInfo.numVolumes = 1;
       if (t.cloudType == CloudType.onprem) {
@@ -2111,7 +2175,7 @@ public class NodeManagerTest extends FakeDBApplication {
   @Test
   public void testCustomCertNodeCommand() throws IOException, NoSuchAlgorithmException {
     Customer customer = ModelFactory.testCustomer();
-    Provider provider = ModelFactory.newProvider(customer, Common.CloudType.onprem);
+    ModelFactory.newProvider(customer, Common.CloudType.onprem);
     for (TestData t : testData) {
       if (t.cloudType == Common.CloudType.onprem) {
         t.privateKey = null;
@@ -3297,7 +3361,7 @@ public class NodeManagerTest extends FakeDBApplication {
         createPrecheckCommandForCerts(
             cert.uuid,
             null,
-            (params) -> {
+            params -> {
               Universe.saveDetails(
                   params.universeUUID,
                   universe -> {
@@ -3324,6 +3388,23 @@ public class NodeManagerTest extends FakeDBApplication {
         "HOSTNAME");
   }
 
+  @Test
+  public void testDeleteRootVolumes() {
+    for (TestData t : testData) {
+      NodeTaskParams params = new NodeTaskParams();
+      buildValidParams(
+          t,
+          params,
+          Universe.saveDetails(
+              createUniverse().universeUUID, ApiUtils.mockUniverseUpdater(t.cloudType)));
+      List<String> expectedCommand = new ArrayList<>(t.baseCommand);
+      expectedCommand.addAll(
+          nodeCommand(NodeManager.NodeCommandType.Delete_Root_Volumes, params, t));
+      nodeManager.nodeCommand(NodeManager.NodeCommandType.Delete_Root_Volumes, params);
+      verify(shellProcessHandler, times(1)).run(eq(expectedCommand), anyMap(), anyString());
+    }
+  }
+
   private void checkArguments(
       List<String> currentArgs, List<String> allPossibleArgs, String... argsExpected) {
     Map<String, String> k2v = mapKeysToValues(currentArgs);
@@ -3341,7 +3422,7 @@ public class NodeManagerTest extends FakeDBApplication {
   }
 
   private List<String> createPrecheckCommandForCerts(UUID certificateUUID1, UUID certificateUUID2) {
-    return createPrecheckCommandForCerts(certificateUUID1, certificateUUID2, (x) -> {});
+    return createPrecheckCommandForCerts(certificateUUID1, certificateUUID2, x -> {});
   }
 
   private List<String> createPrecheckCommandForCerts(
@@ -3377,7 +3458,6 @@ public class NodeManagerTest extends FakeDBApplication {
               universe.getUniverseDetails().getClusterByUuid(nodeDetails.placementUuid).userIntent;
           userIntent.enableNodeToNodeEncrypt = true;
         });
-
     nodeManager.nodeCommand(NodeManager.NodeCommandType.Precheck, nodeTaskParams);
     ArgumentCaptor<List> arg = ArgumentCaptor.forClass(List.class);
     verify(shellProcessHandler).run(arg.capture(), any(), anyString());

@@ -15,47 +15,47 @@ showAsideToc: true
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li>
-    <a href="/latest/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/aws" class="nav-link">
+    <a href="/preview/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/aws" class="nav-link">
       <i class="fab fa-aws"></i>
       AWS
     </a>
   </li>
 
   <li>
-    <a href="/latest/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/gcp" class="nav-link">
+    <a href="/preview/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/gcp" class="nav-link">
       <i class="fab fa-google" aria-hidden="true"></i>
       GCP
     </a>
   </li>
 
   <li>
-    <a href="/latest/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/azure" class="nav-link">
+    <a href="/preview/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/azure" class="nav-link">
       <i class="icon-azure" aria-hidden="true"></i>
       Azure
     </a>
   </li>
 
   <li>
-    <a href="/latest/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/kubernetes" class="nav-link">
+    <a href="/preview/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/kubernetes" class="nav-link">
       <i class="fas fa-cubes" aria-hidden="true"></i>
       Kubernetes
     </a>
   </li>
 
   <li>
-    <a href="/latest/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/vmware-tanzu" class="nav-link">
+    <a href="/preview/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/vmware-tanzu" class="nav-link">
       <i class="fas fa-cubes" aria-hidden="true"></i>
       VMware Tanzu
     </a>
   </li>
 
 <li>
-    <a href="/latest/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/openshift" class="nav-link">
+    <a href="/preview/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/openshift" class="nav-link">
       <i class="fas fa-cubes" aria-hidden="true"></i>OpenShift</a>
   </li>
 
   <li>
-    <a href="/latest/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/on-premises" class="nav-link active">
+    <a href="/preview/yugabyte-platform/configure-yugabyte-platform/set-up-cloud-provider/on-premises" class="nav-link active">
       <i class="fas fa-building"></i>
       On-premises
     </a>
@@ -87,7 +87,7 @@ If the SSH user requires a password for sudo access or the SSH user does not hav
 
 #### SSH Port
 
-Provide the port number of SSH client connections. 
+Provide the port number of SSH client connections.
 
 #### Manually Provision Nodes
 
@@ -103,7 +103,7 @@ If any of the following statements are applicable to your use case, you need to 
 
 Ensure that the SSH key is pasted correctly (the supported format is RSA).
 
-#### Air Gap Install 
+#### Air Gap Install
 
 Enable this option if you want the installation to run in an air-gapped mode without expecting any internet access.
 
@@ -117,11 +117,11 @@ Specify the port number for the Node Exporter. The default value is 9300.
 
 #### Install Node Exporter
 
-Enable this option if you want the Node Exporter installed. You can skip this step if you have Node Exporter already installed on the nodes. Ensure you have provided the correct port number for skipping the installation. 
+Enable this option if you want the Node Exporter installed. You can skip this step if you have Node Exporter already installed on the nodes. Ensure you have provided the correct port number for skipping the installation.
 
 #### Node Exporter User
 
-Override the default Prometheus user. This is useful when the user is pre-provisioned on nodes (in case user creation is disabled). If overridden, the installer checks whether or not the user exists and creates the user if it does not exist. 
+Override the default Prometheus user. This is useful when the user is pre-provisioned on nodes (in case user creation is disabled). If overridden, the installer checks whether or not the user exists and creates the user if it does not exist.
 
 ### Configure hardware for YugabyteDB nodes
 
@@ -187,20 +187,20 @@ You can manually provision each node using the pre-provisioning Python script, a
     sudo docker exec -it yugaware bash
     ```
 
-1. Copy and paste the Python script prompted via the UI and substitute for a node IP address and mount points. 
+1. Copy and paste the Python script prompted via the UI and substitute for a node IP address and mount points.
 Optionally, use the `--ask_password` flag if the sudo user requires password authentication, as follows:
-   
+
     ```bash
    bash-4.4# /opt/yugabyte/yugaware/data/provision/9cf26f3b-4c7c-451a-880d-593f2f76efce/provision_instance.py --ip 10.9.116.65 --mount_points /data --ask_password
     ```
-   
+
    Expect the following output and prompt:
-   
+
     ```output
     Executing provision now for instance with IP 10.9.116.65...
     SUDO password:
     ```
-   
+
 1. Wait for the script to finish successfully.
 
 1. Repeat step 3 for every node that will participate in the universe.
@@ -221,6 +221,7 @@ For each node, perform the following:
 * [Install Prometheus node exporter](#install-prometheus-node-exporter)
 * [Install backup utilities](#install-backup-utilities)
 * [Set crontab permissions](#set-crontab-permissions)
+* [Install systemd-related database service unit files (optional)](#install-systemd-related-database-service-unit-files)
 
 ##### Set up time synchronization
 
@@ -247,7 +248,7 @@ Database servers need incoming TCP/IP access enabled to the following ports, for
 | TCP | 12000 | YCQL HTTP (for DB statistics gathering) |
 | TCP | 13000 | YSQL HTTP (for DB statistics gathering) |
 
-The preceding table is based on the information on the [default ports page](/latest/reference/configuration/default-ports/).
+The preceding table is based on the information on the [default ports page](/preview/reference/configuration/default-ports/).
 
 ##### Pre-provision nodes manually
 
@@ -263,9 +264,9 @@ Physical nodes (or cloud instances) are installed with a standard Centos 7 serve
     server <your-time-server-IP-address> prefer iburst
     ```
 
-    
-    <br>Then, run the following command:
 
+    <br>Then, run the following command:
+    
     ```sh
     $ sudo chronyc makestep   # (force instant sync to NTP server)
     ```
@@ -281,7 +282,7 @@ Physical nodes (or cloud instances) are installed with a standard Centos 7 serve
     <br>Ensure that the `yugabyte` user has permissions to SSH into the YugabyteDB nodes (as defined in `/etc/ssh/sshd_config`).
 
 1. Copy the SSH public key to each DB node.
-   
+
     \
     This public key should correspond to the private key entered into the Yugabyte Platform provider.
 
@@ -347,7 +348,7 @@ Physical nodes (or cloud instances) are installed with a standard Centos 7 serve
       $ lsblk
       ```
 
-    * Perform the following steps for each available volume (all listed volumes other than the root volume): 
+    * Perform the following steps for each available volume (all listed volumes other than the root volume):
 
       ```sh
       $ sudo mkdir /data   # (or /data1, /data2 etc)
@@ -430,23 +431,23 @@ On each node, perform the following as a user with sudo access:
       Description=node_exporter - Exporter for machine metrics.
       Documentation=https://github.com/William-Yeh/ansible-prometheus
       After=network.target
-      
+
       [Install]
       WantedBy=multi-user.target
-      
+
       [Service]
       Type=simple
-      
+
       #ExecStartPre=/bin/sh -c  " mkdir -p '/var/run/prometheus' '/var/log/prometheus' "
       #ExecStartPre=/bin/sh -c  " chown -R prometheus '/var/run/prometheus' '/var/log/prometheus' "
       #PIDFile=/var/run/prometheus/node_exporter.pid
-      
+
       User=prometheus
       Group=prometheus
-      
+
       ExecStart=/opt/prometheus/node_exporter-0.13.0.linux-amd64/node_exporter  --web.listen-address=:9300 --collector.textfile.directory=/tmp/yugabyte/metrics
       ```
-    
+
 1. Exit from vi, and continue (sudo required):
 
     ```sh
@@ -480,7 +481,7 @@ Yugabyte Platform supports backing up YugabyteDB to AWS S3, Azure Storage, Googl
     ```sh
     $ cd /usr/local
     $ sudo tar xvfz path-to-s3cmd-2.0.1.tar.gz
-    $ sudo ln -s /usr/local/s3cmd-2.0.1/s3cmd /usr/local/bin/s3cmd 
+    $ sudo ln -s /usr/local/s3cmd-2.0.1/s3cmd /usr/local/bin/s3cmd
     ```
 
 **Azure Storage** - Install azcopy using one of the following options:
@@ -488,7 +489,7 @@ Yugabyte Platform supports backing up YugabyteDB to AWS S3, Azure Storage, Googl
 * Download `azcopy_linux_amd64_10.13.0.tar.gz` using the following command:
 
     ```sh
-    $ wget https://azcopyvnext.azureedge.net/release20200410/azcopy_linux_amd64_10.13.0.tar.gz
+    $ wget https://azcopyvnext.azureedge.net/release20211027/azcopy_linux_amd64_10.13.0.tar.gz
     ```
 
 * For airgapped installations, copy `/opt/third-party/azcopy_linux_amd64_10.13.0.tar.gz` from the Yugabyte Platform node, as follows:
@@ -511,7 +512,7 @@ Yugabyte Platform supports backing up YugabyteDB to AWS S3, Azure Storage, Googl
     ```sh
     $ cd /usr/local
     $ sudo tar xvfz gsutil_4.60.tar.gz
-    $ sudo ln -s /usr/local/gsutil/gsutil /usr/local/bin/gsutil 
+    $ sudo ln -s /usr/local/gsutil/gsutil /usr/local/bin/gsutil
     ```
 
 ##### Set crontab permissions
@@ -530,7 +531,7 @@ If you are not using either file, no changes are required.
 <!--
 ##### Manage liveness checks, logs, and cores
 
-Yugabyte Platform supports performing YugabyteDB liveness checks, log file management, and core file management using cron jobs or systemd services. 
+Yugabyte Platform supports performing YugabyteDB liveness checks, log file management, and core file management using cron jobs or systemd services.
 
 **Sudo is required to set up these services!**
 
@@ -540,3 +541,255 @@ If you plan to have Platform use **systemd services** to perform the monitoring 
 -->
 
 You have finished configuring your on-premises cloud provider. Proceed to [Configure the backup target](../../backup-target/), or [Create deployments](../../../create-deployments/).
+
+##### Install systemd-related database service unit files
+
+As an alternative to setting crontab permissions, you can install systemd-specific database service unit files, as follows:
+
+1. Enable the `yugabyte` user to run the following commands as sudo or root:
+
+   ```sh
+   yugabyte ALL=(ALL:ALL) NOPASSWD: /bin/systemctl start yb-master, \
+   /bin/systemctl stop yb-master, \
+   /bin/systemctl restart yb-master, \
+   /bin/systemctl enable yb-master, \
+   /bin/systemctl disable yb-master, \
+   /bin/systemctl start yb-tserver, \
+   /bin/systemctl stop yb-tserver, \
+   /bin/systemctl restart yb-tserver, \
+   /bin/systemctl enable yb-tserver, \
+   /bin/systemctl disable yb-tserver, \
+   /bin/systemctl start yb-zip_purge_yb_logs.timer, \
+   /bin/systemctl stop yb-zip_purge_yb_logs.timer, \
+   /bin/systemctl restart yb-zip_purge_yb_logs.timer, \
+   /bin/systemctl enable yb-zip_purge_yb_logs.timer, \
+   /bin/systemctl disable yb-zip_purge_yb_logs.timer, \
+   /bin/systemctl start yb-clean_cores.timer, \
+   /bin/systemctl stop yb-clean_cores.timer, \
+   /bin/systemctl restart yb-clean_cores.timer, \
+   /bin/systemctl enable yb-clean_cores.timer, \
+   /bin/systemctl disable yb-clean_cores.timer, \
+   /bin/systemctl start yb-collect_metrics.timer, \
+   /bin/systemctl stop yb-collect_metrics.timer, \
+   /bin/systemctl restart yb-collect_metrics.timer, \
+   /bin/systemctl enable yb-collect_metrics.timer, \
+   /bin/systemctl disable yb-collect_metrics.timer, \
+   /bin/systemctl start yb-zip_purge_yb_logs, \
+   /bin/systemctl stop yb-zip_purge_yb_logs, \
+   /bin/systemctl restart yb-zip_purge_yb_logs, \
+   /bin/systemctl enable yb-zip_purge_yb_logs, \
+   /bin/systemctl disable yb-zip_purge_yb_logs, \
+   /bin/systemctl start yb-clean_cores, \
+   /bin/systemctl stop yb-clean_cores, \
+   /bin/systemctl restart yb-clean_cores, \
+   /bin/systemctl enable yb-clean_cores, \
+   /bin/systemctl disable yb-clean_cores, \
+   /bin/systemctl start yb-collect_metrics, \
+   /bin/systemctl stop yb-collect_metrics, \
+   /bin/systemctl restart yb-collect_metrics, \
+   /bin/systemctl enable yb-collect_metrics, \
+   /bin/systemctl disable yb-collect_metrics, \
+   /bin/systemctl daemon-reload
+   ```
+
+2. Ensure that you have root access and add the following service and timer files to the `/etc/systemd/system` directory (set their ownerships to the `yugabyte` user and 0644 permissions):<br><br>
+
+   `yb-master.service`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte master service
+   Requires=network-online.target
+   After=network.target network-online.target multi-user.target
+   StartLimitInterval=100
+   StartLimitBurst=10
+   
+   [Path]
+   PathExists=/home/yugabyte/master/bin/yb-master
+   PathExists=/home/yugabyte/master/conf/server.conf
+   
+   [Service]
+   User=yugabyte
+   Group=yugabyte
+   # Start
+   ExecStart=/home/yugabyte/master/bin/yb-master --flagfile /home/yugabyte/master/conf/server.conf
+   Restart=on-failure
+   RestartSec=5
+   # Stop -> SIGTERM - 10s - SIGKILL (if not stopped) [matches existing cron behavior]
+   KillMode=process
+   TimeoutStopFailureMode=terminate
+   KillSignal=SIGTERM
+   TimeoutStopSec=10
+   FinalKillSignal=SIGKILL
+   # Logs
+   StandardOutput=syslog
+   StandardError=syslog
+   # ulimit
+   LimitCORE=infinity
+   LimitNOFILE=1048576
+   LimitNPROC=12000
+   
+   [Install]
+   WantedBy=default.target
+   ```
+
+   <br><br>
+
+   `yb-tserver.service`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte tserver service
+   Requires=network-online.target
+   After=network.target network-online.target multi-user.target
+   StartLimitInterval=100
+   StartLimitBurst=10
+   
+   [Path]
+   PathExists=/home/yugabyte/tserver/bin/yb-tserver
+   PathExists=/home/yugabyte/tserver/conf/server.conf
+   
+   [Service]
+   User=yugabyte
+   Group=yugabyte
+   # Start
+   ExecStart=/home/yugabyte/tserver/bin/yb-tserver --flagfile /home/yugabyte/tserver/conf/server.conf
+   Restart=on-failure
+   RestartSec=5
+   # Stop -> SIGTERM - 10s - SIGKILL (if not stopped) [matches existing cron behavior]
+   KillMode=process
+   TimeoutStopFailureMode=terminate
+   KillSignal=SIGTERM
+   TimeoutStopSec=10
+   FinalKillSignal=SIGKILL
+   # Logs
+   StandardOutput=syslog
+   StandardError=syslog
+   # ulimit
+   LimitCORE=infinity
+   LimitNOFILE=1048576
+   LimitNPROC=12000
+   
+   [Install]
+   WantedBy=default.target
+   ```
+
+   <br><br>`yb-zip_purge_yb_logs.service`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte logs
+   Wants=yb-zip_purge_yb_logs.timer
+   
+   [Service]
+   User=yugabyte
+   Group=yugabyte
+   Type=oneshot
+   WorkingDirectory=/home/yugabyte/bin
+   ExecStart=/bin/sh /home/yugabyte/bin/zip_purge_yb_logs.sh
+   
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   <br><br>
+
+   `yb-zip_purge_yb_logs.timer`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte logs
+   Requires=yb-zip_purge_yb_logs.service
+   
+   [Timer]
+   User=yugabyte
+   Group=yugabyte
+   Unit=yb-zip_purge_yb_logs.service
+   # Run hourly at minute 0 (beginning) of every hour
+   OnCalendar=00/1:00
+   
+   [Install]
+   WantedBy=timers.target
+   ```
+
+   <br><br>
+
+   `yb-clean_cores.service`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte clean cores
+   Wants=yb-clean_cores.timer
+   
+   [Service]
+   User=yugabyte
+   Group=yugabyte
+   Type=oneshot
+   WorkingDirectory=/home/yugabyte/bin
+   ExecStart=/bin/sh /home/yugabyte/bin/clean_cores.sh
+   
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   <br><br>
+
+   `yb-clean_cores.timer`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte clean cores
+   Requires=yb-clean_cores.service
+   
+   [Timer]
+   User=yugabyte
+   Group=yugabyte
+   Unit=yb-clean_cores.service
+   # Run every 10 minutes offset by 5 (5, 15, 25...)
+   OnCalendar=*:0/10:30
+   
+   [Install]
+   WantedBy=timers.target
+   ```
+
+   <br><br>
+
+   `yb-collect_metrics.service`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte collect metrics
+   Wants=yb-collect_metrics.timer
+   
+   [Service]
+   User=yugabyte
+   Group=yugabyte
+   Type=oneshot
+   WorkingDirectory=/home/yugabyte/bin
+   ExecStart=/bin/bash /home/yugabyte/bin/collect_metrics_wrapper.sh
+   
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   <br><br>
+
+   `yb-collect_metrics.timer`
+
+   ```sh
+   [Unit]
+   Description=Yugabyte collect metrics
+   Requires=yb-collect_metrics.service
+   
+   [Timer]
+   User=yugabyte
+   Group=yugabyte
+   Unit=yb-collect_metrics.service
+   # Run every 1 minute
+   OnCalendar=*:0/1:0
+   
+   [Install]
+   WantedBy=timers.target
+   ```
+
+## 

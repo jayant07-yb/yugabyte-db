@@ -13,12 +13,12 @@ import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType;
 import com.yugabyte.yw.common.TestHelper;
+import com.yugabyte.yw.common.certmgmt.CertConfigType;
 import com.yugabyte.yw.common.certmgmt.EncryptionInTransitUtil;
 import com.yugabyte.yw.forms.CertsRotateParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
@@ -47,7 +47,6 @@ import org.mockito.InjectMocks;
 import org.mockito.MockitoAnnotations;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import com.yugabyte.yw.common.certmgmt.CertConfigType;
 
 @RunWith(JUnitParamsRunner.class)
 public class CertsRotateTest extends UpgradeTaskTest {
@@ -86,8 +85,8 @@ public class CertsRotateTest extends UpgradeTaskTest {
           TaskType.SetNodeState,
           TaskType.AnsibleClusterServerCtl,
           TaskType.AnsibleClusterServerCtl,
-          TaskType.SetNodeState,
-          TaskType.WaitForServer);
+          TaskType.WaitForServer,
+          TaskType.SetNodeState);
 
   @Override
   @Before
@@ -166,11 +165,9 @@ public class CertsRotateTest extends UpgradeTaskTest {
         assertTaskType(subTasksByPosition.get(position++), TaskType.UniverseSetTlsParams);
       }
     } else {
-      // Non-root CA updates require a ModifyBlackList task at position 0.
-      int numTasksToAssert = position == 0 ? 4 : 3;
       List<TaskInfo> certUpdateTasks = subTasksByPosition.get(position++);
       assertTaskType(certUpdateTasks, TaskType.AnsibleConfigureServers);
-      assertEquals(numTasksToAssert, certUpdateTasks.size());
+      assertEquals(3, certUpdateTasks.size());
     }
     return position;
   }
@@ -324,6 +321,85 @@ public class CertsRotateTest extends UpgradeTaskTest {
     return taskParams;
   }
 
+  private CertsRotateParams getTaskParamsForSelfSignedServerCertRotation(
+      boolean selfSignedServerCertRotate, boolean selfSignedClientCertRotate, boolean isRolling) {
+    CertsRotateParams taskParams = new CertsRotateParams();
+    taskParams.upgradeOption =
+        isRolling ? UpgradeOption.ROLLING_UPGRADE : UpgradeOption.NON_ROLLING_UPGRADE;
+    taskParams.selfSignedServerCertRotate = selfSignedServerCertRotate;
+    taskParams.selfSignedClientCertRotate = selfSignedClientCertRotate;
+    return taskParams;
+  }
+
+  public static Object[] getTestParameters() {
+    return new Object[] {
+      new Object[] {false, false, false, false, false, false},
+      new Object[] {false, false, false, false, false, true},
+      new Object[] {false, false, false, false, true, false},
+      new Object[] {false, false, false, false, true, true},
+      new Object[] {false, false, false, true, false, false},
+      new Object[] {false, false, false, true, false, true},
+      new Object[] {false, false, false, true, true, false},
+      new Object[] {false, false, false, true, true, true},
+      new Object[] {false, false, true, false, false, false},
+      new Object[] {false, false, true, false, false, true},
+      new Object[] {false, false, true, false, true, false},
+      new Object[] {false, false, true, false, true, true},
+      new Object[] {false, false, true, true, false, false},
+      new Object[] {false, false, true, true, false, true},
+      new Object[] {false, false, true, true, true, false},
+      new Object[] {false, false, true, true, true, true},
+      new Object[] {false, true, false, false, false, false},
+      new Object[] {false, true, false, false, false, true},
+      new Object[] {false, true, false, false, true, false},
+      new Object[] {false, true, false, false, true, true},
+      new Object[] {false, true, false, true, false, false},
+      new Object[] {false, true, false, true, false, true},
+      new Object[] {false, true, false, true, true, false},
+      new Object[] {false, true, false, true, true, true},
+      new Object[] {false, true, true, false, false, false},
+      new Object[] {false, true, true, false, false, true},
+      new Object[] {false, true, true, false, true, false},
+      new Object[] {false, true, true, false, true, true},
+      new Object[] {false, true, true, true, false, false},
+      new Object[] {false, true, true, true, false, true},
+      new Object[] {false, true, true, true, true, false},
+      new Object[] {false, true, true, true, true, true},
+      new Object[] {true, false, false, false, false, false},
+      new Object[] {true, false, false, false, false, true},
+      new Object[] {true, false, false, false, true, false},
+      new Object[] {true, false, false, false, true, true},
+      new Object[] {true, false, false, true, false, false},
+      new Object[] {true, false, false, true, false, true},
+      new Object[] {true, false, false, true, true, false},
+      new Object[] {true, false, false, true, true, true},
+      new Object[] {true, false, true, false, false, false},
+      new Object[] {true, false, true, false, false, true},
+      new Object[] {true, false, true, false, true, false},
+      new Object[] {true, false, true, false, true, true},
+      new Object[] {true, false, true, true, false, false},
+      new Object[] {true, false, true, true, false, true},
+      new Object[] {true, false, true, true, true, false},
+      new Object[] {true, false, true, true, true, true},
+      new Object[] {true, true, false, false, false, false},
+      new Object[] {true, true, false, false, false, true},
+      new Object[] {true, true, false, false, true, false},
+      new Object[] {true, true, false, false, true, true},
+      new Object[] {true, true, false, true, false, false},
+      new Object[] {true, true, false, true, false, true},
+      new Object[] {true, true, false, true, true, false},
+      new Object[] {true, true, false, true, true, true},
+      new Object[] {true, true, true, false, false, false},
+      new Object[] {true, true, true, false, false, true},
+      new Object[] {true, true, true, false, true, false},
+      new Object[] {true, true, true, false, true, true},
+      new Object[] {true, true, true, true, false, false},
+      new Object[] {true, true, true, true, false, true},
+      new Object[] {true, true, true, true, true, false},
+      new Object[] {true, true, true, true, true, true}
+    };
+  }
+
   @Test
   public void testCertsRotateNonRestartUpgrade() throws IOException, NoSuchAlgorithmException {
     CertsRotateParams taskParams =
@@ -339,72 +415,7 @@ public class CertsRotateTest extends UpgradeTaskTest {
   }
 
   @Test
-  @Parameters({
-    "false, false, false, false, false, false",
-    "false, false, false, false, false, true",
-    "false, false, false, false, true, false",
-    "false, false, false, false, true, true",
-    "false, false, false, true, false, false",
-    "false, false, false, true, false, true",
-    "false, false, false, true, true, false",
-    "false, false, false, true, true, true",
-    "false, false, true, false, false, false",
-    "false, false, true, false, false, true",
-    "false, false, true, false, true, false",
-    "false, false, true, false, true, true",
-    "false, false, true, true, false, false",
-    "false, false, true, true, false, true",
-    "false, false, true, true, true, false",
-    "false, false, true, true, true, true",
-    "false, true, false, false, false, false",
-    "false, true, false, false, false, true",
-    "false, true, false, false, true, false",
-    "false, true, false, false, true, true",
-    "false, true, false, true, false, false",
-    "false, true, false, true, false, true",
-    "false, true, false, true, true, false",
-    "false, true, false, true, true, true",
-    "false, true, true, false, false, false",
-    "false, true, true, false, false, true",
-    "false, true, true, false, true, false",
-    "false, true, true, false, true, true",
-    "false, true, true, true, false, false",
-    "false, true, true, true, false, true",
-    "false, true, true, true, true, false",
-    "false, true, true, true, true, true",
-    "true, false, false, false, false, false",
-    "true, false, false, false, false, true",
-    "true, false, false, false, true, false",
-    "true, false, false, false, true, true",
-    "true, false, false, true, false, false",
-    "true, false, false, true, false, true",
-    "true, false, false, true, true, false",
-    "true, false, false, true, true, true",
-    "true, false, true, false, false, false",
-    "true, false, true, false, false, true",
-    "true, false, true, false, true, false",
-    "true, false, true, false, true, true",
-    "true, false, true, true, false, false",
-    "true, false, true, true, false, true",
-    "true, false, true, true, true, false",
-    "true, false, true, true, true, true",
-    "true, true, false, false, false, false",
-    "true, true, false, false, false, true",
-    "true, true, false, false, true, false",
-    "true, true, false, false, true, true",
-    "true, true, false, true, false, false",
-    "true, true, false, true, false, true",
-    "true, true, false, true, true, false",
-    "true, true, false, true, true, true",
-    "true, true, true, false, false, false",
-    "true, true, true, false, false, true",
-    "true, true, true, false, true, false",
-    "true, true, true, false, true, true",
-    "true, true, true, true, false, false",
-    "true, true, true, true, false, true",
-    "true, true, true, true, true, false",
-    "true, true, true, true, true, true",
-  })
+  @Parameters(method = "getTestParameters")
   public void testCertsRotateNonRollingUpgrade(
       boolean currentNodeToNode,
       boolean currentClientToNode,
@@ -503,72 +514,7 @@ public class CertsRotateTest extends UpgradeTaskTest {
   }
 
   @Test
-  @Parameters({
-    "false, false, false, false, false, false",
-    "false, false, false, false, false, true",
-    "false, false, false, false, true, false",
-    "false, false, false, false, true, true",
-    "false, false, false, true, false, false",
-    "false, false, false, true, false, true",
-    "false, false, false, true, true, false",
-    "false, false, false, true, true, true",
-    "false, false, true, false, false, false",
-    "false, false, true, false, false, true",
-    "false, false, true, false, true, false",
-    "false, false, true, false, true, true",
-    "false, false, true, true, false, false",
-    "false, false, true, true, false, true",
-    "false, false, true, true, true, false",
-    "false, false, true, true, true, true",
-    "false, true, false, false, false, false",
-    "false, true, false, false, false, true",
-    "false, true, false, false, true, false",
-    "false, true, false, false, true, true",
-    "false, true, false, true, false, false",
-    "false, true, false, true, false, true",
-    "false, true, false, true, true, false",
-    "false, true, false, true, true, true",
-    "false, true, true, false, false, false",
-    "false, true, true, false, false, true",
-    "false, true, true, false, true, false",
-    "false, true, true, false, true, true",
-    "false, true, true, true, false, false",
-    "false, true, true, true, false, true",
-    "false, true, true, true, true, false",
-    "false, true, true, true, true, true",
-    "true, false, false, false, false, false",
-    "true, false, false, false, false, true",
-    "true, false, false, false, true, false",
-    "true, false, false, false, true, true",
-    "true, false, false, true, false, false",
-    "true, false, false, true, false, true",
-    "true, false, false, true, true, false",
-    "true, false, false, true, true, true",
-    "true, false, true, false, false, false",
-    "true, false, true, false, false, true",
-    "true, false, true, false, true, false",
-    "true, false, true, false, true, true",
-    "true, false, true, true, false, false",
-    "true, false, true, true, false, true",
-    "true, false, true, true, true, false",
-    "true, false, true, true, true, true",
-    "true, true, false, false, false, false",
-    "true, true, false, false, false, true",
-    "true, true, false, false, true, false",
-    "true, true, false, false, true, true",
-    "true, true, false, true, false, false",
-    "true, true, false, true, false, true",
-    "true, true, false, true, true, false",
-    "true, true, false, true, true, true",
-    "true, true, true, false, false, false",
-    "true, true, true, false, false, true",
-    "true, true, true, false, true, false",
-    "true, true, true, false, true, true",
-    "true, true, true, true, false, false",
-    "true, true, true, true, false, true",
-    "true, true, true, true, true, false",
-    "true, true, true, true, true, true",
-  })
+  @Parameters(method = "getTestParameters")
   public void testCertsRotateRollingUpgrade(
       boolean currentNodeToNode,
       boolean currentClientToNode,
@@ -678,6 +624,85 @@ public class CertsRotateTest extends UpgradeTaskTest {
         rootAndClientRootCASame,
         rotateRootCA,
         rotateClientRootCA,
+        isRootCARequired,
+        isClientRootCARequired);
+  }
+
+  @Test
+  @Parameters(method = "getTestParameters")
+  public void testCertsRotateSelfSignedServerCert(
+      boolean currentNodeToNode,
+      boolean currentClientToNode,
+      boolean currentRootAndClientRootCASame,
+      boolean selfSignedServerCertRotate,
+      boolean selfSignedClientCertRotate,
+      boolean isRolling)
+      throws IOException, NoSuchAlgorithmException {
+    UUID rootCA = UUID.randomUUID();
+    UUID clientRootCA = UUID.randomUUID();
+    prepareUniverse(
+        currentNodeToNode,
+        currentClientToNode,
+        currentRootAndClientRootCASame,
+        rootCA,
+        clientRootCA);
+    CertsRotateParams taskParams =
+        getTaskParamsForSelfSignedServerCertRotation(
+            selfSignedServerCertRotate, selfSignedClientCertRotate, isRolling);
+
+    TaskInfo taskInfo = submitTask(taskParams);
+    if (taskInfo == null) {
+      fail();
+    }
+
+    boolean isRootCARequired =
+        EncryptionInTransitUtil.isRootCARequired(
+            currentNodeToNode, currentClientToNode, currentRootAndClientRootCASame);
+    boolean isClientRootCARequired =
+        EncryptionInTransitUtil.isClientRootCARequired(
+            currentNodeToNode, currentClientToNode, currentRootAndClientRootCASame);
+
+    // Expected failure scenarios
+    if (!((isRootCARequired && selfSignedServerCertRotate)
+        || (isClientRootCARequired && selfSignedClientCertRotate))) {
+      assertEquals(Failure, taskInfo.getTaskState());
+      assertEquals(1, taskInfo.getSubTasks().size());
+      verify(mockNodeManager, times(0)).nodeCommand(any(), any());
+      return;
+    }
+
+    assertEquals(100.0, taskInfo.getPercentCompleted(), 0);
+    assertEquals(Success, taskInfo.getTaskState());
+
+    List<TaskInfo> subTasks = taskInfo.getSubTasks();
+    Map<Integer, List<TaskInfo>> subTasksByPosition =
+        subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
+
+    int position = 0;
+    // RootCA update task
+    int expectedPosition = isRolling ? 62 : 14;
+    // Cert update tasks
+    position = assertCommonTasks(subTasksByPosition, position, false, false);
+    // gflags update tasks
+    position = assertCommonTasks(subTasksByPosition, position, false, false);
+    position = assertCommonTasks(subTasksByPosition, position, false, false);
+    // Restart tasks
+    position = assertRestartSequence(subTasksByPosition, position, isRolling);
+    // Update universe params task
+    position = assertCommonTasks(subTasksByPosition, position, false, true);
+
+    assertEquals(expectedPosition, position);
+    verify(mockNodeManager, times(21)).nodeCommand(any(), any());
+
+    assertUniverseDetails(
+        taskParams,
+        rootCA,
+        clientRootCA,
+        currentNodeToNode,
+        currentClientToNode,
+        currentRootAndClientRootCASame,
+        false,
+        false,
         isRootCARequired,
         isClientRootCARequired);
   }

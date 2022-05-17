@@ -293,13 +293,14 @@ class YBClient {
   CHECKED_STATUS GetTableSchemaById(const TableId& table_id, std::shared_ptr<YBTableInfo> info,
                                     StatusCallback callback);
 
-  CHECKED_STATUS GetTablegroupSchemaById(const TablegroupId& parent_tablegroup_table_id,
+  CHECKED_STATUS GetTablegroupSchemaById(const TablegroupId& tablegroup_id,
                                          std::shared_ptr<std::vector<YBTableInfo>> info,
                                          StatusCallback callback);
 
-  CHECKED_STATUS GetColocatedTabletSchemaById(const TableId& parent_colocated_table_id,
-                                              std::shared_ptr<std::vector<YBTableInfo>> info,
-                                              StatusCallback callback);
+  CHECKED_STATUS GetColocatedTabletSchemaByParentTableId(
+      const TableId& parent_colocated_table_id,
+      std::shared_ptr<std::vector<YBTableInfo>> info,
+      StatusCallback callback);
 
   Result<IndexPermissions> GetIndexPermissions(
       const TableId& table_id,
@@ -414,15 +415,12 @@ class YBClient {
   Result<bool> NamespaceIdExists(const std::string& namespace_id,
                                  const boost::optional<YQLDatabase>& database_type = boost::none);
 
-  // Create a new tablegroup.
   CHECKED_STATUS CreateTablegroup(const std::string& namespace_name,
                                   const std::string& namespace_id,
                                   const std::string& tablegroup_id,
                                   const std::string& tablespace_id);
 
-  // Delete a tablegroup.
-  CHECKED_STATUS DeleteTablegroup(const std::string& namespace_id,
-                                  const std::string& tablegroup_id);
+  CHECKED_STATUS DeleteTablegroup(const std::string& tablegroup_id);
 
   // Check if the tablegroup given by 'tablegroup_id' exists.
   // Result value is set only on success.
@@ -533,6 +531,9 @@ class YBClient {
   CHECKED_STATUS UpdateCDCStream(const CDCStreamId& stream_id,
                                  const master::SysCDCStreamEntryPB& new_entry);
 
+  Result<bool> IsBootstrapRequired(const TableId& table_id,
+                                   const boost::optional<CDCStreamId>& stream_id = boost::none);
+
   // Update consumer pollers after a producer side tablet split.
   CHECKED_STATUS UpdateConsumerOnProducerSplit(const string& producer_id,
                                                const TableId& table_id,
@@ -642,7 +643,9 @@ class YBClient {
 
   // Creates a transaction status table. 'table_name' is required to start with
   // kTransactionTablePrefix.
-  CHECKED_STATUS CreateTransactionsStatusTable(const std::string& table_name);
+  CHECKED_STATUS CreateTransactionsStatusTable(
+      const std::string& table_name,
+      const master::ReplicationInfoPB* replication_info = nullptr);
 
   // Open the table with the given name or id. This will do an RPC to ensure that
   // the table exists and look up its schema.
@@ -740,7 +743,7 @@ class YBClient {
                         LookupTabletCallback callback,
                         UseCache use_cache);
 
-  void LookupAllTablets(const std::shared_ptr<const YBTable>& table,
+  void LookupAllTablets(const std::shared_ptr<YBTable>& table,
                         CoarseTimePoint deadline,
                         LookupTabletRangeCallback callback);
 
@@ -750,7 +753,7 @@ class YBClient {
       CoarseTimePoint deadline);
 
   std::future<Result<std::vector<internal::RemoteTabletPtr>>> LookupAllTabletsFuture(
-      const std::shared_ptr<const YBTable>& table,
+      const std::shared_ptr<YBTable>& table,
       CoarseTimePoint deadline);
 
   rpc::Messenger* messenger() const;
@@ -774,6 +777,8 @@ class YBClient {
       const TabletId& tablet_id, RetryableRequestId min_running_request_id);
 
   void Shutdown();
+
+  const std::string& LogPrefix() const;
 
  private:
   class Data;

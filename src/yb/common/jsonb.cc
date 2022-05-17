@@ -49,9 +49,6 @@ Jsonb::Jsonb(std::string&& jsonb)
     : serialized_jsonb_(std::move(jsonb)) {
 }
 
-void Jsonb::Assign(const std::string& jsonb) {
-  serialized_jsonb_ = jsonb;
-}
 
 void Jsonb::Assign(std::string&& jsonb) {
   serialized_jsonb_ = std::move(jsonb);
@@ -90,10 +87,14 @@ Status Jsonb::FromRapidJson(const rapidjson::Value& value) {
   return FromRapidJson(document);
 }
 
-Status Jsonb::FromQLValuePB(const QLValuePB& value_pb) {
+Status Jsonb::FromQLValue(const QLValuePB& value_pb) {
   rapidjson::Document document;
   RETURN_NOT_OK(ConvertQLValuePBToRapidJson(value_pb, &document));
   return FromRapidJson(document);
+}
+
+Status Jsonb::FromQLValue(const QLValue& value) {
+  return FromQLValue(value.value());
 }
 
 std::pair<size_t, size_t> Jsonb::ComputeOffsetsAndJsonbHeader(size_t num_entries,
@@ -719,11 +720,13 @@ Status Jsonb::ApplyJsonbOperatorToObject(const Slice& jsonb, const QLJsonOperati
   return STATUS_SUBSTITUTE(NotFound, "Couldn't find key $0 in json document", search_key);
 }
 
-Status Jsonb::ApplyJsonbOperators(const QLJsonColumnOperationsPB& json_ops, QLValue* result) const {
+Status Jsonb::ApplyJsonbOperators(const std::string &serialized_json,
+                                  const QLJsonColumnOperationsPB& json_ops,
+                                  QLValuePB* result) {
   const int num_ops = json_ops.json_operations().size();
 
   Slice jsonop_result;
-  Slice operand(serialized_jsonb_);
+  Slice operand(serialized_json);
   JEntry element_metadata;
   for (int i = 0; i < num_ops; i++) {
     const QLJsonOperationPB &op = json_ops.json_operations().Get(i);
@@ -731,7 +734,7 @@ Status Jsonb::ApplyJsonbOperators(const QLJsonColumnOperationsPB& json_ops, QLVa
                                         &element_metadata);
     if (s.IsNotFound()) {
       // We couldn't apply the operator to the operand and hence return null as the result.
-      result->SetNull();
+      SetNull(result);
       return Status::OK();
     }
     RETURN_NOT_OK(s);
@@ -739,7 +742,7 @@ Status Jsonb::ApplyJsonbOperators(const QLJsonColumnOperationsPB& json_ops, QLVa
     if (IsScalar(element_metadata) && i != num_ops - 1) {
       // We have to apply another operation after this, but we received a scalar intermediate
       // result.
-      result->SetNull();
+      SetNull(result);
       return Status::OK();
     }
     operand = jsonop_result;

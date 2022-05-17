@@ -16,11 +16,13 @@ import com.yugabyte.yw.common.PlatformServiceException;
 import com.yugabyte.yw.forms.PlatformResults.YBPSuccess;
 import com.yugabyte.yw.forms.filters.ScheduleApiFilter;
 import com.yugabyte.yw.forms.paging.SchedulePagedApiQuery;
+import com.yugabyte.yw.models.Audit;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.Schedule;
 import com.yugabyte.yw.models.Schedule.State;
 import com.yugabyte.yw.models.ScheduleTask;
 import com.yugabyte.yw.models.filters.ScheduleFilter;
+import com.yugabyte.yw.models.paging.SchedulePagedApiResponse;
 import com.yugabyte.yw.models.paging.SchedulePagedQuery;
 import com.yugabyte.yw.models.paging.SchedulePagedResponse;
 import io.swagger.annotations.Api;
@@ -77,9 +79,7 @@ public class ScheduleController extends AuthenticatedController {
     ScheduleApiFilter apiFilter = apiQuery.getFilter();
     ScheduleFilter filter = apiFilter.toFilter().toBuilder().customerUUID(customerUUID).build();
     SchedulePagedQuery query = apiQuery.copyWithFilter(filter, SchedulePagedQuery.class);
-
-    SchedulePagedResponse schedules = Schedule.pagedList(query);
-
+    SchedulePagedApiResponse schedules = Schedule.pagedList(query);
     return PlatformResults.withData(schedules);
   }
 
@@ -102,7 +102,9 @@ public class ScheduleController extends AuthenticatedController {
 
     schedule.stopSchedule();
 
-    auditService().createAuditEntry(ctx(), request());
+    auditService()
+        .createAuditEntryWithReqBody(
+            ctx(), Audit.TargetType.Schedule, scheduleUUID.toString(), Audit.ActionType.Delete);
     return YBPSuccess.empty();
   }
 
@@ -136,14 +138,24 @@ public class ScheduleController extends AuthenticatedController {
       } else if (schedule.getStatus().equals(State.Active) && schedule.getRunningState()) {
         throw new PlatformServiceException(CONFLICT, "Cannot edit schedule as it is running.");
       } else if (params.frequency != null) {
+        if (params.frequencyTimeUnit == null) {
+          throw new PlatformServiceException(BAD_REQUEST, "Please provide time unit for frequency");
+        }
         BackupUtil.validateBackupFrequency(params.frequency);
         schedule.updateFrequency(params.frequency);
+        schedule.updateFrequencyTimeUnit(params.frequencyTimeUnit);
       } else if (params.cronExpression != null) {
         BackupUtil.validateBackupCronExpression(params.cronExpression);
         schedule.updateCronExpression(params.cronExpression);
       }
     }
-    auditService().createAuditEntry(ctx(), request());
+    auditService()
+        .createAuditEntryWithReqBody(
+            ctx(),
+            Audit.TargetType.Schedule,
+            scheduleUUID.toString(),
+            Audit.ActionType.Edit,
+            request().body().asJson());
     return PlatformResults.withData(schedule);
   }
 
@@ -160,7 +172,9 @@ public class ScheduleController extends AuthenticatedController {
     schedule.stopSchedule();
     ScheduleTask.getAllTasks(scheduleUUID).forEach((scheduleTask) -> scheduleTask.delete());
     schedule.delete();
-    auditService().createAuditEntry(ctx(), request());
+    auditService()
+        .createAuditEntryWithReqBody(
+            ctx(), Audit.TargetType.Schedule, scheduleUUID.toString(), Audit.ActionType.Delete);
     return YBPSuccess.empty();
   }
 }

@@ -175,7 +175,7 @@ Status YBInboundConnectionContext::HandleCall(
   auto reactor = connection->reactor();
   DCHECK(reactor->IsCurrentThread());
 
-  auto call = InboundCall::Create<YBInboundCall>(connection, call_processed_listener());
+  auto call = InboundCall::Create<YBInboundCall>(connection, this);
 
   Status s = call->ParseFrom(call_tracker(), call_data);
   if (!s.ok()) {
@@ -250,8 +250,8 @@ void YBInboundConnectionContext::HandleTimeout(ev::timer& watcher, int revents) 
   }
 }
 
-YBInboundCall::YBInboundCall(ConnectionPtr conn, CallProcessedListener call_processed_listener)
-    : InboundCall(std::move(conn), nullptr /* rpc_metrics */, std::move(call_processed_listener)) {}
+YBInboundCall::YBInboundCall(ConnectionPtr conn, CallProcessedListener* call_processed_listener)
+    : InboundCall(std::move(conn), nullptr /* rpc_metrics */, call_processed_listener) {}
 
 YBInboundCall::YBInboundCall(RpcMetrics* rpc_metrics, const RemoteMethod& remote_method)
     : InboundCall(nullptr /* conn */, rpc_metrics, nullptr /* call_processed_listener */) {
@@ -481,7 +481,11 @@ void YBInboundCall::Respond(AnyMessageConstPtr response, bool is_success) {
   TRACE_EVENT_FLOW_END0("rpc", "InboundCall", this);
   Status s = SerializeResponseBuffer(response, is_success);
   if (PREDICT_FALSE(!s.ok())) {
-    RespondFailure(ErrorStatusPB::ERROR_APPLICATION, s);
+    if (is_success) {
+      RespondFailure(ErrorStatusPB::ERROR_APPLICATION, s);
+    } else {
+      LOG(DFATAL) << "Failed to serialize failure: " << s;
+    }
     return;
   }
 

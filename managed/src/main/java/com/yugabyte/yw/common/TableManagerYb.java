@@ -14,13 +14,14 @@ import static com.yugabyte.yw.models.helpers.CustomerConfigConsts.BACKUP_LOCATIO
 
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
-import com.yugabyte.yw.common.BackupUtil;
+import com.yugabyte.yw.common.BackupUtil.RegionLocations;
 import com.yugabyte.yw.common.kms.util.EncryptionAtRestUtil;
 import com.yugabyte.yw.forms.BackupTableParams;
 import com.yugabyte.yw.forms.BulkImportParams;
 import com.yugabyte.yw.forms.TableManagerParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.Cluster;
+import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.UserIntent;
 import com.yugabyte.yw.models.AccessKey;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.CustomerConfig;
@@ -31,10 +32,13 @@ import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.PlacementInfo;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
+import org.apache.commons.lang.StringUtils;
 import org.yb.CommonTypes.TableType;
 import play.libs.Json;
 
@@ -58,8 +62,10 @@ public class TableManagerYb extends DevopsBase {
   }
 
   @Inject ReleaseManager releaseManager;
+  @Inject BackupUtil backupUtil;
 
-  public ShellResponse runCommand(CommandSubType subType, TableManagerParams taskParams) {
+  public ShellResponse runCommand(CommandSubType subType, TableManagerParams taskParams)
+      throws PlatformServiceException {
     Universe universe = Universe.getOrBadRequest(taskParams.universeUUID);
     Cluster primaryCluster = universe.getUniverseDetails().getPrimaryCluster();
     Region region = Region.get(primaryCluster.userIntent.regionList.get(0));
@@ -72,6 +78,7 @@ public class TableManagerYb extends DevopsBase {
     Map<String, String> extraVars = region.provider.getUnmaskedConfig();
     Map<String, String> namespaceToConfig = new HashMap<>();
     Map<String, String> secondaryToPrimaryIP = new HashMap<>();
+    Map<String, String> ipToSshKeyPath = new HashMap<>();
 
     boolean nodeToNodeTlsEnabled = userIntent.enableNodeToNodeEncrypt;
 
@@ -80,6 +87,20 @@ public class TableManagerYb extends DevopsBase {
       namespaceToConfig =
           PlacementInfoUtil.getConfigPerNamespace(
               pi, universe.getUniverseDetails().nodePrefix, provider);
+    } else {
+      // Populate the map so that we use the correct SSH Keys for the different
+      // nodes in different clusters.
+      for (Cluster cluster : universe.getUniverseDetails().clusters) {
+        UserIntent clusterUserIntent = cluster.userIntent;
+        Provider clusterProvider = Provider.getOrBadRequest(UUID.fromString(userIntent.provider));
+        AccessKey accessKeyForCluster =
+            AccessKey.getOrBadRequest(clusterProvider.uuid, clusterUserIntent.accessKeyCode);
+        Collection<NodeDetails> nodesInCluster = universe.getNodesInCluster(cluster.uuid);
+        for (NodeDetails nodeInCluster : nodesInCluster) {
+          ipToSshKeyPath.put(
+              nodeInCluster.cloudInfo.private_ip, accessKeyForCluster.getKeyInfo().privateKey);
+        }
+      }
     }
 
     List<NodeDetails> tservers = universe.getTServers();
@@ -128,6 +149,9 @@ public class TableManagerYb extends DevopsBase {
           } else {
             commandArgs.add(taskParams.getKeyspace());
           }
+          if (runtimeConfigFactory.forUniverse(universe).getBoolean("yb.backup.pg_based")) {
+            commandArgs.add("--pg_based_backup");
+          }
         }
         commandArgs.add("--no_auto_name");
         if (taskParams.sse) {
@@ -135,6 +159,23 @@ public class TableManagerYb extends DevopsBase {
         }
         customer = Customer.find.query().where().idEq(universe.customerId).findOne();
         customerConfig = CustomerConfig.get(customer.uuid, backupTableParams.storageConfigUUID);
+
+        if (!customerConfig.name.toLowerCase().equals("nfs")) {
+          List<RegionLocations> regionLocations =
+              backupUtil.getRegionLocationsList(customerConfig.getData());
+
+          for (RegionLocations regionLocation : regionLocations) {
+            if (StringUtils.isNotBlank(regionLocation.REGION)
+                && StringUtils.isNotBlank(regionLocation.LOCATION)) {
+              commandArgs.add("--region");
+              commandArgs.add(regionLocation.REGION);
+              commandArgs.add("--region_location");
+              commandArgs.add(
+                  BackupUtil.getExactRegionLocation(backupTableParams, regionLocation.LOCATION));
+            }
+          }
+        }
+
         backupKeysFile =
             EncryptionAtRestUtil.getUniverseBackupKeysFile(backupTableParams.storageLocation);
         if (backupKeysFile.exists()) {
@@ -149,6 +190,7 @@ public class TableManagerYb extends DevopsBase {
             provider,
             namespaceToConfig,
             nodeToNodeTlsEnabled,
+            ipToSshKeyPath,
             commandArgs);
         commandArgs.add("create");
         extraVars.putAll(customerConfig.dataAsMap());
@@ -204,6 +246,7 @@ public class TableManagerYb extends DevopsBase {
             provider,
             namespaceToConfig,
             nodeToNodeTlsEnabled,
+            ipToSshKeyPath,
             commandArgs);
         commandArgs.add("delete");
         extraVars.putAll(customerConfig.dataAsMap());
@@ -228,6 +271,7 @@ public class TableManagerYb extends DevopsBase {
       Provider provider,
       Map<String, String> namespaceToConfig,
       boolean nodeToNodeTlsEnabled,
+      Map<String, String> ipToSshKeyPath,
       List<String> commandArgs) {
     if (region.provider.code.equals("kubernetes")) {
       commandArgs.add("--k8s_config");
@@ -237,6 +281,10 @@ public class TableManagerYb extends DevopsBase {
       commandArgs.add(accessKey.getKeyInfo().sshPort.toString());
       commandArgs.add("--ssh_key_path");
       commandArgs.add(accessKey.getKeyInfo().privateKey);
+      if (!ipToSshKeyPath.isEmpty()) {
+        commandArgs.add("--ip_to_ssh_key_path");
+        commandArgs.add(Json.stringify(Json.toJson(ipToSshKeyPath)));
+      }
     }
     commandArgs.add("--backup_location");
     commandArgs.add(backupTableParams.storageLocation);
@@ -252,6 +300,12 @@ public class TableManagerYb extends DevopsBase {
     }
     if (backupTableParams.enableVerboseLogs) {
       commandArgs.add("--verbose");
+    }
+    if (backupTableParams.useTablespaces) {
+      commandArgs.add("--use_tablespaces");
+    }
+    if (backupTableParams.disableChecksum) {
+      commandArgs.add("--disable_checksums");
     }
   }
 

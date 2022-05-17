@@ -36,6 +36,16 @@ using namespace std::literals;
 namespace yb {
 namespace pgwrapper {
 
+const std::string& DefaultColumnSeparator() {
+  static const std::string result = ", ";
+  return result;
+}
+
+const std::string& DefaultRowSeparator() {
+  static const std::string result = "; ";
+  return result;
+}
+
 namespace {
 
 // Converts the given element of the ExecStatusType enum to a string.
@@ -161,7 +171,8 @@ Result<PGConn> PGConn::Connect(
 
 Result<PGConn> PGConn::Connect(const std::string& conn_str,
                                CoarseTimePoint deadline,
-                               bool simple_query_protocol) {
+                               bool simple_query_protocol,
+                               const boost::optional<std::string>& conn_str_for_log) {
   auto start = CoarseMonoClock::now();
   for (;;) {
     PGConnPtr result(PQconnectdb(conn_str.c_str()));
@@ -170,7 +181,9 @@ Result<PGConn> PGConn::Connect(const std::string& conn_str,
     }
     auto status = PQstatus(result.get());
     if (status == ConnStatusType::CONNECTION_OK) {
-      LOG(INFO) << "Connected to PG (" << conn_str << "), time taken: "
+      LOG(INFO) << "Connected to PG ("
+                << (conn_str_for_log.has_value() ? conn_str_for_log.value() : conn_str)
+                << "), time taken: "
                 << MonoDelta(CoarseMonoClock::Now() - start);
       return PGConn(std::move(result), simple_query_protocol);
     }
@@ -269,6 +282,34 @@ Result<PGResultPtr> PGConn::FetchMatrix(const std::string& command, int rows, in
   }
 
   return res;
+}
+
+Result<std::string> PGConn::FetchRowAsString(const std::string& command, const std::string& sep) {
+  auto res = VERIFY_RESULT(Fetch(command));
+
+  auto fetched_rows = PQntuples(res.get());
+  if (fetched_rows != 1) {
+    return STATUS_FORMAT(
+        RuntimeError, "Fetched $0 rows, while 1 expected", fetched_rows);
+  }
+
+  return RowToString(res.get(), 0, sep);
+}
+
+Result<std::string> PGConn::FetchAllAsString(
+    const std::string& command, const std::string& column_sep, const std::string& row_sep) {
+  auto res = VERIFY_RESULT(Fetch(command));
+
+  std::string result;
+  auto fetched_rows = PQntuples(res.get());
+  for (int i = 0; i != fetched_rows; ++i) {
+    if (i) {
+      result += row_sep;
+    }
+    result += VERIFY_RESULT(RowToString(res.get(), i, column_sep));
+  }
+
+  return result;
 }
 
 CHECKED_STATUS PGConn::StartTransaction(IsolationLevel isolation_level) {
@@ -486,18 +527,22 @@ Result<std::string> ToString(PGresult* result, int row, int column) {
   }
 }
 
-void LogResult(PGresult* result) {
+Result<std::string> RowToString(PGresult* result, int row, const std::string& sep) {
   int cols = PQnfields(result);
+  std::string line;
+  for (int col = 0; col != cols; ++col) {
+    if (col) {
+      line += sep;
+    }
+    line += CHECK_RESULT(ToString(result, row, col));
+  }
+  return line;
+}
+
+void LogResult(PGresult* result) {
   int rows = PQntuples(result);
   for (int row = 0; row != rows; ++row) {
-    std::string line;
-    for (int col = 0; col != cols; ++col) {
-      if (col) {
-        line += ", ";
-      }
-      line += CHECK_RESULT(ToString(result, row, col));
-    }
-    LOG(INFO) << line;
+    LOG(INFO) << RowToString(result, row);
   }
 }
 

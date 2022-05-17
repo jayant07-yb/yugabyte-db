@@ -67,6 +67,8 @@ public enum TaskType {
 
   CertsRotate("upgrade.CertsRotate"),
 
+  CertsRotateKubernetesUpgrade("upgrade.CertsRotateKubernetesUpgrade"),
+
   TlsToggle("upgrade.TlsToggle"),
 
   VMImageUpgrade("upgrade.VMImageUpgrade"),
@@ -224,6 +226,8 @@ public enum TaskType {
 
   XClusterConfigSync("subtasks.xcluster.XClusterConfigSync"),
 
+  XClusterConfigUpdateMasterAddresses("subtasks.xcluster.XClusterConfigUpdateMasterAddresses"),
+
   // Tasks belonging to subtasks.cloud classpath
   CloudAccessKeyCleanup("subtasks.cloud.CloudAccessKeyCleanup"),
 
@@ -276,6 +280,8 @@ public enum TaskType {
 
   CreateAlertDefinitions("subtasks.CreateAlertDefinitions"),
 
+  ManageAlertDefinitions("subtasks.ManageAlertDefinitions"),
+
   UniverseSetTlsParams("subtasks.UniverseSetTlsParams"),
 
   UniverseUpdateRootCert("subtasks.UniverseUpdateRootCert"),
@@ -302,7 +308,15 @@ public enum TaskType {
 
   ResizeNode("upgrade.ResizeNode"),
 
-  UpdateMountedDisks("subtasks.UpdateMountedDisks");
+  CheckMemory("subtasks.check.CheckMemory"),
+
+  UpdateMountedDisks("subtasks.UpdateMountedDisks"),
+
+  TransferXClusterCerts("subtasks.TransferXClusterCerts"),
+
+  CreateTableSpacesInUniverse("CreateTableSpacesInUniverse"),
+
+  CreateTableSpaces("subtasks.CreateTableSpaces");
 
   private String relativeClassPath;
 

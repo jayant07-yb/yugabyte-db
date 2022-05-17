@@ -37,6 +37,8 @@
 #include "yb/common/common_fwd.h"
 #include "yb/common/common_types.pb.h"
 
+#include "yb/docdb/docdb_fwd.h"
+
 #include "yb/encryption/encryption_fwd.h"
 
 #include "yb/gutil/macros.h"
@@ -91,8 +93,8 @@ class MiniTabletServer {
   void Shutdown();
   CHECKED_STATUS FlushTablets(
       tablet::FlushMode mode = tablet::FlushMode::kSync,
-      tablet::FlushFlags flags = tablet::FlushFlags::kAll);
-  CHECKED_STATUS CompactTablets();
+      tablet::FlushFlags flags = tablet::FlushFlags::kAllDbs);
+  CHECKED_STATUS CompactTablets(docdb::SkipFlush skip_flush = docdb::SkipFlush::kFalse);
   CHECKED_STATUS SwitchMemtables();
   CHECKED_STATUS CleanTabletLogs();
 

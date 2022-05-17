@@ -189,6 +189,8 @@ using yb::master::GetCDCStreamRequestPB;
 using yb::master::GetCDCStreamResponsePB;
 using yb::master::UpdateCDCStreamRequestPB;
 using yb::master::UpdateCDCStreamResponsePB;
+using yb::master::IsBootstrapRequiredRequestPB;
+using yb::master::IsBootstrapRequiredResponsePB;
 using yb::master::GetMasterClusterConfigRequestPB;
 using yb::master::GetMasterClusterConfigResponsePB;
 using yb::master::CreateTransactionStatusTableRequestPB;
@@ -497,9 +499,6 @@ Status YBClientBuilder::DoBuild(rpc::Messenger* messenger, std::unique_ptr<YBCli
 
   c->data_->meta_cache_.reset(new MetaCache(c.get()));
 
-  // Init local host names used for locality decisions.
-  RETURN_NOT_OK_PREPEND(c->data_->InitLocalHostNames(),
-                        "Could not determine local host names");
   c->data_->cloud_info_pb_ = data_->cloud_info_pb_;
   c->data_->uuid_ = data_->uuid_;
 
@@ -711,26 +710,27 @@ Status YBClient::GetTableSchemaById(const TableId& table_id, std::shared_ptr<YBT
   return data_->GetTableSchemaById(this, table_id, deadline, info, callback);
 }
 
-Status YBClient::GetTablegroupSchemaById(const TablegroupId& parent_tablegroup_table_id,
+Status YBClient::GetTablegroupSchemaById(const TablegroupId& tablegroup_id,
                                          std::shared_ptr<std::vector<YBTableInfo>> info,
                                          StatusCallback callback) {
   auto deadline = CoarseMonoClock::Now() + default_admin_operation_timeout();
   return data_->GetTablegroupSchemaById(this,
-                                        parent_tablegroup_table_id,
+                                        tablegroup_id,
                                         deadline,
                                         info,
                                         callback);
 }
 
-Status YBClient::GetColocatedTabletSchemaById(const TableId& parent_colocated_table_id,
-                                              std::shared_ptr<std::vector<YBTableInfo>> info,
-                                              StatusCallback callback) {
+Status YBClient::GetColocatedTabletSchemaByParentTableId(
+    const TableId& parent_colocated_table_id,
+    std::shared_ptr<std::vector<YBTableInfo>> info,
+    StatusCallback callback) {
   auto deadline = CoarseMonoClock::Now() + default_admin_operation_timeout();
-  return data_->GetColocatedTabletSchemaById(this,
-                                             parent_colocated_table_id,
-                                             deadline,
-                                             info,
-                                             callback);
+  return data_->GetColocatedTabletSchemaByParentTableId(this,
+                                                         parent_colocated_table_id,
+                                                         deadline,
+                                                         info,
+                                                         callback);
 }
 
 Result<IndexPermissions> YBClient::GetIndexPermissions(
@@ -1039,135 +1039,20 @@ Status YBClient::CreateTablegroup(const std::string& namespace_name,
                                   const std::string& namespace_id,
                                   const std::string& tablegroup_id,
                                   const std::string& tablespace_id) {
-  CreateTablegroupRequestPB req;
-  CreateTablegroupResponsePB resp;
-  req.set_id(tablegroup_id);
-  req.set_namespace_id(namespace_id);
-  req.set_namespace_name(namespace_name);
-
-  if (!tablespace_id.empty()) {
-    req.set_tablespace_id(tablespace_id);
-  }
-
-  int attempts = 0;
   auto deadline = CoarseMonoClock::Now() + default_admin_operation_timeout();
-
-  Status s = data_->SyncLeaderMasterRpc(
-      deadline, req, &resp, "CreateTablegroup", &MasterDdlProxy::CreateTablegroupAsync,
-      &attempts);
-
-  // This case should not happen but need to validate contents since fields are optional in PB.
-  if (!resp.has_parent_table_id() || !resp.has_parent_table_name()) {
-    return STATUS(NotFound, "Parent table information not found in CREATE TABLEGROUP response.");
-  }
-
-  const YBTableName table_name(YQL_DATABASE_PGSQL, namespace_name, resp.parent_table_name());
-
-  // Handle special cases based on resp.error().
-  if (resp.has_error()) {
-    LOG_IF(DFATAL, s.ok()) << "Expecting error status if response has error: " <<
-        resp.error().code() << " Status: " << resp.error().status().ShortDebugString();
-
-    if (resp.error().code() == master::MasterErrorPB::OBJECT_ALREADY_PRESENT && attempts > 1) {
-      // If the table already exists and the number of attempts is >
-      // 1, then it means we may have succeeded in creating the
-      // table, but client didn't receive the successful
-      // response (e.g., due to failure before the successful
-      // response could be sent back, or due to a I/O pause or a
-      // network blip leading to a timeout, etc...)
-      YBTableInfo info;
-
-      // A fix for https://yugabyte.atlassian.net/browse/ENG-529:
-      // If we've been retrying table creation, and the table is now in the process is being
-      // created, we can sometimes see an empty schema. Wait until the table is fully created
-      // before we compare the schema.
-      RETURN_NOT_OK_PREPEND(
-          data_->WaitForCreateTableToFinish(this, table_name, resp.parent_table_id(), deadline),
-          strings::Substitute("Failed waiting for table $0 to finish being created",
-                              table_name.ToString()));
-
-      RETURN_NOT_OK_PREPEND(
-          data_->GetTableSchema(this, table_name, deadline, &info),
-          strings::Substitute("Unable to check the schema of table $0", table_name.ToString()));
-
-      YBSchemaBuilder schemaBuilder;
-      schemaBuilder.AddColumn("parent_column")->Type(BINARY)->PrimaryKey()->NotNull();
-      YBSchema ybschema;
-      CHECK_OK(schemaBuilder.Build(&ybschema));
-
-      if (!ybschema.Equals(info.schema)) {
-         string msg = Format("Table $0 already exists with a different "
-                             "schema. Requested schema was: $1, actual schema is: $2",
-                             table_name,
-                             internal::GetSchema(ybschema),
-                             internal::GetSchema(info.schema));
-        LOG(ERROR) << msg;
-        return STATUS(AlreadyPresent, msg);
-      }
-
-      return Status::OK();
-    }
-
-    return StatusFromPB(resp.error().status());
-  }
-
-  // Wait for create table to finish.
-  RETURN_NOT_OK_PREPEND(
-      data_->WaitForCreateTableToFinish(this, table_name, resp.parent_table_id(), deadline),
-      strings::Substitute("Failed waiting for parent table $0 to finish being created",
-                          table_name.ToString()));
-
-  return Status::OK();
+  return data_->CreateTablegroup(this,
+                                 deadline,
+                                 namespace_name,
+                                 namespace_id,
+                                 tablegroup_id,
+                                 tablespace_id);
 }
 
-Status YBClient::DeleteTablegroup(const std::string& namespace_id,
-                                  const std::string& tablegroup_id) {
-  DeleteTablegroupRequestPB req;
-  DeleteTablegroupResponsePB resp;
-  req.set_id(tablegroup_id);
-  req.set_namespace_id(namespace_id);
-
-  int attempts = 0;
+Status YBClient::DeleteTablegroup(const std::string& tablegroup_id) {
   auto deadline = CoarseMonoClock::Now() + default_admin_operation_timeout();
-
-  Status s = data_->SyncLeaderMasterRpc(
-      deadline, req, &resp, "DeleteTablegroup", &MasterDdlProxy::DeleteTablegroupAsync,
-      &attempts);
-
-  // This case should not happen but need to validate contents since fields are optional in PB.
-  if (!resp.has_parent_table_id()) {
-    return STATUS(NotFound, "Parent table information not found in DELETE TABLEGROUP response.");
-  }
-
-  // Handle special cases based on resp.error().
-  if (resp.has_error()) {
-    LOG_IF(DFATAL, s.ok()) << "Expecting error status if response has error: " <<
-        resp.error().code() << " Status: " << resp.error().status().ShortDebugString();
-
-    if (resp.error().code() == master::MasterErrorPB::OBJECT_NOT_FOUND && attempts > 1) {
-      // A prior attempt to delete the table has succeeded, but
-      // appeared as a failure to the client due to, e.g., an I/O or
-      // network issue.
-      LOG(INFO) << "Parent table for tablegroup with ID " << tablegroup_id << " already deleted.";
-      return Status::OK();
-    } else {
-      return StatusFromPB(resp.error().status());
-    }
-  } else {
-    // Check the status only if the response has no error.
-    RETURN_NOT_OK(s);
-  }
-
-  // Spin until the table is deleted. Currently only waits till the table reaches DELETING state
-  // See github issue #5290
-  RETURN_NOT_OK_PREPEND(data_->WaitForDeleteTableToFinish(this,
-                                                          resp.parent_table_id(),
-                                                          deadline),
-      strings::Substitute("Failed waiting for parent table with id $0 to finish being deleted",
-                          resp.parent_table_id()));
-
-  LOG(INFO) << "Deleted parent table for tablegroup with ID " << tablegroup_id;
-  return Status::OK();
+  return data_->DeleteTablegroup(this,
+                                 deadline,
+                                 tablegroup_id);
 }
 
 Result<vector<master::TablegroupIdentifierPB>>
@@ -1194,7 +1079,6 @@ YBClient::ListTablegroups(const std::string& namespace_name) {
 
 Result<bool> YBClient::TablegroupExists(const std::string& namespace_name,
                                         const std::string& tablegroup_id) {
-
   for (const auto& tg : VERIFY_RESULT(ListTablegroups(namespace_name))) {
     if (tg.id().compare(tablegroup_id) == 0) {
       return true;
@@ -1358,7 +1242,7 @@ Status YBClient::GetPermissions(client::internal::PermissionsCache* permissions_
   GetPermissionsResponsePB resp;
   CALL_SYNC_LEADER_MASTER_RPC_EX(Dcl, req, resp, GetPermissions);
 
-  VLOG(1) << "Got permissions cache: " << resp.ShortDebugString();
+  VLOG_WITH_PREFIX(1) << "Got permissions cache: " << resp.ShortDebugString();
 
   // The first request is a special case. We always replace the cache since we don't have anything.
   if (!version) {
@@ -1584,6 +1468,28 @@ Status YBClient::UpdateCDCStream(const CDCStreamId& stream_id,
   return Status::OK();
 }
 
+Result<bool> YBClient::IsBootstrapRequired(const TableId& table_id,
+                                           const boost::optional<CDCStreamId>& stream_id) {
+  IsBootstrapRequiredRequestPB req;
+  IsBootstrapRequiredResponsePB resp;
+
+  req.add_table_ids(table_id);
+  if (stream_id) {
+    req.add_stream_ids(*stream_id);
+  }
+  CALL_SYNC_LEADER_MASTER_RPC_EX(Replication, req, resp, IsBootstrapRequired);
+
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  if (resp.results_size() != 1) {
+    return STATUS(IllegalState, Format("Expected 1 result, received: $0", resp.results_size()));
+  }
+
+  return resp.results(0).bootstrap_required();
+}
+
 Status YBClient::UpdateConsumerOnProducerSplit(
     const string& producer_id,
     const CDCStreamId& stream_id,
@@ -1766,6 +1672,7 @@ Status YBClient::ModifyTablePlacementInfo(const YBTableName& table_name,
     // TODO(bogdan): Figure out how to handle read replias and leader affinity.
     replication_info.clear_read_replicas();
     replication_info.clear_affinitized_leaders();
+    replication_info.clear_multi_affinitized_leaders();
   } else {
     // Table replication info exists, copy it over.
     replication_info.CopyFrom(table->replication_info().get());
@@ -1778,7 +1685,8 @@ Status YBClient::ModifyTablePlacementInfo(const YBTableName& table_name,
   return table_alterer->replication_info(replication_info)->Alter();
 }
 
-Status YBClient::CreateTransactionsStatusTable(const string& table_name) {
+Status YBClient::CreateTransactionsStatusTable(
+    const string& table_name, const master::ReplicationInfoPB* replication_info) {
   if (table_name.rfind(kTransactionTablePrefix, 0) != 0) {
     return STATUS_FORMAT(
         InvalidArgument, "Name '$0' for transaction table does not start with '$1'", table_name,
@@ -1787,6 +1695,9 @@ Status YBClient::CreateTransactionsStatusTable(const string& table_name) {
   master::CreateTransactionStatusTableRequestPB req;
   master::CreateTransactionStatusTableResponsePB resp;
   req.set_table_name(table_name);
+  if (replication_info) {
+    *req.mutable_replication_info() = *replication_info;
+  }
   CALL_SYNC_LEADER_MASTER_RPC_EX(Admin, req, resp, CreateTransactionStatusTable);
   return Status::OK();
 }
@@ -1953,7 +1864,7 @@ void YBClient::RequestFinished(const TabletId& tablet_id, RetryableRequestId req
   if (it != tablet.running_requests.end()) {
     tablet.running_requests.erase(it);
   } else {
-    LOG(DFATAL) << "RequestFinished called for an unknown request: "
+    LOG_WITH_PREFIX(DFATAL) << "RequestFinished called for an unknown request: "
                 << tablet_id << ", " << request_id;
   }
 }
@@ -1964,7 +1875,8 @@ void YBClient::MaybeUpdateMinRunningRequestId(
   auto& tablet = data_->tablet_requests_[tablet_id];
   if (tablet.request_id_seq == kInitializeFromMinRunning) {
     tablet.request_id_seq = min_running_request_id + (1 << 24);
-    VLOG(1) << "Set request_id_seq for tablet " << tablet_id << " to " << tablet.request_id_seq;
+    VLOG_WITH_PREFIX(1) << "Set request_id_seq for tablet " << tablet_id << " to "
+                        << tablet.request_id_seq;
   }
 }
 
@@ -1985,7 +1897,7 @@ void YBClient::LookupTabletById(const std::string& tablet_id,
       tablet_id, table, include_inactive, deadline, std::move(callback), use_cache);
 }
 
-void YBClient::LookupAllTablets(const std::shared_ptr<const YBTable>& table,
+void YBClient::LookupAllTablets(const std::shared_ptr<YBTable>& table,
                                 CoarseTimePoint deadline,
                                 LookupTabletRangeCallback callback) {
   data_->meta_cache_->LookupAllTablets(table, deadline, std::move(callback));
@@ -1999,7 +1911,7 @@ std::future<Result<internal::RemoteTabletPtr>> YBClient::LookupTabletByKeyFuture
 }
 
 std::future<Result<std::vector<internal::RemoteTabletPtr>>> YBClient::LookupAllTabletsFuture(
-    const std::shared_ptr<const YBTable>& table,
+    const std::shared_ptr<YBTable>& table,
     CoarseTimePoint deadline) {
   return MakeFuture<Result<std::vector<internal::RemoteTabletPtr>>>([&](auto callback) {
     this->LookupAllTablets(table, deadline, std::move(callback));
@@ -2018,7 +1930,7 @@ Status YBClient::ListMasters(CoarseTimePoint deadline, std::vector<std::string>*
   master_uuids->clear();
   for (const ServerEntryPB& master : resp.masters()) {
     if (master.has_error()) {
-      LOG(ERROR) << "Master " << master.ShortDebugString() << " hit error "
+      LOG_WITH_PREFIX(ERROR) << "Master " << master.ShortDebugString() << " hit error "
         << master.error().ShortDebugString();
       return StatusFromPB(master.error());
     }
@@ -2189,11 +2101,11 @@ bool YBClient::IsMultiMaster() const {
 Result<int> YBClient::NumTabletsForUserTable(TableType table_type) {
   if (table_type == TableType::PGSQL_TABLE_TYPE &&
         FLAGS_ysql_num_tablets > 0) {
-    VLOG(1) << "num_tablets = " << FLAGS_ysql_num_tablets
+    VLOG_WITH_PREFIX(1) << "num_tablets = " << FLAGS_ysql_num_tablets
               << ": --ysql_num_tablets is specified.";
     return FLAGS_ysql_num_tablets;
   } else if (FLAGS_ycql_num_tablets > 0) {
-    VLOG(1) << "num_tablets = " << FLAGS_ycql_num_tablets
+    VLOG_WITH_PREFIX(1) << "num_tablets = " << FLAGS_ycql_num_tablets
               << ": --ycql_num_tablets is specified.";
     return FLAGS_ycql_num_tablets;
   } else {
@@ -2202,12 +2114,12 @@ Result<int> YBClient::NumTabletsForUserTable(TableType table_type) {
     int num_tablets = 0;
     if (table_type == TableType::PGSQL_TABLE_TYPE) {
       num_tablets = tserver_count * FLAGS_ysql_num_shards_per_tserver;
-      VLOG(1) << "num_tablets = " << num_tablets << ": "
+      VLOG_WITH_PREFIX(1) << "num_tablets = " << num_tablets << ": "
               << "calculated as tserver_count * FLAGS_ysql_num_shards_per_tserver ("
               << tserver_count << " * " << FLAGS_ysql_num_shards_per_tserver << ")";
     } else {
       num_tablets = tserver_count * FLAGS_yb_num_shards_per_tserver;
-      VLOG(1) << "num_tablets = " << num_tablets << ": "
+      VLOG_WITH_PREFIX(1) << "num_tablets = " << num_tablets << ": "
               << "calculated as tserver_count * FLAGS_yb_num_shards_per_tserver ("
               << tserver_count << " * " << FLAGS_yb_num_shards_per_tserver << ")";
     }
@@ -2262,6 +2174,10 @@ Result<YBTablePtr> YBClient::OpenTable(const YBTableName& name) {
 
 Result<TableId> GetTableId(YBClient* client, const YBTableName& table_name) {
   return VERIFY_RESULT(client->GetYBTableInfo(table_name)).table_id;
+}
+
+const std::string& YBClient::LogPrefix() const {
+  return data_->log_prefix_;
 }
 
 }  // namespace client

@@ -31,6 +31,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import javax.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,7 +52,7 @@ public class ShellProcessHandler {
   static final Pattern ANSIBLE_FAIL_PAT =
       Pattern.compile(
           "(ybops.common.exceptions.YBOpsRuntimeError: Runtime error: "
-              + "Playbook run.* )with args.* (failed with.*) ");
+              + "Playbook run.* )with args.* (failed with.*? [0-9]+)");
   static final Pattern ANSIBLE_FAILED_TASK_PAT =
       Pattern.compile("TASK.*?fatal.*?FAILED.*", Pattern.DOTALL);
   static final String ANSIBLE_IGNORING = "ignoring";
@@ -74,16 +75,29 @@ public class ShellProcessHandler {
       Map<String, String> extraEnvVars,
       boolean logCmdOutput,
       String description) {
-    return run(command, extraEnvVars, logCmdOutput, description, null, null);
+    return run(command, extraEnvVars, logCmdOutput, description, null, null, 0 /*timeoutSecs*/);
   }
 
+  /**
+   * *
+   *
+   * @param command - command to run with list of args
+   * @param extraEnvVars - env vars for this command
+   * @param logCmdOutput - whether to log stdout&stderr to application.log or not
+   * @param description - human readable description for logging
+   * @param uuid - used to track this execution, can be null
+   * @param sensitiveData - Args that will be added to the cmd but will be redacted in logs
+   * @param timeoutSecs - Abort the command forcibly if it takes longer than this
+   * @return
+   */
   public ShellResponse run(
       List<String> command,
       Map<String, String> extraEnvVars,
       boolean logCmdOutput,
       String description,
       UUID uuid,
-      Map<String, String> sensitiveData) {
+      Map<String, String> sensitiveData,
+      int timeoutSecs) {
 
     List<String> redactedCommand = new ArrayList<>(command);
 
@@ -137,62 +151,35 @@ public class ShellProcessHandler {
           tempOutputFile.getAbsolutePath(),
           tempErrorFile.getAbsolutePath());
 
+      long endTimeSecs = 0;
+      if (timeoutSecs > 0) {
+        endTimeSecs = (System.currentTimeMillis() / 1000) + timeoutSecs;
+      }
       process = pb.start();
       if (uuid != null) {
         Util.setPID(uuid, process);
       }
-      // TimeUnit.MINUTES.sleep(5);
-      waitForProcessExit(process, tempOutputFile, tempErrorFile);
-      // We will only read last 20MB of process stdout and stderr file.
+      waitForProcessExit(process, description, tempOutputFile, tempErrorFile, endTimeSecs);
+      // We will only read last 20MB of process stderr file.
       // stdout has `data` so we wont limit that.
       try (BufferedReader outputStream = getLastNReader(tempOutputFile, Long.MAX_VALUE);
           BufferedReader errorStream = getLastNReader(tempErrorFile, getMaxLogMsgSize())) {
         if (logCmdOutput) {
           LOG.debug("Proc stdout for '{}' :", response.description);
         }
-        StringBuilder processOutput = new StringBuilder();
-        Marker fileOnly = MarkerFactory.getMarker("fileOnly");
-        Marker consoleOnly = MarkerFactory.getMarker("consoleOnly");
-
-        outputStream
-            .lines()
-            .forEach(
-                line -> {
-                  processOutput.append(line).append("\n");
-                  if (logCmdOutput) {
-                    LOG.debug(fileOnly, line);
-                  }
-                });
-
-        if (logCmdOutput && cloudLoggingEnabled && processOutput.length() > 0) {
-          LOG.debug(consoleOnly, processOutput.toString());
+        String processOutput = getOutputLines(outputStream, logCmdOutput);
+        String processError = getOutputLines(errorStream, logCmdOutput);
+        try {
+          response.code = process.exitValue();
+        } catch (IllegalThreadStateException itse) {
+          response.code = ERROR_CODE_GENERIC_ERROR;
+          LOG.warn(
+              "Expected process to be shut down, marking this process as failed '{}'",
+              response.description,
+              itse);
         }
-
-        if (logCmdOutput) {
-          LOG.debug("Proc stderr for '{}' :", response.description);
-        }
-        StringBuilder processError = new StringBuilder();
-        errorStream
-            .lines()
-            .forEach(
-                line -> {
-                  processError.append(line).append("\n");
-                  if (logCmdOutput) {
-                    LOG.debug(fileOnly, line);
-                  }
-                });
-
-        if (logCmdOutput && cloudLoggingEnabled && processError.length() > 0) {
-          LOG.debug(consoleOnly, processError.toString());
-        }
-
-        response.code = process.exitValue();
-        response.message =
-            (response.code == ERROR_CODE_SUCCESS)
-                ? processOutput.toString().trim()
-                : processError.toString().trim();
-        String ansibleErrMsg =
-            getAnsibleErrMsg(response.code, processOutput.toString(), processError.toString());
+        response.message = (response.code == ERROR_CODE_SUCCESS) ? processOutput : processError;
+        String ansibleErrMsg = getAnsibleErrMsg(response.code, processOutput, processError);
         if (ansibleErrMsg != null) {
           response.message = ansibleErrMsg;
         }
@@ -214,7 +201,7 @@ public class ShellProcessHandler {
           LOG.error(
               "Process could not be destroyed gracefully within the specified time '{}'",
               response.description);
-          process.destroyForcibly();
+          destroyForcibly(process, response.description);
         }
       }
     } finally {
@@ -239,6 +226,26 @@ public class ShellProcessHandler {
     }
 
     return response;
+  }
+
+  private String getOutputLines(BufferedReader reader, boolean logOutput) {
+    Marker fileMarker = MarkerFactory.getMarker("fileOnly");
+    Marker consoleMarker = MarkerFactory.getMarker("consoleOnly");
+    String lines =
+        reader
+            .lines()
+            .peek(
+                line -> {
+                  if (logOutput) {
+                    LOG.debug(fileMarker, line);
+                  }
+                })
+            .collect(Collectors.joining("\n"))
+            .trim();
+    if (logOutput && cloudLoggingEnabled && lines.length() > 0) {
+      LOG.debug(consoleMarker, lines);
+    }
+    return lines;
   }
 
   private long getMaxLogMsgSize() {
@@ -266,7 +273,8 @@ public class ShellProcessHandler {
   }
 
   public ShellResponse run(List<String> command, Map<String, String> extraEnvVars, UUID uuid) {
-    return run(command, extraEnvVars, true /*logCommandOutput*/, null, uuid, null);
+    return run(
+        command, extraEnvVars, true /*logCommandOutput*/, null, uuid, null, 0 /*timeoutSecs*/);
   }
 
   public ShellResponse run(
@@ -279,10 +287,18 @@ public class ShellProcessHandler {
       Map<String, String> extraEnvVars,
       String description,
       Map<String, String> sensitiveData) {
-    return run(command, extraEnvVars, true /*logCommandOutput*/, description, null, sensitiveData);
+    return run(
+        command,
+        extraEnvVars,
+        true /*logCommandOutput*/,
+        description,
+        null,
+        sensitiveData,
+        0 /*timeoutSecs*/);
   }
 
-  private static void waitForProcessExit(Process process, File outFile, File errFile)
+  private static void waitForProcessExit(
+      Process process, String description, File outFile, File errFile, long endTimeSecs)
       throws IOException, InterruptedException {
     try (FileInputStream outputInputStream = new FileInputStream(outFile);
         InputStreamReader outputReader = new InputStreamReader(outputInputStream);
@@ -291,8 +307,15 @@ public class ShellProcessHandler {
         BufferedReader outputStream = new BufferedReader(outputReader);
         BufferedReader errorStream = new BufferedReader(errReader)) {
       while (!process.waitFor(1, TimeUnit.SECONDS)) {
-        tailStream(outputStream);
-        tailStream(errorStream);
+        // read a limited number of lines so that we don't
+        // get stuck infinitely without getting to the time check
+        tailStream(outputStream, 10000 /*maxLines*/);
+        tailStream(errorStream, 10000 /*maxLines*/);
+        if (endTimeSecs > 0 && ((System.currentTimeMillis() / 1000) >= endTimeSecs)) {
+          LOG.warn("Aborting command {} forcibly because it took too long", description);
+          destroyForcibly(process, description);
+          break;
+        }
       }
       // check for any remaining lines
       tailStream(outputStream);
@@ -301,8 +324,13 @@ public class ShellProcessHandler {
   }
 
   private static void tailStream(BufferedReader br) throws IOException {
+    tailStream(br, 0 /*maxLines*/);
+  }
+
+  private static void tailStream(BufferedReader br, long maxLines) throws IOException {
 
     String line;
+    long count = 0;
     // Note: technically, this readLine can pick up incomplete lines as we race
     // with the process output being appended to this file but for the purposes
     // of logging, it is ok to log partial lines.
@@ -310,6 +338,20 @@ public class ShellProcessHandler {
       if (line.contains("[app]")) {
         LOG.info(line);
       }
+      count++;
+      if (maxLines > 0 && count >= maxLines) {
+        return;
+      }
+    }
+  }
+
+  private static void destroyForcibly(Process process, String description) {
+    process.destroyForcibly();
+    try {
+      process.waitFor(DESTROY_GRACE_TIMEOUT.getSeconds(), TimeUnit.SECONDS);
+      LOG.info("Process was succesfully forcibly terminated '{}'", description);
+    } catch (InterruptedException ie) {
+      LOG.warn("Ignoring problem with forcible process termination '{}'", description, ie);
     }
   }
 

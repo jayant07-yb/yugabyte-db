@@ -13,8 +13,8 @@
 
 #include "yb/tserver/pg_client_service.h"
 
+#include <mutex>
 #include <queue>
-#include <shared_mutex>
 
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/mem_fun.hpp>
@@ -38,6 +38,7 @@
 #include "yb/rpc/scheduler.h"
 
 #include "yb/tserver/pg_client_session.h"
+#include "yb/tserver/pg_create_table.h"
 #include "yb/tserver/pg_table_cache.h"
 
 #include "yb/util/net/net_util.h"
@@ -56,20 +57,6 @@ namespace yb {
 namespace tserver {
 
 namespace {
-//--------------------------------------------------------------------------------------------------
-// Constants used for the sequences data table.
-//--------------------------------------------------------------------------------------------------
-static constexpr const char* const kPgSequencesNamespaceName = "system_postgres";
-static constexpr const char* const kPgSequencesDataTableName = "sequences_data";
-
-// Columns names and ids.
-static constexpr const char* const kPgSequenceDbOidColName = "db_oid";
-
-static constexpr const char* const kPgSequenceSeqOidColName = "seq_oid";
-
-static constexpr const char* const kPgSequenceLastValueColName = "last_value";
-
-static constexpr const char* const kPgSequenceIsCalledColName = "is_called";
 
 template <class Resp>
 void Respond(const Status& status, Resp* resp, rpc::RpcContext* context) {
@@ -78,6 +65,44 @@ void Respond(const Status& status, Resp* resp, rpc::RpcContext* context) {
   }
   context->RespondSuccess();
 }
+
+template<class T>
+class Locker;
+
+template<class T>
+class Lockable : public T {
+ public:
+  template <class... Args>
+  explicit Lockable(Args&&... args)
+      : T(std::forward<Args>(args)...) {
+  }
+
+ private:
+  friend class Locker<T>;
+  std::mutex mutex_;
+};
+
+template<class T>
+class Locker {
+ public:
+  using LockablePtr = std::shared_ptr<Lockable<T>>;
+
+  explicit Locker(const LockablePtr& lockable)
+      : lockable_(lockable), lock_(lockable->mutex_) {
+  }
+
+  T* operator->() const {
+    return lockable_.get();
+  }
+
+ private:
+  LockablePtr lockable_;
+  std::unique_lock<std::mutex> lock_;
+};
+
+using LockablePgClientSession = Lockable<PgClientSession>;
+using PgClientSessionLocker = Locker<PgClientSession>;
+using LockablePgClientSessionPtr = std::shared_ptr<LockablePgClientSession>;
 
 } // namespace
 
@@ -159,7 +184,7 @@ class PgClientServiceImpl::Impl {
     }
 
     auto session_id = ++session_serial_no_;
-    auto session = std::make_shared<PgClientSession>(
+    auto session = std::make_shared<LockablePgClientSession>(
             &client(), clock_, transaction_pool_provider_, &table_cache_, session_id);
     resp->set_session_id(session_id);
 
@@ -246,49 +271,7 @@ class PgClientServiceImpl::Impl {
       const PgCreateSequencesDataTableRequestPB& req,
       PgCreateSequencesDataTableResponsePB* resp,
       rpc::RpcContext* context) {
-    const client::YBTableName table_name(YQL_DATABASE_PGSQL,
-                                         kPgSequencesDataNamespaceId,
-                                         kPgSequencesNamespaceName,
-                                         kPgSequencesDataTableName);
-    RETURN_NOT_OK(client().CreateNamespaceIfNotExists(kPgSequencesNamespaceName,
-                                                      YQLDatabase::YQL_DATABASE_PGSQL,
-                                                      "" /* creator_role_name */,
-                                                      kPgSequencesDataNamespaceId));
-
-    // Set up the schema.
-    client::YBSchemaBuilder schemaBuilder;
-    schemaBuilder.AddColumn(kPgSequenceDbOidColName)->HashPrimaryKey()->Type(yb::INT64)->NotNull();
-    schemaBuilder.AddColumn(kPgSequenceSeqOidColName)->HashPrimaryKey()->Type(yb::INT64)->NotNull();
-    schemaBuilder.AddColumn(kPgSequenceLastValueColName)->Type(yb::INT64)->NotNull();
-    schemaBuilder.AddColumn(kPgSequenceIsCalledColName)->Type(yb::BOOL)->NotNull();
-    client::YBSchema schema;
-    CHECK_OK(schemaBuilder.Build(&schema));
-
-    // Generate the table id.
-    PgObjectId oid(kPgSequencesDataDatabaseOid, kPgSequencesDataTableOid);
-
-    // Try to create the table.
-    auto table_creator(client().NewTableCreator());
-
-    auto status = table_creator->table_name(table_name)
-        .schema(&schema)
-        .table_type(yb::client::YBTableType::PGSQL_TABLE_TYPE)
-        .table_id(oid.GetYBTableId())
-        .hash_schema(YBHashSchema::kPgsqlHash)
-        .timeout(context->GetClientDeadline() - CoarseMonoClock::now())
-        .Create();
-    // If we could create it, then all good!
-    if (status.ok()) {
-      LOG(INFO) << "Table '" << table_name.ToString() << "' created.";
-      // If the table was already there, also not an error...
-    } else if (status.IsAlreadyPresent()) {
-      LOG(INFO) << "Table '" << table_name.ToString() << "' already exists";
-    } else {
-      // If any other error, report that!
-      LOG(ERROR) << "Error creating table '" << table_name.ToString() << "': " << status;
-      return status;
-    }
-    return Status::OK();
+    return tserver::CreateSequencesDataTable(&client(), context->GetClientDeadline());
   }
 
   CHECKED_STATUS TabletServerCount(
@@ -322,6 +305,26 @@ class PgClientServiceImpl::Impl {
       pb->mutable_cloud_info()->set_placement_region(block.region());
       pb->mutable_cloud_info()->set_placement_zone(block.zone());
       pb->set_min_num_replicas(block.min_num_replicas());
+
+      if (block.leader_preference() < 0) {
+        return STATUS(InvalidArgument, "leader_preference cannot be negative");
+      } else if (block.leader_preference() > req.placement_infos_size()) {
+        return STATUS(
+            InvalidArgument,
+            "Priority value cannot be more than the number of zones in the preferred list since "
+            "each priority should be associated with at least one zone from the list");
+      } else if (block.leader_preference() > 0) {
+        while (replication_info.multi_affinitized_leaders_size() < block.leader_preference()) {
+          replication_info.add_multi_affinitized_leaders();
+        }
+
+        auto zone_set =
+            replication_info.mutable_multi_affinitized_leaders(block.leader_preference() - 1);
+        auto ci = zone_set->add_zones();
+        ci->set_placement_cloud(block.cloud());
+        ci->set_placement_region(block.region());
+        ci->set_placement_zone(block.zone());
+      }
     }
     live_replicas->set_num_replicas(req.num_replicas());
 
@@ -354,7 +357,7 @@ class PgClientServiceImpl::Impl {
     return GetSession(req.session_id());
   }
 
-  Result<PgClientSession&> DoGetSession(uint64_t session_id) {
+  Result<LockablePgClientSessionPtr> DoGetSession(uint64_t session_id) {
     SharedLock<rw_spinlock> lock(mutex_);
     DCHECK_NE(session_id, 0);
     auto it = sessions_.find(session_id);
@@ -362,11 +365,11 @@ class PgClientServiceImpl::Impl {
       return STATUS_FORMAT(InvalidArgument, "Unknown session: $0", session_id);
     }
     const_cast<SessionsEntry&>(*it).Touch();
-    return *it->value();
+    return it->value();
   }
 
   Result<PgClientSessionLocker> GetSession(uint64_t session_id) {
-    return PgClientSessionLocker(&VERIFY_RESULT_REF(DoGetSession(session_id)));
+    return PgClientSessionLocker(VERIFY_RESULT(DoGetSession(session_id)));
   }
 
   void ScheduleCheckExpiredSessions(CoarseTimePoint now) REQUIRES(mutex_) {
@@ -417,7 +420,7 @@ class PgClientServiceImpl::Impl {
 
   class ExpirationTag;
 
-  using SessionsEntry = Expirable<std::shared_ptr<PgClientSession>>;
+  using SessionsEntry = Expirable<LockablePgClientSessionPtr>;
   boost::multi_index_container<
       SessionsEntry,
       boost::multi_index::indexed_by<

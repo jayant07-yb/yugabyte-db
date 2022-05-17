@@ -58,6 +58,7 @@ service CDCService {
   rpc SetCDCCheckpoint (SetCDCCheckpointRequestPB) returns (SetCDCCheckpointResponsePB) {
     option (yb.rpc.trivial) = true;
   };
+  rpc IsBootstrapRequired (IsBootstrapRequiredRequestPB) returns (IsBootstrapRequiredResponsePB);
 }
 
 message CDCErrorPB {
@@ -195,6 +196,8 @@ message GetChangesRequestPB {
   optional bytes table_id = 7;
 
   optional CDCSDKCheckpointPB from_cdc_sdk_checkpoint = 8;
+
+  optional bool need_schema_info = 9 [default = false];
 }
 
 message KeyValuePairPB {
@@ -379,6 +382,9 @@ message GetChangesResponsePB {
   // In addition to the op id info, cdc_sdk_checkpoint also stores the info about write_id and
   // reverse_index_key so that it could be used  to resume partially streamed intents
   optional CDCSDKCheckpointPB cdc_sdk_checkpoint = 9;
+
+  // The safe time to be used on the target for this tablet.
+  optional int64 safe_hybrid_time = 10;
 }
 
 message GetCheckpointRequestPB {
@@ -392,12 +398,18 @@ message GetCheckpointResponsePB {
 }
 
 message UpdateCdcReplicatedIndexRequestPB {
-  // Tablet being updated.
+  // Old API. Deprecated.
   optional bytes tablet_id = 1;
-
-  // Minimum replicated index across all the streams for this tablet.
   optional int64 replicated_index = 2;
   optional int64 replicated_term = 3;
+  // Batch API.
+  // Tablets being updated.
+  repeated bytes tablet_ids = 4;
+  // Minimum replicated index for each tablet across all the streams.
+  repeated int64 replicated_indices = 5;
+  repeated int64 replicated_terms = 6;
+  // Minimum checkpoint term and index  for CDCSDK stream, to do intent cleanup for this tablet.
+  repeated OpIdPB cdc_sdk_consumed_ops = 7;
 }
 
 message UpdateCdcReplicatedIndexResponsePB {
@@ -414,12 +426,15 @@ message BootstrapProducerResponsePB {
 }
 
 message GetLatestEntryOpIdRequestPB {
-  optional bytes tablet_id = 1;
+  optional bytes tablet_id = 1; // Deprecated.
+  repeated bytes tablet_ids = 2; // Batch param.
 }
 
 message GetLatestEntryOpIdResponsePB {
   optional CDCErrorPB error = 1;
-  optional OpIdPB op_id = 2;
+
+  optional OpIdPB op_id = 2; // Deprecated.
+  repeated OpIdPB op_ids = 3; // Batch param.
 }
 
 message TableInfo {
@@ -441,8 +456,20 @@ message SetCDCCheckpointRequestPB {
   optional CDCSDKCheckpointPB cdc_sdk_checkpoint = 2;
   optional bytes stream_id = 3;
   optional bytes tablet_id = 4;
+  optional bool initial_checkpoint = 5 [default = false];
+  optional bool bootstrap = 6 [default = false];
 }
 
 message SetCDCCheckpointResponsePB {
   optional CDCErrorPB error = 1;
+}
+
+message IsBootstrapRequiredRequestPB {
+  repeated string tablet_ids = 1;
+  optional string stream_id = 2;
+}
+
+message IsBootstrapRequiredResponsePB {
+  optional CDCErrorPB error = 1;
+  optional bool bootstrap_required = 2 [default = false];
 }

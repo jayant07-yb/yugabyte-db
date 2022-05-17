@@ -84,6 +84,7 @@ namespace tablet {
 
 YB_STRONGLY_TYPED_BOOL(IncludeIntents);
 YB_STRONGLY_TYPED_BOOL(Abortable);
+YB_STRONGLY_TYPED_BOOL(FlushOnShutdown);
 
 inline FlushFlags operator|(FlushFlags lhs, FlushFlags rhs) {
   return static_cast<FlushFlags>(to_underlying(lhs) | to_underlying(rhs));
@@ -276,12 +277,19 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   // This can be called to proactively prevent new operations from being handled, even before
   // Shutdown() is called.
   // Returns true if it was the first call to StartShutdown.
-  bool StartShutdown(IsDropTable is_drop_table = IsDropTable::kFalse);
+  bool StartShutdown();
   bool IsShutdownRequested() const {
-    return shutdown_requested_.load(std::memory_order::memory_order_acquire);
+    return shutdown_requested_.load(std::memory_order::acquire);
   }
 
-  void CompleteShutdown(IsDropTable is_drop_table = IsDropTable::kFalse);
+  // Complete the shutdown of this tablet. This includes shutdown of internal structures such as:
+  // - transaction coordinator
+  // - transaction participant
+  // - RocksDB instances
+  // - etc.
+  // By default, RocksDB shutdown flushes the memtable. This behavior is overriden depending on the
+  // provided value of disable_flush_on_shutdown.
+  void CompleteShutdown(DisableFlushOnShutdown disable_flush_on_shutdown);
 
   CHECKED_STATUS ImportData(const std::string& source_dir);
 
@@ -394,7 +402,7 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   //------------------------------------------------------------------------------------------------
   // Makes RocksDB Flush.
   CHECKED_STATUS Flush(FlushMode mode,
-                       FlushFlags flags = FlushFlags::kAll,
+                       FlushFlags flags = FlushFlags::kAllDbs,
                        int64_t ignore_if_flushed_after_tick = rocksdb::FlushOptions::kNeverIgnore);
 
   CHECKED_STATUS WaitForFlush();
@@ -507,7 +515,7 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
     return clock_;
   }
 
-  SchemaPtr GetSchema(const std::string& table_id = "") const override;
+  docdb::DocReadContextPtr GetDocReadContext(const std::string& table_id = "") const override;
 
   Schema GetKeySchema(const std::string& table_id = "") const;
 
@@ -549,9 +557,9 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   // disabled. We do so, for example, when StillHasOrphanedPostSplitData() returns true.
   bool ShouldDisableLbMove();
 
-  void ForceRocksDBCompactInTest();
+  void TEST_ForceRocksDBCompact(docdb::SkipFlush skip_flush = docdb::SkipFlush::kFalse);
 
-  CHECKED_STATUS ForceFullRocksDBCompact();
+  CHECKED_STATUS ForceFullRocksDBCompact(docdb::SkipFlush skip_flush = docdb::SkipFlush::kFalse);
 
   docdb::DocDB doc_db() const { return { regular_db_.get(), intents_db_.get(), &key_bounds_ }; }
 
@@ -619,7 +627,8 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   // Necessary for cases like truncate or restore snapshot when RocksDB is reset.
   CHECKED_STATUS ModifyFlushedFrontier(
       const docdb::ConsensusFrontier& value,
-      rocksdb::FrontierModificationMode mode);
+      rocksdb::FrontierModificationMode mode,
+      FlushFlags flags = FlushFlags::kAllDbs);
 
   // Get the isolation level of the given transaction from the metadata stored in the provisional
   // records RocksDB.
@@ -667,6 +676,11 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
     std::lock_guard<std::mutex> lock(control_path_mutex_);
     auto val = additional_metadata_.find(key);
     return (val != additional_metadata_.end()) ? val->second : nullptr;
+  }
+
+  size_t RemoveAdditionalMetadata(const std::string& key) {
+    std::lock_guard<std::mutex> lock(control_path_mutex_);
+    return additional_metadata_.erase(key);
   }
 
   void InitRocksDBOptions(
@@ -810,6 +824,8 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   void SyncRestoringOperationFilter(ResetSplit reset_split) EXCLUDES(operation_filters_mutex_);
   void UnregisterOperationFilterUnlocked(OperationFilter* filter)
     REQUIRES(operation_filters_mutex_);
+
+  const docdb::SchemaPackingStorage& PrimarySchemaPackingStorage();
 
   std::unique_ptr<const Schema> key_schema_;
 
@@ -959,6 +975,8 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   template <class F>
   auto GetRegularDbStat(const F& func, const decltype(func())& default_value) const;
 
+  HybridTime DeleteMarkerRetentionTime(const std::vector<rocksdb::FileMetaData*>& inputs);
+
   std::function<rocksdb::MemTableFilter()> mem_table_flush_filter_factory_;
 
   client::LocalTabletFilter local_tablet_filter_;
@@ -993,8 +1011,6 @@ class Tablet : public AbstractTablet, public TransactionIntentApplier {
   // compaction if this member is already set, as the existence of this member implies that such a
   // compaction has already been triggered for this instance.
   std::unique_ptr<ThreadPoolToken> post_split_compaction_task_pool_token_ = nullptr;
-
-  std::unique_ptr<ThreadPoolToken> data_integrity_token_;
 
   simple_spinlock operation_filters_mutex_;
 

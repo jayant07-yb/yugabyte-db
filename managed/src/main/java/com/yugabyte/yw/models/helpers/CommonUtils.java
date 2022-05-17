@@ -4,16 +4,23 @@ package com.yugabyte.yw.models.helpers;
 
 import static play.mvc.Http.Status.BAD_REQUEST;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
+import com.google.common.collect.ImmutableMultiset;
 import com.google.common.collect.Iterables;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.spi.json.JacksonJsonNodeJsonProvider;
 import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import com.yugabyte.yw.common.PlatformServiceException;
+import com.yugabyte.yw.common.ShellResponse;
 import com.yugabyte.yw.common.utils.Pair;
+import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
+import com.yugabyte.yw.models.Universe;
+import com.yugabyte.yw.models.helpers.NodeDetails.NodeState;
 import com.yugabyte.yw.models.paging.PagedQuery;
 import com.yugabyte.yw.models.paging.PagedResponse;
 import io.ebean.ExpressionList;
@@ -36,7 +43,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.Random;
+import java.util.Scanner;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -46,6 +56,8 @@ import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.security.crypto.encrypt.Encryptors;
+import org.springframework.security.crypto.encrypt.TextEncryptor;
 import play.libs.Json;
 
 @Slf4j
@@ -118,8 +130,7 @@ public class CommonUtils {
   }
 
   public static Map<String, String> maskConfigNew(Map<String, String> config) {
-    return processDataNew(
-        config, CommonUtils::isSensitiveField, (key, value) -> getMaskedValue(key, value));
+    return processDataNew(config, CommonUtils::isSensitiveField, CommonUtils::getMaskedValue);
   }
 
   public static String getMaskedValue(String key, String value) {
@@ -175,6 +186,53 @@ public class CommonUtils {
                   ? ((TextNode) jsonPath.read(originalData, JSONPATH_CONFIG)).asText()
                   : value;
             });
+  }
+
+  public static Map<String, String> encryptProviderConfig(
+      Map<String, String> config, UUID customerUUID, String providerCode) {
+    if (config.isEmpty()) return new HashMap<>();
+    try {
+      final ObjectMapper mapper = new ObjectMapper();
+      final String salt = generateSalt(customerUUID, providerCode);
+      final TextEncryptor encryptor = Encryptors.delux(customerUUID.toString(), salt);
+      final String encryptedConfig = encryptor.encrypt(mapper.writeValueAsString(config));
+      Map<String, String> encryptMap = new HashMap<>();
+      encryptMap.put("encrypted", encryptedConfig);
+      return encryptMap;
+    } catch (Exception e) {
+      final String errMsg =
+          String.format(
+              "Could not encrypt provider configuration for customer %s", customerUUID.toString());
+      log.error(errMsg, e);
+      return null;
+    }
+  }
+
+  public static Map<String, String> decryptProviderConfig(
+      Map<String, String> config, UUID customerUUID, String providerCode) {
+    if (config.isEmpty()) return config;
+    try {
+      final ObjectMapper mapper = new ObjectMapper();
+      final String encryptedConfig = config.get("encrypted");
+      final String salt = generateSalt(customerUUID, providerCode);
+      final TextEncryptor encryptor = Encryptors.delux(customerUUID.toString(), salt);
+      final String decryptedConfig = encryptor.decrypt(encryptedConfig);
+      return mapper.readValue(decryptedConfig, new TypeReference<Map<String, String>>() {});
+    } catch (Exception e) {
+      final String errMsg =
+          String.format(
+              "Could not decrypt provider configuration for customer %s", customerUUID.toString());
+      log.error(errMsg, e);
+      return null;
+    }
+  }
+
+  public static String generateSalt(UUID customerUUID, String providerCode) {
+    final String kpValue = String.valueOf(providerCode.hashCode());
+    final String saltBase = "%s%s";
+    final String salt =
+        String.format(saltBase, customerUUID.toString().replace("-", ""), kpValue.replace("-", ""));
+    return salt.length() % 2 == 0 ? salt : salt + "0";
   }
 
   private static ObjectNode processData(
@@ -563,5 +621,60 @@ public class CommonUtils {
       rVal += "(" + s.getFileName() + ":" + s.getLineNumber() + ")\n";
     }
     return rVal;
+  }
+
+  public static NodeDetails getARandomLiveTServer(Universe universe) {
+    UniverseDefinitionTaskParams.Cluster primaryCluster =
+        universe.getUniverseDetails().getPrimaryCluster();
+    List<NodeDetails> tserverLiveNodes =
+        universe
+            .getUniverseDetails()
+            .getNodesInCluster(primaryCluster.uuid)
+            .stream()
+            .filter(nodeDetails -> nodeDetails.isTserver)
+            .filter(nodeDetails -> nodeDetails.state == NodeState.Live)
+            .collect(Collectors.toList());
+    if (tserverLiveNodes.isEmpty()) {
+      throw new IllegalStateException(
+          "No live TServers found for Universe UUID: " + universe.universeUUID);
+    }
+    return tserverLiveNodes.get(new Random().nextInt(tserverLiveNodes.size()));
+  }
+
+  /**
+   * This method extracts the json from shell response where the shell executes a SQL Query that
+   * aggregates the response as JSON e.g. select jsonb_agg() The resultant shell output has json
+   * response on line number 3
+   */
+  public static String extractJsonisedSqlResponse(ShellResponse shellResponse) {
+    String data = null;
+    if (shellResponse.message != null && !shellResponse.message.isEmpty()) {
+      Scanner scanner = new Scanner(shellResponse.message);
+      int i = 0;
+      while (scanner.hasNextLine()) {
+        data = new String(scanner.nextLine());
+        if (i++ == 3) {
+          break;
+        }
+      }
+      scanner.close();
+    }
+    return data;
+  }
+
+  /**
+   * Compares two collections ignoring items order. Different size of collections gives inequality
+   * of collections.
+   */
+  public static <T> boolean isEqualIgnoringOrder(Collection<T> x, Collection<T> y) {
+    if ((x == null) || (y == null)) {
+      return x == y;
+    }
+
+    if (x.size() != y.size()) {
+      return false;
+    }
+
+    return ImmutableMultiset.copyOf(x).equals(ImmutableMultiset.copyOf(y));
   }
 }

@@ -1,13 +1,13 @@
 ---
-title: Primary Key
-linkTitle: Primary Key
-description: Defining Primary Key Constraint in YCQL
+title: Primary key
+linkTitle: Primary key
+description: Defining Primary key constraint in YCQL
 image: /images/section_icons/secure/create-roles.png
 menu:
   stable:
     identifier: primary-key-ycql
     parent: explore-indexes-constraints
-    weight: 251
+    weight: 201
 isTocNested: true
 showAsideToc: true
 ---
@@ -38,9 +38,9 @@ The [PRIMARY KEY](../../../api/ycql/ddl_create_table/#primary-key) section under
 
 ## Examples
 
-- To run the examples below, follow these steps to create a local [cluster](/latest/quick-start/) or in [Yugabyte Cloud](/latest/yugabyte-cloud/cloud-connect/).
+- To run the examples below, follow these steps to create a local [cluster](/preview/quick-start/) or in [Yugabyte Cloud](/preview/yugabyte-cloud/cloud-connect/).
 
-- Use the [YCQL shell](/latest/admin/ycqlsh/) for local clusters, or [Connect using Cloud shell](/latest/yugabyte-cloud/cloud-connect/connect-cloud-shell/) for Yugabyte Cloud, to create a keyspace and a table.
+- Use the [YCQL shell](/preview/admin/ycqlsh/) for local clusters, or [Connect using Cloud shell](/preview/yugabyte-cloud/cloud-connect/connect-cloud-shell/) for Yugabyte Cloud, to create a keyspace and a table.
 
 ### Column constraint
 

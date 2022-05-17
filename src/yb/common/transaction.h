@@ -38,6 +38,7 @@
 
 #include "yb/util/enums.h"
 #include "yb/util/math_util.h"
+#include "yb/util/status_fwd.h"
 #include "yb/util/strongly_typed_uuid.h"
 #include "yb/util/uint_set.h"
 
@@ -179,7 +180,7 @@ class TransactionStatusManager {
 };
 
 // Utility class that invokes RegisterRequest on creation and UnregisterRequest on deletion.
-class RequestScope {
+class NODISCARD_CLASS RequestScope {
  public:
   RequestScope() noexcept : status_manager_(nullptr), request_id_(0) {}
 
@@ -293,6 +294,9 @@ struct TransactionMetadata {
   // Indicates whether this transaction is a local transaction or global transaction.
   TransactionLocality locality = TransactionLocality::GLOBAL;
 
+  // Former transaction status tablet that the transaction was using prior to a move.
+  TabletId old_status_tablet;
+
   static Result<TransactionMetadata> FromPB(const TransactionMetadataPB& source);
 
   void ToPB(TransactionMetadataPB* dest) const;
@@ -304,8 +308,10 @@ struct TransactionMetadata {
 
   std::string ToString() const {
     return Format(
-        "{ transaction_id: $0 isolation: $1 status_tablet: $2 priority: $3 start_time: $4 }",
-        transaction_id, IsolationLevel_Name(isolation), status_tablet, priority, start_time);
+        "{ transaction_id: $0 isolation: $1 status_tablet: $2 priority: $3 start_time: $4"
+        " locality: $5 old_status_tablet: $6}",
+        transaction_id, IsolationLevel_Name(isolation), status_tablet, priority, start_time,
+        TransactionLocality_Name(locality), old_status_tablet);
   }
 };
 

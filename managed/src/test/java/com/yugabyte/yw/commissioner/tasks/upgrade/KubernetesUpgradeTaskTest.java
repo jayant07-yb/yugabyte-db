@@ -94,6 +94,7 @@ public abstract class KubernetesUpgradeTaskTest extends CommissionerBaseTest {
       PodStatus status = TestUtils.deserialize(statusString, PodStatus.class);
       when(mockKubernetesManager.getPodStatus(any(), any(), any())).thenReturn(status);
       YBClient mockClient = mock(YBClient.class);
+      when(mockClient.waitForMaster(any(), anyLong())).thenReturn(true);
       when(mockClient.waitForServer(any(), anyLong())).thenReturn(true);
 
       String masterLeaderName = "yb-master-0.yb-masters.demo-universe.svc.cluster.local";
@@ -211,9 +212,7 @@ public abstract class KubernetesUpgradeTaskTest extends CommissionerBaseTest {
     int position = 0;
     for (TaskType task : expectedTaskSequence) {
       List<TaskInfo> tasks = subTasksByPosition.get(position);
-      // Leader blacklisting adds the ModifyBlackList task at taskInfo[0].
-      int numTasksToAssert = position == 0 ? 2 : 1;
-      assertEquals(numTasksToAssert, tasks.size());
+      assertEquals(1, tasks.size());
       assertEquals(task, tasks.get(0).getTaskType());
       JsonNode expectedResults = expectedResultsList.get(position);
       List<JsonNode> taskDetails =

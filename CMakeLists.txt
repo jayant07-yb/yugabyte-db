@@ -74,6 +74,8 @@ endif()
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
   # Optimize for Graviton on Linux/aarch64 (not mac/arm64)
   ADD_CXX_FLAGS("-march=armv8.2-a+fp16+rcpc+dotprod+crypto")
+  ADD_CXX_FLAGS("-mtune=neoverse-n1")
+  ADD_CXX_FLAGS("-mno-outline-atomics")
 endif()
 
 if (NOT "$ENV{YB_TARGET_ARCH}" STREQUAL "" AND
@@ -243,8 +245,6 @@ endif()
 
 # -------------------------------------------------------------------------------------------------
 
-INIT_COMPILER_TYPE_FROM_BUILD_ROOT()
-
 include(CompilerInfo)
 
 # This helps find the right third-party build directory.
@@ -333,9 +333,6 @@ ADD_CXX_FLAGS("-DROCKSDB_LIB_IO_POSIX")
 ADD_CXX_FLAGS("-DSNAPPY")
 ADD_CXX_FLAGS("-DLZ4")
 ADD_CXX_FLAGS("-DZLIB")
-if ($ENV{YB_COMPILER_TYPE} STREQUAL "zapcc")
-  ADD_CXX_FLAGS("-DYB_ZAPCC")
-endif()
 
 ############################################################
 # Compiler flags
@@ -397,8 +394,7 @@ if(IS_CLANG)
 endif()
 
 if(USING_LINUXBREW AND IS_CLANG)
-  # We only need these when building using clang. If we use Linuxbrew's gcc, it should set the
-  # equivalent of these options automatically.
+  # We are only using Clang with Linuxbrew. We never use Linuxbrew GCC 5 anymore, it is too old.
   ADD_LINKER_FLAGS("-Wl,--dynamic-linker=${LINUXBREW_LIB_DIR}/ld.so")
   ADD_LINKER_FLAGS("--gcc-toolchain=${LINUXBREW_DIR}")
 endif()
@@ -409,6 +405,14 @@ if(IS_GCC)
   # TODO: Subtitute it with '-as-needed' instead to avoid linking with unused library (issue #1495)
   # for reducing pocess start time
   ADD_LINKER_FLAGS("-Wl,-no-as-needed")
+  if ("${COMPILER_VERSION}" MATCHES "^11[.].*$")
+    # To silence these spurious warnings:
+    # https://gist.githubusercontent.com/mbautin/60c7fb897a92b998a111ff38429a1158/raw
+    # https://gist.githubusercontent.com/mbautin/56b95b7a6816ccdf77eaa60f53a7d3ef/raw
+    ADD_CXX_FLAGS("-Wno-array-bounds")
+    ADD_CXX_FLAGS("-Wno-stringop-overflow")
+    ADD_CXX_FLAGS("-Wno-stringop-overread")
+  endif()
 endif()
 
 if(USING_LINUXBREW)
@@ -729,7 +733,7 @@ string (REPLACE "-Woverloaded-virtual" "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
 
 message("CMAKE_C_FLAGS ${CMAKE_C_FLAGS}")
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 20)
 
 if (IS_GCC AND
     "${COMPILER_VERSION}" VERSION_GREATER_EQUAL "8.0.0")

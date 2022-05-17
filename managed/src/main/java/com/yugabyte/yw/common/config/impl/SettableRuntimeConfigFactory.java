@@ -15,7 +15,9 @@ import static com.yugabyte.yw.models.ScopedRuntimeConfig.GLOBAL_SCOPE_UUID;
 import com.google.common.annotations.VisibleForTesting;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import com.typesafe.config.ConfigParseOptions;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
+import com.yugabyte.yw.common.ybflyway.YBFlywayInit;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.Provider;
 import com.yugabyte.yw.models.RuntimeConfigEntry;
@@ -23,6 +25,7 @@ import com.yugabyte.yw.models.Universe;
 import io.ebean.Model;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import org.slf4j.Logger;
@@ -38,7 +41,7 @@ public class SettableRuntimeConfigFactory implements RuntimeConfigFactory {
 
   @Inject
   public SettableRuntimeConfigFactory(
-      Config appConfig, EbeanDynamicEvolutions ebeanDynamicEvolutions) {
+      Config appConfig, EbeanDynamicEvolutions ebeanDynamicEvolutions, YBFlywayInit ybFlywayInit) {
     this.appConfig = appConfig;
   }
 
@@ -98,8 +101,19 @@ public class SettableRuntimeConfigFactory implements RuntimeConfigFactory {
   @VisibleForTesting
   Config getConfigForScope(UUID scope, String description) {
     Map<String, String> values = RuntimeConfigEntry.getAsMapForScope(scope);
-    Config config = ConfigFactory.parseMap(values, description);
+    String confStr = toConfigString(values);
+    Config config =
+        ConfigFactory.parseString(
+            confStr, ConfigParseOptions.defaults().setOriginDescription(description));
     LOG.trace("Read from DB for {}: {}", description, config);
     return config;
+  }
+
+  private String toConfigString(Map<String, String> values) {
+    return values
+        .entrySet()
+        .stream()
+        .map(entry -> entry.getKey() + "=" + entry.getValue())
+        .collect(Collectors.joining("\n"));
   }
 }

@@ -16,6 +16,7 @@
 #include "../../../../src/yb/master/catalog_manager.h"
 #include "yb/master/master_snapshot_coordinator.h"
 #include "yb/master/snapshot_coordinator_context.h"
+#include "yb/cdc/cdc_service.proxy.h"
 
 namespace yb {
 
@@ -59,7 +60,8 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
                                 rpc::RpcContext* rpc);
 
   CHECKED_STATUS ImportSnapshotMeta(const ImportSnapshotMetaRequestPB* req,
-                                    ImportSnapshotMetaResponsePB* resp);
+                                    ImportSnapshotMetaResponsePB* resp,
+                                    rpc::RpcContext* rpc);
 
   CHECKED_STATUS CreateSnapshotSchedule(const CreateSnapshotScheduleRequestPB* req,
                                         CreateSnapshotScheduleResponsePB* resp,
@@ -132,6 +134,11 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
                                  UpdateCDCStreamResponsePB* resp,
                                  rpc::RpcContext* rpc);
 
+  // Query if Bootstrapping is required for a CDC stream (e.g. Are we missing logs).
+  CHECKED_STATUS IsBootstrapRequired(const IsBootstrapRequiredRequestPB* req,
+                                     IsBootstrapRequiredResponsePB* resp,
+                                     rpc::RpcContext* rpc);
+
   // Delete CDC streams for a table.
   CHECKED_STATUS DeleteCDCStreamsForTable(const TableId& table_id) override;
   CHECKED_STATUS DeleteCDCStreamsForTables(const vector<TableId>& table_ids) override;
@@ -189,7 +196,9 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
     return snapshot_coordinator_;
   }
 
-  size_t GetNumLiveTServersForActiveCluster() override;
+  Result<size_t> GetNumLiveTServersForActiveCluster() override;
+
+  CHECKED_STATUS ClearFailedUniverse();
 
  private:
   friend class SnapshotLoader;
@@ -240,7 +249,8 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
                                             CreateObjects create_objects);
   CHECKED_STATUS ImportSnapshotWaitForTables(const SnapshotInfoPB& snapshot_pb,
                                              ImportSnapshotMetaResponsePB* resp,
-                                             ExternalTableSnapshotDataMap* tables_data);
+                                             ExternalTableSnapshotDataMap* tables_data,
+                                             CoarseTimePoint deadline);
   CHECKED_STATUS ImportSnapshotProcessTablets(const SnapshotInfoPB& snapshot_pb,
                                               ImportSnapshotMetaResponsePB* resp,
                                               ExternalTableSnapshotDataMap* tables_data);
@@ -280,6 +290,8 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
 
   const Schema& schema() override;
 
+  const docdb::DocReadContext& doc_read_context();
+
   void Submit(std::unique_ptr<tablet::Operation> operation, int64_t leader_term) override;
 
   AsyncTabletSnapshotOpPtr CreateAsyncTabletSnapshotOp(
@@ -293,14 +305,18 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
       SnapshotScheduleRestoration* restoration, tablet::Tablet* tablet,
       Status* complete_status) override;
 
-  CHECKED_STATUS VerifyRestoredObjects(const SnapshotScheduleRestoration& restoration) override;
+  CHECKED_STATUS VerifyRestoredObjects(
+      const std::unordered_map<std::string, SysRowEntryType>& objects,
+      const google::protobuf::RepeatedPtrField<TableIdentifierPB>& tables) override;
 
   void CleanupHiddenObjects(const ScheduleMinRestoreTime& schedule_min_restore_time) override;
   void CleanupHiddenTablets(
       const std::vector<TabletInfoPtr>& hidden_tablets,
       const ScheduleMinRestoreTime& schedule_min_restore_time);
   // Will filter tables content, so pass it by value here.
-  void CleanupHiddenTables(std::vector<TableInfoPtr> tables);
+  void CleanupHiddenTables(
+      std::vector<TableInfoPtr> tables,
+      const ScheduleMinRestoreTime& schedule_min_restore_time);
 
   rpc::Scheduler& Scheduler() override;
 
@@ -341,10 +357,6 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
                                           const TSHeartbeatRequestPB* req,
                                           TSHeartbeatResponsePB* resp);
 
-  scoped_refptr<ClusterConfigInfo> GetClusterConfigInfo() const {
-    return cluster_config_;
-  }
-
   // Helper functions for GetTableSchemaCallback, GetTablegroupSchemaCallback
   // and GetColocatedTabletSchemaCallback.
 
@@ -384,7 +396,8 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
                                              const Result<CDCStreamId>& stream_id,
                                              std::function<void()> on_success_cb = nullptr);
 
-  void MergeUniverseReplication(scoped_refptr<UniverseReplicationInfo> info);
+  void MergeUniverseReplication(scoped_refptr<UniverseReplicationInfo> info,
+                                std::string original_id);
   CHECKED_STATUS DeleteUniverseReplicationUnlocked(scoped_refptr<UniverseReplicationInfo> info);
   void MarkUniverseReplicationFailed(scoped_refptr<UniverseReplicationInfo> universe,
                                      const Status& failure_status);
@@ -397,6 +410,18 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
 
   // Maps producer universe id to the corresponding cdc stream for that table.
   typedef std::unordered_map<std::string, CDCStreamId> XClusterConsumerTableStreamInfoMap;
+
+  std::shared_ptr<cdc::CDCServiceProxy> GetCDCServiceProxy(
+      client::internal::RemoteTabletServer* ts);
+
+  Result<client::internal::RemoteTabletServer*> GetLeaderTServer(
+      client::internal::RemoteTabletPtr tablet);
+
+  // Consumer API: Find out if bootstrap is required for the Producer tables.
+  CHECKED_STATUS IsBootstrapRequiredOnProducer(scoped_refptr<UniverseReplicationInfo> universe,
+                                               const TableId& producer_table,
+                                               const std::unordered_map<TableId, std::string>&
+                                                 table_bootstrap_ids);
 
   // Gets the set of CDC stream info for an xCluster consumer table.
   XClusterConsumerTableStreamInfoMap GetXClusterStreamInfoForConsumerTable(const TableId& table_id)
@@ -441,6 +466,9 @@ class CatalogManager : public yb::master::CatalogManager, SnapshotCoordinatorCon
   typedef std::unordered_map<std::string, scoped_refptr<UniverseReplicationInfo>>
       UniverseReplicationInfoMap;
   UniverseReplicationInfoMap universe_replication_map_ GUARDED_BY(mutex_);
+
+  // List of universe ids to universes that must be deleted
+  std::deque<std::string> universes_to_clear_ GUARDED_BY(mutex_);
 
   // mutex on should_send_consumer_registry_mutex_.
   mutable simple_spinlock should_send_consumer_registry_mutex_;

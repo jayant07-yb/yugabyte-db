@@ -1,3 +1,16 @@
+// Copyright (c) YugaByte, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+// in compliance with the License.  You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License
+// is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied.  See the License for the specific language governing permissions and limitations
+// under the License.
+//
+
 package org.yb.client;
 
 import com.google.protobuf.ByteString;
@@ -12,14 +25,29 @@ public class SetCheckpointRequest extends YRpc<SetCheckpointResponse>{
   private String tabletId;
   private long index;
   private long term;
+  private  boolean initialCheckpoint;
+  private boolean bootstrap = false;
 
   public SetCheckpointRequest(YBTable table, String streamId,
-                              String tabletId, long term, long index) {
+                              String tabletId, long term, long index, boolean initialCheckpoint) {
     super(table);
     this.streamId = streamId;
     this.tabletId = tabletId;
     this.term = term;
     this.index = index;
+    this.initialCheckpoint = initialCheckpoint;
+  }
+
+  public SetCheckpointRequest(YBTable table, String streamId,
+                              String tabletId, long term, long index, boolean initialCheckpoint,
+                              boolean bootstrap) {
+    super(table);
+    this.streamId = streamId;
+    this.tabletId = tabletId;
+    this.term = term;
+    this.index = index;
+    this.initialCheckpoint = initialCheckpoint;
+    this.bootstrap = bootstrap;
   }
 
   @Override
@@ -33,6 +61,8 @@ public class SetCheckpointRequest extends YRpc<SetCheckpointResponse>{
       .CDCCheckpointPB.newBuilder();
     builder.setCheckpoint(cBuilder.setOpId(Opid.OpIdPB.newBuilder().setIndex(this.index)
       .setTerm(this.term).build()).build());
+    builder.setInitialCheckpoint(this.initialCheckpoint);
+    builder.setBootstrap(this.bootstrap);
     return toChannelBuffer(header, builder.build());
   }
 

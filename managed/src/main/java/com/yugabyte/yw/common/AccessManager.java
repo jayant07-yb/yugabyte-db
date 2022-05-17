@@ -2,7 +2,6 @@
 
 package com.yugabyte.yw.common;
 
-import static play.mvc.Http.Status.BAD_REQUEST;
 import static play.mvc.Http.Status.INTERNAL_SERVER_ERROR;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -10,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.google.inject.Inject;
 import com.yugabyte.yw.commissioner.Common;
+import com.yugabyte.yw.common.utils.FileUtils;
 import com.yugabyte.yw.models.AccessKey;
 import com.yugabyte.yw.models.Provider;
 import com.yugabyte.yw.models.Region;
@@ -109,7 +109,9 @@ public class AccessManager extends DevopsBase {
       String sshUser,
       Integer sshPort,
       boolean airGapInstall,
-      boolean skipProvisioning)
+      boolean skipProvisioning,
+      boolean setUpChrony,
+      List<String> ntpServers)
       throws IOException {
     return uploadKeyFile(
         regionUUID,
@@ -120,6 +122,8 @@ public class AccessManager extends DevopsBase {
         sshPort,
         airGapInstall,
         skipProvisioning,
+        setUpChrony,
+        ntpServers,
         true);
   }
 
@@ -133,15 +137,18 @@ public class AccessManager extends DevopsBase {
       Integer sshPort,
       boolean airGapInstall,
       boolean skipProvisioning,
+      boolean setUpChrony,
+      List<String> ntpServers,
       boolean deleteRemote)
       throws IOException {
     Region region = Region.get(regionUUID);
     String keyFilePath = getOrCreateKeyFilePath(region.provider.uuid);
     // Removing paths from keyCode.
-    keyCode = Util.getFileName(keyCode);
+    keyCode = FileUtils.getFileName(keyCode);
     AccessKey accessKey = AccessKey.get(region.provider.uuid, keyCode);
     if (accessKey != null) {
-      throw new PlatformServiceException(BAD_REQUEST, "Duplicate Access KeyCode: " + keyCode);
+      // This means the key must have been created before, so nothing to do.
+      return accessKey;
     }
     Path source = Paths.get(uploadedFile.getAbsolutePath());
     Path destination = Paths.get(keyFilePath, keyCode + keyType.getExtension());
@@ -179,6 +186,9 @@ public class AccessManager extends DevopsBase {
     keyInfo.sshPort = sshPort;
     keyInfo.airGapInstall = airGapInstall;
     keyInfo.skipProvisioning = skipProvisioning;
+    keyInfo.ntpServers = ntpServers;
+    keyInfo.setUpChrony = setUpChrony;
+    keyInfo.showSetUpChrony = true; // New Providers should have this set true
     keyInfo.deleteRemote = deleteRemote;
     return AccessKey.create(region.provider.uuid, keyCode, keyInfo);
   }
@@ -192,6 +202,8 @@ public class AccessManager extends DevopsBase {
       Integer sshPort,
       boolean airGapInstall,
       boolean skipProvisioning,
+      boolean setUpChrony,
+      List<String> ntpServers,
       boolean overrideKeyValidate) {
     AccessKey key = null;
     Path tempFile = null;
@@ -211,13 +223,24 @@ public class AccessManager extends DevopsBase {
               sshPort,
               airGapInstall,
               skipProvisioning,
+              setUpChrony,
+              ntpServers,
               false);
 
       File pemFile = new File(key.getKeyInfo().privateKey);
       // Delete is always false and we don't even try to make AWS calls.
       if (!overrideKeyValidate) {
         key =
-            addKey(regionUUID, keyCode, pemFile, sshUser, sshPort, airGapInstall, skipProvisioning);
+            addKey(
+                regionUUID,
+                keyCode,
+                pemFile,
+                sshUser,
+                sshPort,
+                airGapInstall,
+                skipProvisioning,
+                setUpChrony,
+                ntpServers);
       }
     } catch (NoSuchFileException ioe) {
       LOG.error(ioe.getMessage(), ioe);
@@ -244,8 +267,19 @@ public class AccessManager extends DevopsBase {
       String keyCode,
       Integer sshPort,
       boolean airGapInstall,
-      boolean skipProvisioning) {
-    return addKey(regionUUID, keyCode, null, null, sshPort, airGapInstall, skipProvisioning);
+      boolean skipProvisioning,
+      boolean setUpChrony,
+      List<String> ntpServers) {
+    return addKey(
+        regionUUID,
+        keyCode,
+        null,
+        null,
+        sshPort,
+        airGapInstall,
+        skipProvisioning,
+        setUpChrony,
+        ntpServers);
   }
 
   public AccessKey addKey(
@@ -255,7 +289,17 @@ public class AccessManager extends DevopsBase {
       String sshUser,
       Integer sshPort,
       boolean airGapInstall) {
-    return addKey(regionUUID, keyCode, privateKeyFile, sshUser, sshPort, airGapInstall, false);
+    return addKey(
+        regionUUID, keyCode, privateKeyFile, sshUser, sshPort, airGapInstall, false, false, null);
+  }
+
+  public AccessKey addKey(
+      UUID regionUUID,
+      String keyCode,
+      Integer sshPort,
+      boolean setUpChrony,
+      List<String> ntpServers) {
+    return addKey(regionUUID, keyCode, null, null, sshPort, false, false, setUpChrony, ntpServers);
   }
 
   public AccessKey addKey(
@@ -265,7 +309,9 @@ public class AccessManager extends DevopsBase {
       String sshUser,
       Integer sshPort,
       boolean airGapInstall,
-      boolean skipProvisioning) {
+      boolean skipProvisioning,
+      boolean setUpChrony,
+      List<String> ntpServers) {
     List<String> commandArgs = new ArrayList<String>();
     Region region = Region.get(regionUUID);
     String keyFilePath = getOrCreateKeyFilePath(region.provider.uuid);
@@ -313,6 +359,9 @@ public class AccessManager extends DevopsBase {
       keyInfo.sshPort = sshPort;
       keyInfo.airGapInstall = airGapInstall;
       keyInfo.skipProvisioning = skipProvisioning;
+      keyInfo.setUpChrony = setUpChrony;
+      keyInfo.ntpServers = ntpServers;
+      keyInfo.showSetUpChrony = true; // New Providers should have this set true
       accessKey = AccessKey.create(region.provider.uuid, keyCode, keyInfo);
     }
 
@@ -395,6 +444,7 @@ public class AccessManager extends DevopsBase {
     if (deleteRemote) {
       commandArgs.add("--delete_remote");
     }
+    commandArgs.add("--ignore_auth_failure");
     JsonNode response = execAndParseCommandRegion(regionUUID, "delete-key", commandArgs);
     if (response.has("error")) {
       throw new RuntimeException(response.get("error").asText());
@@ -426,7 +476,7 @@ public class AccessManager extends DevopsBase {
       throw new RuntimeException("Missing KUBECONFIG_CONTENT data in the provider config.");
     }
     String configFilePath = getOrCreateKeyFilePath(path);
-    Path configFile = Paths.get(configFilePath, Util.getFileName(configFileName));
+    Path configFile = Paths.get(configFilePath, FileUtils.getFileName(configFileName));
     if (!edit && Files.exists(configFile)) {
       throw new RuntimeException("File " + configFile.getFileName() + " already exists.");
     }
@@ -448,7 +498,7 @@ public class AccessManager extends DevopsBase {
           "Missing KUBECONFIG_PULL_SECRET_CONTENT data in the provider config.");
     }
     String pullSecretFilePath = getOrCreateKeyFilePath(providerUUID);
-    Path pullSecretFile = Paths.get(pullSecretFilePath, Util.getFileName(pullSecretFileName));
+    Path pullSecretFile = Paths.get(pullSecretFilePath, FileUtils.getFileName(pullSecretFileName));
     if (!edit && Files.exists(pullSecretFile)) {
       throw new RuntimeException("File " + pullSecretFile.getFileName() + " already exists.");
     }

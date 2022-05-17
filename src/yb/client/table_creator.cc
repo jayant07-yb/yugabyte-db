@@ -90,13 +90,18 @@ YBTableCreator& YBTableCreator::num_tablets(int32_t count) {
   return *this;
 }
 
-YBTableCreator& YBTableCreator::colocated(const bool colocated) {
-  colocated_ = colocated;
+YBTableCreator& YBTableCreator::is_colocated_via_database(bool is_colocated_via_database) {
+  is_colocated_via_database_ = is_colocated_via_database;
   return *this;
 }
 
 YBTableCreator& YBTableCreator::tablegroup_id(const std::string& tablegroup_id) {
   tablegroup_id_ = tablegroup_id;
+  return *this;
+}
+
+YBTableCreator& YBTableCreator::colocation_id(ColocationId colocation_id) {
+  colocation_id_ = colocation_id;
   return *this;
 }
 
@@ -236,7 +241,7 @@ Status YBTableCreator::Create() {
   req.set_name(table_name_.table_name());
   table_name_.SetIntoNamespaceIdentifierPB(req.mutable_namespace_());
   req.set_table_type(table_type_);
-  req.set_colocated(colocated_);
+  req.set_is_colocated_via_database(is_colocated_via_database_);
 
   if (!creator_role_name_.empty()) {
     req.set_creator_role_name(creator_role_name_);
@@ -254,6 +259,9 @@ Status YBTableCreator::Create() {
 
   if (!tablegroup_id_.empty()) {
     req.set_tablegroup_id(tablegroup_id_);
+  }
+  if (colocation_id_ != kColocationIdNotSet) {
+    req.set_colocation_id(colocation_id_);
   }
 
   if (!tablespace_id_.empty()) {

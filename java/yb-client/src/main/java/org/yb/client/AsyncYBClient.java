@@ -432,10 +432,11 @@ public class AsyncYBClient implements AutoCloseable {
   public Deferred<GetChangesResponse> getChangesCDCSDK(YBTable table, String streamId,
                                                        String tabletId, long term,
                                                        long index, byte[] key,
-                                                       int write_id, long time) {
+                                                       int write_id, long time,
+                                                       boolean needSchemaInfo) {
     checkIsClosed();
     GetChangesRequest rpc = new GetChangesRequest(table, streamId, tabletId, term,
-      index, key, write_id, time);
+      index, key, write_id, time, needSchemaInfo);
     Deferred d = rpc.getDeferred();
     d.addErrback(new Callback<Exception, Exception>() {
       @Override
@@ -472,9 +473,28 @@ public class AsyncYBClient implements AutoCloseable {
 
   public Deferred<SetCheckpointResponse> setCheckpoint(YBTable table,
                                                        String streamId, String tabletId,
-                                                       long term, long index) {
+                                                       long term,
+                                                       long index,
+                                                       boolean initialCheckpoint) {
     checkIsClosed();
-    SetCheckpointRequest rpc = new SetCheckpointRequest(table, streamId, tabletId, term, index);
+    SetCheckpointRequest rpc = new SetCheckpointRequest(table, streamId,
+      tabletId, term, index, initialCheckpoint);
+    Deferred d = rpc.getDeferred();
+    rpc.setTimeoutMillis(defaultOperationTimeoutMs);
+    sendRpcToTablet(rpc);
+    return d;
+  }
+
+  public Deferred<SetCheckpointResponse> setCheckpointWithBootstrap(YBTable table,
+                                                                    String streamId,
+                                                                    String tabletId,
+                                                                    long term,
+                                                                    long index,
+                                                                    boolean initialCheckpoint,
+                                                                    boolean bootstrap) {
+    checkIsClosed();
+    SetCheckpointRequest rpc = new SetCheckpointRequest(table, streamId,
+        tabletId, term, index, initialCheckpoint, bootstrap);
     Deferred d = rpc.getDeferred();
     rpc.setTimeoutMillis(defaultOperationTimeoutMs);
     sendRpcToTablet(rpc);

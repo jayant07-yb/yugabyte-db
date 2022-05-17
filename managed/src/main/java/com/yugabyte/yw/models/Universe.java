@@ -62,6 +62,7 @@ public class Universe extends Model {
   public static final String TAKE_BACKUPS = "takeBackups";
   public static final String HELM2_LEGACY = "helm2Legacy";
   public static final String DUAL_NET_LEGACY = "dualNetLegacy";
+  public static final String USE_CUSTOM_IMAGE = "useCustomImage";
 
   // This is a key lock for Universe by UUID.
   public static final KeyLock<UUID> UNIVERSE_KEY_LOCK = new KeyLock<UUID>();
@@ -231,6 +232,10 @@ public class Universe extends Model {
   public static Set<UUID> getAllUUIDs(Customer customer) {
     return ImmutableSet.copyOf(
         find.query().where().eq("customer_id", customer.getCustomerId()).findIds());
+  }
+
+  public static Set<UUID> getAllUUIDs() {
+    return ImmutableSet.copyOf(find.query().where().findIds());
   }
 
   public static Set<Universe> getAllWithoutResources(Customer customer) {
@@ -451,6 +456,22 @@ public class Universe extends Model {
   }
 
   /**
+   * Return the list of TServers in the primary cluster for this universe. E.g. the TServers in a
+   * read replica will not be included.
+   *
+   * @return a list of TServers nodes
+   */
+  public List<NodeDetails> getTServersInPrimaryCluster() {
+    List<NodeDetails> servers = getServers(ServerType.TSERVER);
+    Collection<NodeDetails> primaryNodes =
+        getNodesInCluster(getUniverseDetails().getPrimaryCluster().uuid);
+    return servers
+        .stream()
+        .filter(server -> primaryNodes.contains(server))
+        .collect(Collectors.toList());
+  }
+
+  /**
    * Return the list of YQL servers for this universe.
    *
    * @return a list of YQL server nodes
@@ -665,9 +686,7 @@ public class Universe extends Model {
     for (NodeDetails node : serverNodes) {
       // Only get secondary if dual net legacy is false.
       boolean shouldGetSecondary =
-          this.getConfig().getOrDefault(DUAL_NET_LEGACY, "true").equals("false")
-              ? getSecondary
-              : false;
+          this.getConfig().getOrDefault(DUAL_NET_LEGACY, "true").equals("false") && getSecondary;
       String nodeIp =
           shouldGetSecondary ? node.cloudInfo.secondary_private_ip : node.cloudInfo.private_ip;
       // In case the secondary IP is null, just re-assign to primary.

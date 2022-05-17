@@ -140,8 +140,6 @@ class TSDescriptor {
 
   std::string placement_uuid() const;
 
-  template<typename Lambda>
-  bool DoesRegistrationMatch(Lambda predicate) const;
   bool IsRunningOn(const HostPortPB& hp) const;
   bool IsBlacklisted(const BlacklistSet& blacklist) const;
 
@@ -253,6 +251,11 @@ class TSDescriptor {
     return ts_metrics_.path_metrics;
   }
 
+  bool get_disable_tablet_split_if_default_ttl() {
+    SharedLock<decltype(lock_)> l(lock_);
+    return ts_metrics_.disable_tablet_split_if_default_ttl;
+  }
+
   void UpdateMetrics(const TServerMetricsPB& metrics);
 
   void GetMetrics(TServerMetricsPB* metrics);
@@ -331,6 +334,8 @@ class TSDescriptor {
 
     std::unordered_map<std::string, TSPathMetrics> path_metrics;
 
+    bool disable_tablet_split_if_default_ttl = false;
+
     void ClearMetrics() {
       total_memory_usage = 0;
       total_sst_file_size = 0;
@@ -340,6 +345,7 @@ class TSDescriptor {
       write_ops_per_sec = 0;
       uptime_seconds = 0;
       path_metrics.clear();
+      disable_tablet_split_if_default_ttl = false;
     }
   };
 
@@ -419,6 +425,18 @@ Status TSDescriptor::GetOrCreateProxy(std::shared_ptr<TProxy>* result,
   return Status::OK();
 }
 
+struct cloud_equal_to {
+  bool operator()(const yb::CloudInfoPB& x, const yb::CloudInfoPB& y) const {
+    return x.placement_cloud() == y.placement_cloud() &&
+           x.placement_region() == y.placement_region() && x.placement_zone() == y.placement_zone();
+  }
+};
+
+struct cloud_hash {
+  std::size_t operator()(const yb::CloudInfoPB& ci) const {
+    return std::hash<std::string>{}(TSDescriptor::generate_placement_id(ci));
+  }
+};
 } // namespace master
 } // namespace yb
 

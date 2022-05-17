@@ -1,14 +1,10 @@
 package com.yugabyte.yw.commissioner.tasks;
 
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
-import com.yugabyte.yw.commissioner.SubTaskGroupQueue;
 import com.yugabyte.yw.commissioner.UserTaskDetails;
-
-import com.yugabyte.yw.forms.BackupTableParams;
 import com.yugabyte.yw.forms.RestoreBackupParams;
 import com.yugabyte.yw.forms.RestoreBackupParams.ActionType;
 import com.yugabyte.yw.forms.RestoreBackupParams.BackupStorageInfo;
-import com.yugabyte.yw.models.Backup;
 import com.yugabyte.yw.models.KmsConfig;
 import com.yugabyte.yw.models.Universe;
 import java.util.ArrayList;
@@ -33,8 +29,6 @@ public class RestoreBackup extends UniverseTaskBase {
     Universe universe = Universe.getOrBadRequest(taskParams().universeUUID);
     try {
       checkUniverseVersion();
-      // Create the task list sequence.
-      subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
       // Update the universe DB with the update to be performed and set the 'updateInProgress' flag
       // to prevent other updates from happening.
       lockUniverse(-1 /* expectedUniverseVersion */);
@@ -72,17 +66,18 @@ public class RestoreBackup extends UniverseTaskBase {
           .setSubTaskGroupType(UserTaskDetails.SubTaskGroupType.ConfigureUniverse);
 
       // Run all the tasks.
-      subTaskGroupQueue.run();
+      getRunnableTask().runSubTasks();
     } catch (Throwable t) {
 
       log.error("Error executing task {} with error='{}'.", getName(), t.getMessage(), t);
       if (taskParams().alterLoadBalancer) {
-        subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
+        // Clear previous tasks if any.
+        getRunnableTask().reset();
         // If the task failed, we don't want the loadbalancer to be
         // disabled, so we enable it again in case of errors.
         createLoadBalancerStateChangeTask(true)
             .setSubTaskGroupType(UserTaskDetails.SubTaskGroupType.ConfigureUniverse);
-        subTaskGroupQueue.run();
+        getRunnableTask().runSubTasks();
       }
       throw t;
     } finally {
@@ -105,6 +100,8 @@ public class RestoreBackup extends UniverseTaskBase {
     restoreParams.backupStorageInfoList = new ArrayList<>();
     restoreParams.actionType = actionType;
     restoreParams.backupStorageInfoList.add(backupStorageInfo);
+    restoreParams.disableChecksum = params.disableChecksum;
+    restoreParams.useTablespaces = params.useTablespaces;
 
     return restoreParams;
   }

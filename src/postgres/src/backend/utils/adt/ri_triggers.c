@@ -3311,7 +3311,21 @@ YbAddTriggerFKReferenceIntent(Trigger *trigger, Relation fk_rel, HeapTuple new_r
 			null_found = attr->is_null && (attr->attr_num > 0);
 
 		if (!null_found)
-			HandleYBStatus(YBCAddForeignKeyReferenceIntent(descr));
+			HandleYBStatus(YBCAddForeignKeyReferenceIntent(descr, YBCIsRegionLocal(fk_rel)));
 		pfree(descr);
 	}
+}
+
+/*
+ * Check if a trigger description contains any non RI trigger.
+ */
+bool
+HasNonRITrigger(const TriggerDesc* trigDesc)
+{
+	for (int i = trigDesc ? trigDesc->numtriggers : 0; i > 0; i--)
+	{
+		if (RI_FKey_trigger_type(trigDesc->triggers[i - 1].tgfoid) == RI_TRIGGER_NONE)
+			return true;
+	}
+	return false;
 }

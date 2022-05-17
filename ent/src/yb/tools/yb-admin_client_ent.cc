@@ -31,6 +31,7 @@
 
 #include "yb/gutil/casts.h"
 #include "yb/gutil/strings/util.h"
+#include "yb/gutil/strings/split.h"
 
 #include "yb/master/master_defaults.h"
 #include "yb/master/master_error.h"
@@ -52,12 +53,14 @@
 #include "yb/util/pb_util.h"
 #include "yb/util/physical_time.h"
 #include "yb/util/protobuf_util.h"
+#include "yb/util/stol_utils.h"
 #include "yb/util/string_case.h"
 #include "yb/util/string_trim.h"
 #include "yb/util/string_util.h"
 #include "yb/util/timestamp.h"
 #include "yb/util/format.h"
 #include "yb/util/status_format.h"
+#include "yb/util/test_util.h"
 
 DEFINE_test_flag(int32, metadata_file_format_version, 0,
                  "Used in 'export_snapshot' metadata file format (0 means using latest format).");
@@ -919,29 +922,82 @@ Status ClusterAdminClient::SetPreferredZones(const std::vector<string>& preferre
   rpc.set_timeout(timeout_);
 
   std::set<string> zones;
+  std::set<int> visited_priorities;
+
   for (const string& zone : preferred_zones) {
-    if (std::find(zones.begin(), zones.end(), zone) != zones.end()) {
-      continue;
-    }
-    size_t last_pos = 0;
-    size_t next_pos;
-    std::vector<string> tokens;
-    while ((next_pos = zone.find(".", last_pos)) != string::npos) {
-      tokens.push_back(zone.substr(last_pos, next_pos - last_pos));
-      last_pos = next_pos + 1;
-    }
-    tokens.push_back(zone.substr(last_pos, zone.size() - last_pos));
-    if (tokens.size() != 3) {
-      return STATUS_SUBSTITUTE(InvalidArgument, "Invalid argument for preferred zone $0, should "
-          "have format cloud.region.zone", zone);
+    if (zones.find(zone) != zones.end()) {
+      return STATUS_SUBSTITUTE(
+          InvalidArgument, "Invalid argument for preferred zone $0, values should not repeat",
+          zone);
     }
 
-    CloudInfoPB* cloud_info = req.add_preferred_zones();
+    std::vector<std::string> zone_priority_split = strings::Split(zone, ":", strings::AllowEmpty());
+    if (zone_priority_split.size() == 0 || zone_priority_split.size() > 2) {
+      return STATUS_SUBSTITUTE(
+          InvalidArgument,
+          "Invalid argument for preferred zone $0, should have format cloud.region.zone[:priority]",
+          zone);
+    }
+
+    std::vector<string> tokens = strings::Split(zone_priority_split[0], ".", strings::AllowEmpty());
+    if (tokens.size() != 3) {
+      return STATUS_SUBSTITUTE(
+          InvalidArgument,
+          "Invalid argument for preferred zone $0, should have format cloud.region.zone:[priority]",
+          zone);
+    }
+
+    uint priority = 1;
+
+    if (zone_priority_split.size() == 2) {
+      auto result = CheckedStoi(zone_priority_split[1]);
+      if (!result.ok() || result.get() < 1) {
+        return STATUS_SUBSTITUTE(
+            InvalidArgument,
+            "Invalid argument for preferred zone $0, priority should be non-zero positive integer",
+            zone);
+      }
+      priority = static_cast<uint>(result.get());
+    }
+
+    // Max priority if each zone has a unique priority value can only be the size of the input array
+    if (priority > preferred_zones.size()) {
+      return STATUS(
+          InvalidArgument,
+          "Priority value cannot be more than the number of zones in the preferred list since each "
+          "priority should be associated with at least one zone from the list");
+    }
+
+    CloudInfoPB* cloud_info = nullptr;
+    visited_priorities.insert(priority);
+
+    while (req.multi_preferred_zones_size() < static_cast<int>(priority)) {
+      req.add_multi_preferred_zones();
+    }
+
+    auto current_list = req.mutable_multi_preferred_zones(priority - 1);
+    cloud_info = current_list->add_zones();
+
     cloud_info->set_placement_cloud(tokens[0]);
     cloud_info->set_placement_region(tokens[1]);
     cloud_info->set_placement_zone(tokens[2]);
 
     zones.emplace(zone);
+
+    if (priority == 1) {
+      // Handle old clusters which can only handle a single priority. New clusters will ignore this
+      // member as multi_preferred_zones is already set.
+      cloud_info = req.add_preferred_zones();
+      cloud_info->set_placement_cloud(tokens[0]);
+      cloud_info->set_placement_region(tokens[1]);
+      cloud_info->set_placement_zone(tokens[2]);
+    }
+  }
+
+  int size = static_cast<int>(visited_priorities.size());
+  if (size > 0 && (*(visited_priorities.rbegin()) != size)) {
+    return STATUS_SUBSTITUTE(
+        InvalidArgument, "Invalid argument, each priority should have at least one zone");
   }
 
   RETURN_NOT_OK(master_cluster_proxy_->SetPreferredZones(req, &resp, &rpc));
@@ -1296,7 +1352,8 @@ Status ClusterAdminClient::WaitForSetupUniverseReplicationToFinish(const string&
     if (!s.ok() || resp.has_error()) {
         LOG(WARNING) << "Encountered error while waiting for setup_universe_replication to complete"
                      << " : " << (!s.ok() ? s.ToString() : resp.error().status().message());
-    } else if (resp.has_done() && resp.done()) {
+    }
+    if (resp.has_done() && resp.done()) {
       return StatusFromPB(resp.replication_error());
     }
 
@@ -1333,51 +1390,24 @@ Status ClusterAdminClient::SetupUniverseReplication(
   rpc.set_timeout(timeout_);
   auto setup_result_status = master_replication_proxy_->SetupUniverseReplication(req, &resp, &rpc);
 
-  // Clean up config files if setup fails.
-  if (!setup_result_status.ok()) {
-    CleanupEnvironmentOnSetupUniverseReplicationFailure(producer_uuid, setup_result_status);
-    return setup_result_status;
-  }
+  setup_result_status = WaitForSetupUniverseReplicationToFinish(producer_uuid);
 
   if (resp.has_error()) {
     cout << "Error setting up universe replication: " << resp.error().status().message() << endl;
     Status status_from_error = StatusFromPB(resp.error().status());
-    CleanupEnvironmentOnSetupUniverseReplicationFailure(producer_uuid, status_from_error);
 
     return status_from_error;
   }
 
-  setup_result_status = WaitForSetupUniverseReplicationToFinish(producer_uuid);
-
-  // Clean up config files if setup fails to complete.
+    // Clean up config files if setup fails to complete.
   if (!setup_result_status.ok()) {
     cout << "Error waiting for universe replication setup to complete: "
          << setup_result_status.message().ToBuffer() << endl;
-    CleanupEnvironmentOnSetupUniverseReplicationFailure(producer_uuid, setup_result_status);
     return setup_result_status;
   }
 
   cout << "Replication setup successfully" << endl;
   return Status::OK();
-}
-
-// Helper function for deleting the universe if SetupUniverseReplicaion fails.
-void ClusterAdminClient::CleanupEnvironmentOnSetupUniverseReplicationFailure(
-  const std::string& producer_uuid, const Status& failure_status) {
-  // We don't need to delete the universe if the call to SetupUniverseReplication
-  // failed due to one of the sanity checks.
-  if (failure_status.IsInvalidArgument()) {
-    return;
-  }
-
-  cout << "Replication setup failed, cleaning up environment" << endl;
-
-  Status delete_result_status = DeleteUniverseReplication(producer_uuid, false);
-  if (!delete_result_status.ok()) {
-    cout << "Could not clean up environment: " << delete_result_status.message() << endl;
-  } else {
-    cout << "Successfully cleaned up environment" << endl;
-  }
 }
 
 Status ClusterAdminClient::DeleteUniverseReplication(const std::string& producer_id,

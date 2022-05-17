@@ -2,8 +2,6 @@
 
 package com.yugabyte.yw.commissioner;
 
-import static com.yugabyte.yw.common.ShellResponse.ERROR_CODE_EXECUTION_CANCELLED;
-import static com.yugabyte.yw.common.ShellResponse.ERROR_CODE_SUCCESS;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -26,8 +24,8 @@ import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.models.Universe.UniverseUpdater;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.NodeStatus;
+import java.time.Duration;
 import java.util.UUID;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -47,9 +45,6 @@ public abstract class AbstractTaskBase implements ITask {
 
   // The threadpool on which the tasks are executed.
   protected ExecutorService executor;
-
-  // The sequence of task lists that should be executed.
-  protected SubTaskGroupQueue subTaskGroupQueue;
 
   // The UUID of the top-level user-facing task at the top of Task tree. Eg. CreateUniverse, etc.
   protected UUID userTaskUUID;
@@ -135,16 +130,6 @@ public abstract class AbstractTaskBase implements ITask {
     this.userTaskUUID = userTaskUUID;
   }
 
-  /** @param response : ShellResponse object */
-  public void processShellResponse(ShellResponse response) {
-    if (response.code == ERROR_CODE_EXECUTION_CANCELLED) {
-      throw new CancellationException((response.message != null) ? response.message : "error");
-    }
-    if (response.code != ERROR_CODE_SUCCESS) {
-      throw new RuntimeException((response.message != null) ? response.message : "error");
-    }
-  }
-
   /**
    * We would try to parse the shell response message as JSON and return JsonNode
    *
@@ -207,16 +192,20 @@ public abstract class AbstractTaskBase implements ITask {
   }
 
   // Returns the RunnableTask instance to which SubTaskGroup instances can be added and run.
-  // TODO Use this helper method instead of instantiating SubTaskGroupQueue in the task.
   protected RunnableTask getRunnableTask() {
     return getTaskExecutor().getRunnableTask(userTaskUUID);
   }
 
   // Returns a SubTaskGroup to which subtasks can be added.
-  // TODO Use this helper method instead of instantiating SubTaskGroup in the task.
   protected SubTaskGroup createSubTaskGroup(String name) {
     SubTaskGroup subTaskGroup = getTaskExecutor().createSubTaskGroup(name);
     subTaskGroup.setSubTaskExecutor(executor);
     return subTaskGroup;
+  }
+
+  // Abort-aware wait function makes the current thread to wait until the timeout or the abort
+  // signal is received. It can be a replacement for Thread.sleep in subtasks.
+  protected void waitFor(Duration duration) {
+    getRunnableTask().waitFor(duration);
   }
 }

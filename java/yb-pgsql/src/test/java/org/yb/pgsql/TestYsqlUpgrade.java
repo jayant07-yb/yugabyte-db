@@ -50,9 +50,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.yb.client.TestUtils;
+import org.yb.minicluster.MiniYBClusterBuilder;
 import org.yb.minicluster.YsqlSnapshotVersion;
 import org.yb.util.BuildTypeUtil;
 import org.yb.util.YBTestRunnerNonTsanOnly;
+
+import com.google.common.collect.ImmutableMap;
 
 /**
  * For now, this test covers creation of system and shared system relations that should be created
@@ -86,6 +89,23 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
   /** Tests are performed on a fresh database. */
   private final String customDbName = SHARED_ENTITY_PREFIX + "sys_tables_db";
 
+  private static final int MASTER_REFRESH_TABLESPACE_INFO_SECS = 2;
+  private static final int MASTER_LOAD_BALANCER_WAIT_TIME_MS = 60 * 1000;
+
+  private static final List<Map<String, String>> perTserverZonePlacementFlags = Arrays.asList(
+      ImmutableMap.of(
+          "placement_cloud", "cloud1",
+          "placement_region", "region1",
+          "placement_zone", "zone1"),
+      ImmutableMap.of(
+          "placement_cloud", "cloud2",
+          "placement_region", "region2",
+          "placement_zone", "zone2"),
+      ImmutableMap.of(
+          "placement_cloud", "cloud3",
+          "placement_region", "region3",
+          "placement_zone", "zone3"));
+
   /** Since shared relations aren't cleared between tests, we can't reuse names. */
   private String sharedRelName;
 
@@ -105,6 +125,15 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
 
   @Rule
   public TestName name = new TestName();
+
+  @Override
+  protected void customizeMiniClusterBuilder(MiniYBClusterBuilder builder) {
+    super.customizeMiniClusterBuilder(builder);
+    builder.addMasterFlag("ysql_tablespace_info_refresh_secs",
+                          Integer.toString(MASTER_REFRESH_TABLESPACE_INFO_SECS));
+
+    builder.perTServerFlags(perTserverZonePlacementFlags);
+  }
 
   @Before
   public void beforeTestYsqlUpgrade() throws Exception {
@@ -470,6 +499,14 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
       stmtTpl.execute(createSharedIndexSql);
       LOG.info("Created shared index {}", sharedIndexName);
 
+      // Create index concurrently is not supported for system catalog.
+      String sharedIndexNameConcurrently = sharedIndexName + "_concurrently";
+      String createConcurrentIndexSql = "CREATE INDEX CONCURRENTLY " + sharedIndexNameConcurrently
+          + " ON pg_catalog." + sharedRelName + " (v ASC)"
+          + " WITH (table_oid = " + newSysOid() + ")";
+      runInvalidQuery(stmtTpl, createConcurrentIndexSql,
+          "CREATE INDEX CONCURRENTLY is currently not supported for system catalog");
+
       // Checking index flags.
       String indexFlagsSql = "SELECT indislive, indisready, indisvalid FROM pg_index"
           + " WHERE indexrelid = '" + sharedIndexName + "'::regclass";
@@ -593,6 +630,42 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
       stmtA.execute(createViewSql);
 
       assertTablesAreSimilar(origTi, newTi, stmtA, stmtB);
+    }
+  }
+
+  /**
+   * CREATE OR REPLACE VIEW should filter out upgrade-specific reloptions on both CREATE and REPLACE
+   * paths.
+   */
+  @Test
+  public void viewReloptionsAreFilteredOnReplace() throws Exception {
+    String viewName = "replaceable_system_view";
+
+    try (Connection conn = getConnectionBuilder().withDatabase(customDbName).connect();
+         Statement stmt = conn.createStatement()) {
+      setSystemRelsModificationGuc(stmt, true);
+
+      String createViewSql = "CREATE OR REPLACE VIEW pg_catalog." + viewName + " WITH ("
+          + "  security_barrier = true"
+          + ", use_initdb_acl = true"
+          + ") AS SELECT 1";
+
+      String getReloptionsSql = "SELECT reloptions FROM pg_class"
+          + " WHERE oid = 'pg_catalog." + viewName + "'::regclass";
+
+      // CREATE part.
+      LOG.info("Executing '{}'", createViewSql);
+      stmt.execute(createViewSql);
+
+      assertQuery(stmt, getReloptionsSql,
+          new Row(Arrays.asList("security_barrier=true")));
+
+      // REPLACE part.
+      LOG.info("Executing '{}' again", createViewSql);
+      stmt.execute(createViewSql);
+
+      assertQuery(stmt, getReloptionsSql,
+          new Row(Arrays.asList("security_barrier=true")));
     }
   }
 
@@ -740,8 +813,6 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
    * <p>
    * If you see this test failing, please make sure you've added a new YSQL migration as described
    * in {@code src/yb/yql/pgwrapper/ysql_migrations/README.md}.
-   * <p>
-   * After that's done, fix this test by updating values to new ones.
    */
   @Test
   public void migratingIsEquivalentToReinitdb() throws Exception {
@@ -797,6 +868,13 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
         + " Migration bug?",
         getMaxSysGeneratedOid(postSnapshotTemplate1),
         getMaxSysGeneratedOid(postSnapshotCustom));
+  }
+
+  /** Test that migrations run without error in a geo-partitioned setup. */
+  @Test
+  public void migrationInGeoPartitionedSetup() throws Exception {
+    setupGeoPartitioning();
+    runMigrations();
   }
 
   /** Invalid stuff which doesn't belong to other test cases. */
@@ -1211,7 +1289,7 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
   private void assertMigrationsWorked(
       SysCatalogSnapshot freshSnapshot,
       SysCatalogSnapshot migratedSnapshot) {
-    assertCollectionSizes("Migrated table set differs from the fresh one! ",
+    assertCollectionSizes("Migrated table set differs from the fresh one!",
         freshSnapshot.catalog.keySet(), migratedSnapshot.catalog.keySet());
 
     {
@@ -1393,7 +1471,7 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
      * In pg_node_tree string-wrapping structure:
      * <ul>
      * <li>Replace auto-generated OIDs with resolved names.
-     * <li>Replace values for :location and :stmt_len with placeholders.
+     * <li>Replace values for :location, :stmt_location and :stmt_len with placeholders.
      * </ul>
      * Format the result as a plain string. We don't care about minor formatting losses as long as
      * it's consistent.
@@ -1411,6 +1489,8 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
             }
           } else if (nodeTreeParts[i].equals(":location")) {
             nodeTreeParts[i + 1] = "<location>";
+          } else if (nodeTreeParts[i].equals(":stmt_location")) {
+            nodeTreeParts[i + 1] = "<stmt_location>";
           } else if (nodeTreeParts[i].equals(":stmt_len")) {
             nodeTreeParts[i + 1] = "<stmt_len>";
           }
@@ -1490,6 +1570,39 @@ public class TestYsqlUpgrade extends BasePgSQLTest {
     if (!joined.toLowerCase().contains("successfully upgraded")) {
       throw new IllegalStateException("Unexpected migrations result: " + joined);
     }
+  }
+
+  private void setupGeoPartitioning() throws Exception {
+    // Setup tablespaces and tables to emulate a geo-partitioned setup.
+    try (Statement stmt = connection.createStatement()) {
+      for (Map<String, String> tserverPlacement : perTserverZonePlacementFlags) {
+        String cloud = tserverPlacement.get("placement_cloud");
+        String region = tserverPlacement.get("placement_region");
+        String zone = tserverPlacement.get("placement_zone");
+        String suffix = cloud + "_" + region + "_" + zone;
+
+        stmt.execute(
+            "CREATE TABLESPACE tablespace_" + suffix + " WITH (replica_placement=" +
+            "'{\"num_replicas\": 1, \"placement_blocks\":" +
+            "[{\"cloud\":\"" + cloud + "\",\"region\":\"" + region + "\",\"zone\":\"" + zone +
+            "\",\"min_num_replicas\":1}]}')");
+        stmt.execute("CREATE TABLE table_" + suffix + " (a int) TABLESPACE tablespace_" + suffix);
+      }
+    }
+
+    // Wait for tablespace info to be refreshed in load balancer.
+    Thread.sleep(MASTER_REFRESH_TABLESPACE_INFO_SECS); // TODO(esheng) 2x?
+
+    int expectedTServers = miniCluster.getTabletServers().size() + 1;
+    miniCluster.startTServer(perTserverZonePlacementFlags.get(1));
+    miniCluster.waitForTabletServers(expectedTServers);
+
+    // Wait for loadbalancer to run.
+    assertTrue(miniCluster.getClient().waitForLoadBalancerActive(
+      MASTER_LOAD_BALANCER_WAIT_TIME_MS));
+
+    // Wait for load balancer to become idle.
+    assertTrue(miniCluster.getClient().waitForLoadBalance(Long.MAX_VALUE, expectedTServers));
   }
 
   @FunctionalInterface

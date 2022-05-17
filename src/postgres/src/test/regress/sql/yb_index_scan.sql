@@ -61,6 +61,11 @@ INSERT INTO sc_multi_desc(k, r, v) VALUES (1, 10, 10),(1, 10, 10),(1, NULL, 2),(
 EXPLAIN (COSTS OFF) SELECT * FROM sc_multi_desc WHERE k = 1;
 SELECT * FROM sc_multi_desc WHERE k = 1;
 
+-- Testing for the case in issue #12481
+CREATE INDEX range_ind ON sc_multi_desc(v ASC, r ASC);
+EXPLAIN SELECT v,r FROM sc_multi_desc WHERE v IN (2,4) and r is null;
+SELECT v,r FROM sc_multi_desc WHERE v IN (2,4) and r is null;
+
 -- Test NULLS last ordering.
 CREATE TABLE sc_desc_nl(h int, r int, v int);
 CREATE INDEX on sc_desc_nl(h HASH, r DESC NULLS LAST);
@@ -428,3 +433,10 @@ SELECT * FROM pk_range_int_text WHERE (r1, r2, r3) >= (1,'abc2'::text,3) AND (r1
 EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM pk_range_int_text WHERE (r1, r2, r3) >= (1,'ab'::text,5) AND (r1, r2, r3) <= (1,'abcd'::text,5) ORDER BY r1 ASC, r2 ASC, r3 ASC;
 SELECT * FROM pk_range_int_text WHERE (r1, r2, r3) >= (1,'ab'::text,5) AND (r1, r2, r3) <= (1,'abcd'::text,5) ORDER BY r1 ASC, r2 ASC, r3 ASC;
 DROP TABLE pk_range_int_text;
+
+-- make sure row comparisons don't operate on hash keys yet
+CREATE TABLE pk_hash_range_int (h int, r1 int, r2 int, r3 int, PRIMARY KEY(h hash, r1 asc, r2 asc, r3 asc));
+INSERT INTO pk_hash_range_int SELECT i/25, (i/5) % 5, i % 5, i FROM generate_series(1, 125) AS i;
+/*+ IndexScan(pk_hash_range_int) */ EXPLAIN (COSTS OFF, TIMING OFF, SUMMARY OFF, ANALYZE) SELECT * FROM pk_hash_range_int WHERE (r1, r2) <= (3, 2);
+/*+ IndexScan(pk_hash_range_int) */ SELECT * FROM pk_hash_range_int WHERE (r1, r2) <= (3, 2);
+DROP TABLE pk_hash_range_int;

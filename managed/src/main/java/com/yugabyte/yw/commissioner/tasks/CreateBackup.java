@@ -18,14 +18,12 @@ import static com.yugabyte.yw.commissioner.tasks.BackupUniverse.SCHEDULED_BACKUP
 import static com.yugabyte.yw.commissioner.tasks.BackupUniverse.SCHEDULED_BACKUP_SUCCESS_COUNTER;
 import static com.yugabyte.yw.common.Util.SYSTEM_PLATFORM_DB;
 import static com.yugabyte.yw.common.Util.getUUIDRepresentation;
-import static com.yugabyte.yw.common.Util.lockedUpdateBackupState;
 import static com.yugabyte.yw.common.metrics.MetricService.buildMetricTemplate;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.api.client.util.Throwables;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.Commissioner;
-import com.yugabyte.yw.commissioner.SubTaskGroupQueue;
 import com.yugabyte.yw.commissioner.UserTaskDetails;
 import com.yugabyte.yw.commissioner.ITask.Abortable;
 import com.yugabyte.yw.common.customer.config.CustomerConfigService;
@@ -90,7 +88,11 @@ public class CreateBackup extends UniverseTaskBase {
     tableBackupParams.sse = params().sse;
     tableBackupParams.parallelism = params().parallelism;
     tableBackupParams.timeBeforeDelete = params().timeBeforeDelete;
+    tableBackupParams.expiryTimeUnit = params().expiryTimeUnit;
     tableBackupParams.backupType = params().backupType;
+    tableBackupParams.isFullBackup = CollectionUtils.isEmpty(params().keyspaceTableList);
+    tableBackupParams.disableChecksum = params().disableChecksum;
+    tableBackupParams.useTablespaces = params().useTablespaces;
     Set<String> tablesToBackup = new HashSet<>();
     Universe universe = Universe.getOrBadRequest(params().universeUUID);
     MetricLabelsBuilder metricLabelsBuilder = MetricLabelsBuilder.create().appendSource(universe);
@@ -98,7 +100,6 @@ public class CreateBackup extends UniverseTaskBase {
     boolean isUniverseLocked = false;
     try {
       checkUniverseVersion();
-      subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
 
       // Update the universe DB with the update to be performed and set the 'updateInProgress' flag
       // to prevent other updates from happening.
@@ -106,7 +107,7 @@ public class CreateBackup extends UniverseTaskBase {
       isUniverseLocked = true;
       // Update universe 'backupInProgress' flag to true or throw an exception if universe is
       // already having a backup in progress.
-      lockedUpdateBackupState(params().universeUUID, this, true);
+      lockedUpdateBackupState(true);
       try {
         String masterAddresses = universe.getMasterAddresses(true);
         String certificate = universe.getCertificateNodetoNode();
@@ -115,9 +116,9 @@ public class CreateBackup extends UniverseTaskBase {
         YBClient client = null;
         try {
           client = ybService.getClient(masterAddresses, certificate);
-          List<TableInfo> tableInfoList = new ArrayList<TableInfo>();
+          List<TableInfo> tableInfoList = new ArrayList<>();
           HashMap<String, BackupTableParams> keyspaceMap = new HashMap<>();
-          if (params().keyspaceTableList != null) {
+          if (CollectionUtils.isNotEmpty(params().keyspaceTableList)) {
             for (BackupRequestParams.KeyspaceTable keyspaceTable : params().keyspaceTableList) {
               BackupTableParams backupParams =
                   createBackupParams(params().backupType, keyspaceTable.keyspace);
@@ -127,9 +128,9 @@ public class CreateBackup extends UniverseTaskBase {
                   GetTableSchemaResponse tableSchema =
                       client.getTableSchemaByUUID(tableUUID.toString().replace("-", ""));
                   // If table is not REDIS or YCQL, ignore.
-                  if (tableSchema.getTableType() == TableType.PGSQL_TABLE_TYPE
-                      || tableSchema.getTableType() != params().backupType
-                      || tableSchema.getTableType() == TableType.TRANSACTION_STATUS_TABLE_TYPE
+                  if (tableSchema.getTableType().equals(TableType.PGSQL_TABLE_TYPE)
+                      || !tableSchema.getTableType().equals(params().backupType)
+                      || tableSchema.getTableType().equals(TableType.TRANSACTION_STATUS_TABLE_TYPE)
                       || !keyspaceTable.keyspace.equals(tableSchema.getNamespace())) {
                     log.info(
                         "Skipping backup of table with UUID: "
@@ -167,9 +168,9 @@ public class CreateBackup extends UniverseTaskBase {
                   String tableKeySpace = table.getNamespace().getName();
                   String tableUUIDString = table.getId().toStringUtf8();
                   UUID tableUUID = getUUIDRepresentation(tableUUIDString);
-                  if (tableType != params().backupType
-                      || tableType == TableType.TRANSACTION_STATUS_TABLE_TYPE
-                      || table.getRelationType() == RelationType.INDEX_TABLE_RELATION
+                  if (!tableType.equals(params().backupType)
+                      || tableType.equals(TableType.TRANSACTION_STATUS_TABLE_TYPE)
+                      || table.getRelationType().equals(RelationType.INDEX_TABLE_RELATION)
                       || !keyspaceTable.keyspace.equals(tableKeySpace)) {
                     log.info(
                         "Skipping keyspace/universe backup of table "
@@ -180,13 +181,13 @@ public class CreateBackup extends UniverseTaskBase {
                             + tableKeySpace);
                     continue;
                   }
-                  if (tableType == TableType.PGSQL_TABLE_TYPE
+                  if (tableType.equals(TableType.PGSQL_TABLE_TYPE)
                       && !keyspaceMap.containsKey(tableKeySpace)) {
                     keyspaceMap.put(tableKeySpace, backupParams);
                     backupParamsList.add(backupParams);
                     tablesToBackup.add(String.format("%s:%s", tableKeySpace, table.getName()));
-                  } else if (tableType == TableType.YQL_TABLE_TYPE
-                      || tableType == TableType.REDIS_TABLE_TYPE) {
+                  } else if (tableType.equals(TableType.YQL_TABLE_TYPE)
+                      || tableType.equals(TableType.REDIS_TABLE_TYPE)) {
                     if (!keyspaceMap.containsKey(tableKeySpace)) {
                       keyspaceMap.put(tableKeySpace, backupParams);
                       backupParamsList.add(backupParams);
@@ -209,34 +210,33 @@ public class CreateBackup extends UniverseTaskBase {
           } else {
             ListTablesResponse response = client.getTablesList(null, true, null);
             tableInfoList = response.getTableInfoList();
-
             for (TableInfo table : tableInfoList) {
               TableType tableType = table.getTableType();
               String tableKeySpace = table.getNamespace().getName();
               String tableUUIDString = table.getId().toStringUtf8();
               UUID tableUUID = getUUIDRepresentation(tableUUIDString);
-              if (tableType != params().backupType
-                  || tableType == TableType.TRANSACTION_STATUS_TABLE_TYPE
-                  || table.getRelationType() == RelationType.INDEX_TABLE_RELATION) {
+              if (!tableType.equals(params().backupType)
+                  || tableType.equals(TableType.TRANSACTION_STATUS_TABLE_TYPE)
+                  || table.getRelationType().equals(RelationType.INDEX_TABLE_RELATION)) {
                 log.info("Skipping backup of table " + tableUUID);
                 continue;
               }
 
-              if (tableType == TableType.PGSQL_TABLE_TYPE
+              if (tableType.equals(TableType.PGSQL_TABLE_TYPE)
                   && SYSTEM_PLATFORM_DB.equals(tableKeySpace)) {
                 log.info("Skipping " + SYSTEM_PLATFORM_DB + " database");
                 continue;
               }
 
-              if (tableType == TableType.PGSQL_TABLE_TYPE
+              if (tableType.equals(TableType.PGSQL_TABLE_TYPE)
                   && !keyspaceMap.containsKey(tableKeySpace)) {
                 BackupTableParams backupParams =
                     createBackupParams(params().backupType, tableKeySpace);
                 keyspaceMap.put(tableKeySpace, backupParams);
                 backupParamsList.add(backupParams);
                 tablesToBackup.add(String.format("%s:%s", tableKeySpace, table.getName()));
-              } else if (tableType == TableType.YQL_TABLE_TYPE
-                  || tableType == TableType.REDIS_TABLE_TYPE) {
+              } else if (tableType.equals(TableType.YQL_TABLE_TYPE)
+                  || tableType.equals(TableType.REDIS_TABLE_TYPE)) {
                 if (!keyspaceMap.containsKey(tableKeySpace)) {
                   BackupTableParams backupParams =
                       createBackupParams(params().backupType, tableKeySpace);
@@ -279,8 +279,8 @@ public class CreateBackup extends UniverseTaskBase {
         if (!customerConfig.getState().equals(ConfigState.Active)) {
           throw new RuntimeException("Storage config cannot be used as it is not in Active state");
         }
-
-        subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
+        // Clear any previous subtasks if any.
+        getRunnableTask().reset();
         if (params().alterLoadBalancer) {
           createLoadBalancerStateChangeTask(false)
               .setSubTaskGroupType(UserTaskDetails.SubTaskGroupType.ConfigureUniverse);
@@ -293,6 +293,8 @@ public class CreateBackup extends UniverseTaskBase {
                 BackupVersion.V2);
         backup.setTaskUUID(userTaskUUID);
         tableBackupParams.backupUuid = backup.backupUUID;
+        tableBackupParams.disableChecksum = params().disableChecksum;
+        tableBackupParams.useTablespaces = params().useTablespaces;
         log.info("Task id {} for the backup {}", backup.taskUUID, backup.backupUUID);
 
         for (BackupTableParams backupParams : backupParamsList) {
@@ -314,7 +316,7 @@ public class CreateBackup extends UniverseTaskBase {
 
         unlockUniverseForUpdate();
         isUniverseLocked = false;
-        subTaskGroupQueue.run();
+        getRunnableTask().runSubTasks();
 
         BACKUP_SUCCESS_COUNTER.labels(metricLabelsBuilder.getPrometheusValues()).inc();
         metricService.setOkStatusMetric(
@@ -327,16 +329,17 @@ public class CreateBackup extends UniverseTaskBase {
         throw ce;
       } catch (Throwable t) {
         if (params().alterLoadBalancer) {
-          subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
+          // Clear previous subtasks if any.
+          getRunnableTask().reset();
           // If the task failed, we don't want the loadbalancer to be
           // disabled, so we enable it again in case of errors.
           createLoadBalancerStateChangeTask(true)
               .setSubTaskGroupType(UserTaskDetails.SubTaskGroupType.ConfigureUniverse);
-          subTaskGroupQueue.run();
+          getRunnableTask().runSubTasks();
         }
         throw t;
       } finally {
-        lockedUpdateBackupState(params().universeUUID, this, false);
+        lockedUpdateBackupState(false);
       }
     } catch (Throwable t) {
       try {
@@ -373,6 +376,8 @@ public class CreateBackup extends UniverseTaskBase {
     backupParams.scheduleUUID = params().scheduleUUID;
     backupParams.setKeyspace(tableKeySpace);
     backupParams.backupType = backupType;
+    backupParams.disableChecksum = params().disableChecksum;
+    backupParams.useTablespaces = params().useTablespaces;
 
     if (tableName != null && tableUUID != null) {
       if (backupParams.tableNameList == null) {
@@ -416,6 +421,8 @@ public class CreateBackup extends UniverseTaskBase {
     backupParams.parallelism = params().parallelism;
     backupParams.timeBeforeDelete = params().timeBeforeDelete;
     backupParams.scheduleUUID = params().scheduleUUID;
+    backupParams.disableChecksum = params().disableChecksum;
+    backupParams.useTablespaces = params().useTablespaces;
     return backupParams;
   }
 

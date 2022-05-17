@@ -115,8 +115,6 @@ class CatalogManagerIf {
 
   virtual bool IsUserTable(const TableInfo& table) const = 0;
 
-  virtual bool HasTablegroups() = 0;
-
   virtual NamespaceName GetNamespaceName(const NamespaceId& id) const = 0;
 
   virtual bool IsUserIndex(const TableInfo& table) const = 0;
@@ -150,7 +148,9 @@ class CatalogManagerIf {
 
   virtual bool IsUserCreatedTable(const TableInfo& table) const = 0;
 
-  virtual BlacklistSet BlacklistSetFromPB() const = 0;
+  virtual Status GetAllAffinitizedZones(vector<AffinitizedZonesSet>* affinitized_zones) = 0;
+
+  virtual Result<BlacklistSet> BlacklistSetFromPB(bool leader_blacklist = false) const = 0;
 
   virtual void GetAllUDTypes(std::vector<scoped_refptr<UDTypeInfo>>* types) = 0;
 
@@ -216,9 +216,8 @@ class CatalogManagerIf {
 
   virtual scoped_refptr<TableInfo> NewTableInfo(TableId id) = 0;
 
-  // If select_all_tablets_for_split is true, we will not call ShouldSplitValidCandidate.
-  virtual CHECKED_STATUS SplitTablet(
-      const TabletId& tablet_id, bool select_all_tablets_for_split) = 0;
+  // If is_manual_split is true, we will not call ShouldSplitValidCandidate.
+  virtual CHECKED_STATUS SplitTablet(const TabletId& tablet_id, ManualSplit is_manual_split) = 0;
 
   virtual CHECKED_STATUS TEST_SplitTablet(
       const scoped_refptr<TabletInfo>& source_tablet_info, docdb::DocKeyHash split_hash_code) = 0;

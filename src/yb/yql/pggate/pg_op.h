@@ -17,7 +17,7 @@
 #include "yb/util/status.h"
 
 #include "yb/common/common_fwd.h"
-#include "yb/common/pgsql_protocol.pb.h"
+#include "yb/common/pgsql_protocol.messages.h"
 #include "yb/common/read_hybrid_time.h"
 
 #include "yb/rpc/rpc_fwd.h"
@@ -29,7 +29,7 @@ namespace pggate {
 
 class PgsqlOp {
  public:
-  PgsqlOp() = default;
+  PgsqlOp(Arena* arena, bool is_region_local) : arena_(arena), is_region_local_(is_region_local) {}
   virtual ~PgsqlOp() = default;
 
   PgsqlOp(const PgsqlOp&) = delete;
@@ -43,16 +43,20 @@ class PgsqlOp {
     return !is_read();
   }
 
-  PgsqlResponsePB& response() {
+  Arena& arena() const {
+    return *arena_;
+  }
+
+  void set_response(LWPgsqlResponsePB* response) {
+    response_ = response;
+  }
+
+  LWPgsqlResponsePB* response() {
     return response_;
   }
 
-  const PgsqlResponsePB& response() const {
+  const LWPgsqlResponsePB* response() const {
     return response_;
-  }
-
-  rpc::SidecarPtr& rows_data() {
-    return rows_data_;
   }
 
   bool is_active() const {
@@ -61,6 +65,10 @@ class PgsqlOp {
 
   void set_active(bool value) {
     active_ = value;
+  }
+
+  bool is_region_local() const {
+    return is_region_local_;
   }
 
   void set_read_time(const ReadHybridTime& value) {
@@ -76,22 +84,27 @@ class PgsqlOp {
   virtual CHECKED_STATUS InitPartitionKey(const PgTableDesc& table) = 0;
 
  private:
+  virtual std::string RequestToString() const = 0;
+
+  // dtor for this class is not invoked, so only fields that could be destroyed with arena are
+  // allowed.
+  Arena* arena_;
   bool active_ = false;
-  PgsqlResponsePB response_;
-  rpc::SidecarPtr rows_data_;
+  const bool is_region_local_;
+  LWPgsqlResponsePB* response_ = nullptr;
   ReadHybridTime read_time_;
 };
 
 class PgsqlReadOp : public PgsqlOp {
  public:
-  PgsqlReadOp() = default;
-  explicit PgsqlReadOp(const PgTableDesc& desc);
+  PgsqlReadOp(Arena* arena, bool is_region_local);
+  PgsqlReadOp(Arena* arena, const PgTableDesc& desc, bool is_region_local);
 
-  PgsqlReadRequestPB& read_request() {
+  LWPgsqlReadRequestPB& read_request() {
     return read_request_;
   }
 
-  const PgsqlReadRequestPB& read_request() const {
+  const LWPgsqlReadRequestPB& read_request() const {
     return read_request_;
   }
 
@@ -111,17 +124,14 @@ class PgsqlReadOp : public PgsqlOp {
     return read_from_followers_;
   }
 
-  PgsqlOpPtr DeepCopy() const {
-    auto result = std::make_shared<PgsqlReadOp>();
-    result->read_request() = read_request();
-    result->read_from_followers_ = read_from_followers_;
-    return result;
-  }
+  PgsqlOpPtr DeepCopy(const std::shared_ptr<void>& shared_ptr) const;
+
+  std::string RequestToString() const override;
 
  private:
   CHECKED_STATUS InitPartitionKey(const PgTableDesc& table) override;
 
-  PgsqlReadRequestPB read_request_;
+  LWPgsqlReadRequestPB read_request_;
   bool read_from_followers_ = false;
 };
 
@@ -132,13 +142,13 @@ std::shared_ptr<PgsqlReadRequestPB> InitSelect(
 
 class PgsqlWriteOp : public PgsqlOp {
  public:
-  explicit PgsqlWriteOp(bool need_transaction) : need_transaction_(need_transaction) {}
+  PgsqlWriteOp(Arena* arena, bool need_transaction, bool is_region_local);
 
-  PgsqlWriteRequestPB& write_request() {
+  LWPgsqlWriteRequestPB& write_request() {
     return write_request_;
   }
 
-  const PgsqlWriteRequestPB& write_request() const {
+  const LWPgsqlWriteRequestPB& write_request() const {
     return write_request_;
   }
 
@@ -150,11 +160,7 @@ class PgsqlWriteOp : public PgsqlOp {
     return need_transaction_;
   }
 
-  PgsqlOpPtr DeepCopy() const {
-    auto result = std::make_shared<PgsqlWriteOp>(need_transaction_);
-    result->write_request() = write_request();
-    return result;
-  }
+  PgsqlOpPtr DeepCopy(const std::shared_ptr<void>& shared_ptr) const;
 
   HybridTime write_time() const {
     return write_time_;
@@ -164,17 +170,19 @@ class PgsqlWriteOp : public PgsqlOp {
     write_time_ = value;
   }
 
+  std::string RequestToString() const override;
+
  private:
   CHECKED_STATUS InitPartitionKey(const PgTableDesc& table) override;
 
-  PgsqlWriteRequestPB write_request_;
+  LWPgsqlWriteRequestPB write_request_;
   bool need_transaction_;
   HybridTime write_time_;
 };
 
-using PgsqlWriteOpPtr = std::shared_ptr<PgsqlWriteOp>;
-
 CHECKED_STATUS ReviewResponsePagingState(const PgTableDesc& table, PgsqlReadOp* op);
+
+bool PrepareNextRequest(PgsqlReadOp* read_op);
 
 }  // namespace pggate
 }  // namespace yb

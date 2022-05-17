@@ -31,6 +31,8 @@
 namespace yb {
 namespace docdb {
 
+const int kDefaultGroupNo = 0;
+
 class IntentAwareIterator;
 
 // See to a rocksdb point that is at least sub_doc_key.
@@ -100,7 +102,7 @@ std::unique_ptr<IntentAwareIterator> CreateIntentAwareIterator(
     const Slice* iterate_upper_bound = nullptr);
 
 // Request RocksDB compaction and wait until it completes.
-CHECKED_STATUS ForceRocksDBCompact(rocksdb::DB* db);
+CHECKED_STATUS ForceRocksDBCompact(rocksdb::DB* db, SkipFlush skip_flush = SkipFlush::kFalse);
 
 rocksdb::Options TEST_AutoInitFromRocksDBFlags();
 
@@ -128,7 +130,8 @@ void InitRocksDBOptions(
     rocksdb::Options* options, const std::string& log_prefix,
     const std::shared_ptr<rocksdb::Statistics>& statistics,
     const tablet::TabletOptions& tablet_options,
-    rocksdb::BlockBasedTableOptions table_options = rocksdb::BlockBasedTableOptions());
+    rocksdb::BlockBasedTableOptions table_options = rocksdb::BlockBasedTableOptions(),
+    const uint64_t group_no = kDefaultGroupNo);
 
 // Sets logs prefix for RocksDB options. This will also reinitialize options->info_log.
 void SetLogPrefix(rocksdb::Options* options, const std::string& log_prefix);

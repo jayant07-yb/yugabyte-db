@@ -20,7 +20,13 @@
 #include "yb/docdb/docdb_util.h"
 #include "yb/docdb/doc_key.h"
 
+#include "yb/util/flag_tags.h"
+
 DEFINE_int32(cdc_snapshot_batch_size, 250, "Batch size for the snapshot operation in CDC");
+TAG_FLAG(cdc_snapshot_batch_size, runtime);
+
+DEFINE_bool(stream_truncate_record, false, "Enable streaming of TRUNCATE record");
+TAG_FLAG(stream_truncate_record, runtime);
 
 namespace yb {
 namespace cdc {
@@ -49,15 +55,16 @@ void SetOperation(RowMessage* row_message, OpType type, const Schema& schema) {
   row_message->set_pgschema_name(schema.SchemaName());
 }
 
+template <class Value>
 void AddColumnToMap(
     const std::shared_ptr<tablet::TabletPeer>& tablet_peer,
     const ColumnSchema& col_schema,
-    const docdb::PrimitiveValue& col,
+    const Value& col,
     DatumMessagePB* cdc_datum_message) {
   cdc_datum_message->set_column_name(col_schema.name());
   QLValuePB ql_value;
   if (tablet_peer->tablet()->table_type() == PGSQL_TABLE_TYPE) {
-    docdb::PrimitiveValue::ToQLValuePB(col, col_schema.type(), &ql_value);
+    col.ToQLValuePB(col_schema.type(), &ql_value);
     if (!IsNull(ql_value) && col_schema.pg_type_oid() != 0 /*kInvalidOid*/) {
       docdb::SetValueFromQLBinaryWrapper(ql_value, col_schema.pg_type_oid(), cdc_datum_message);
     } else {
@@ -182,12 +189,12 @@ CHECKED_STATUS PopulateCDCSDKIntentRecord(
     const auto key_size =
         VERIFY_RESULT(docdb::DocKey::EncodedSize(key, docdb::DocKeyPart::kWholeDocKey));
 
-    docdb::PrimitiveValue column_id;
-    boost::optional<docdb::PrimitiveValue> column_id_opt;
+    docdb::KeyEntryValue column_id;
+    boost::optional<docdb::KeyEntryValue> column_id_opt;
     Slice key_column = key.WithoutPrefix(key_size);
     if (!key_column.empty()) {
-      RETURN_NOT_OK(docdb::SubDocument::DecodeKey(&key_column, &column_id));
-      column_id_opt = boost::optional<docdb::PrimitiveValue>(column_id);
+      RETURN_NOT_OK(docdb::KeyEntryValue::DecodeKey(&key_column, &column_id));
+      column_id_opt = column_id;
     }
 
     Slice sub_doc_key = key;
@@ -197,7 +204,7 @@ CHECKED_STATUS PopulateCDCSDKIntentRecord(
     docdb::Value decoded_value;
     RETURN_NOT_OK(decoded_value.Decode(value));
 
-    if (column_id_opt && column_id_opt->value_type() == docdb::ValueType::kColumnId &&
+    if (column_id_opt && column_id_opt->type() == docdb::KeyEntryType::kColumnId &&
         schema.is_key_column(column_id_opt->GetColumnId())) {
       *write_id = intent.write_id;
       *reverse_index_key = intent.reverse_index_key;
@@ -216,14 +223,14 @@ CHECKED_STATUS PopulateCDCSDKIntentRecord(
       row_message->Clear();
 
       // Check whether operation is WRITE or DELETE.
-      if (decoded_value.value_type() == docdb::ValueType::kTombstone &&
+      if (decoded_value.value_type() == docdb::ValueEntryType::kTombstone &&
           decoded_key.num_subkeys() == 0) {
         SetOperation(row_message, OpType::DELETE, schema);
         *write_id = intent.write_id;
       } else {
         if (column_id_opt &&
-            column_id_opt->value_type() == docdb::ValueType::kSystemColumnId &&
-            decoded_value.value_type() == docdb::ValueType::kNullLow) {
+            column_id_opt->type() == docdb::KeyEntryType::kSystemColumnId &&
+            decoded_value.value_type() == docdb::ValueEntryType::kNullLow) {
           SetOperation(row_message, OpType::INSERT, schema);
           col_count = schema.num_key_columns() - 1;
         } else {
@@ -244,7 +251,7 @@ CHECKED_STATUS PopulateCDCSDKIntentRecord(
 
     prev_key = primary_key;
     if (IsInsertOrUpdate(*row_message)) {
-      if (column_id_opt && column_id_opt->value_type() == docdb::ValueType::kColumnId) {
+      if (column_id_opt && column_id_opt->type() == docdb::KeyEntryType::kColumnId) {
         const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_id_opt->GetColumnId()));
 
         AddColumnToMap(
@@ -252,8 +259,8 @@ CHECKED_STATUS PopulateCDCSDKIntentRecord(
         row_message->add_old_tuple();
 
       } else if (
-          column_id_opt && column_id_opt->value_type() != docdb::ValueType::kSystemColumnId) {
-        LOG(DFATAL) << "Unexpected value type in key: " << column_id_opt->value_type()
+          column_id_opt && column_id_opt->type() != docdb::KeyEntryType::kSystemColumnId) {
+        LOG(DFATAL) << "Unexpected value type in key: " << column_id_opt->type()
                     << " key: " << decoded_key.ToString()
                     << " value: " << decoded_value.primitive_value();
       }
@@ -310,16 +317,16 @@ CHECKED_STATUS PopulateCDCSDKWriteRecord(
       RETURN_NOT_OK(decoded_key.DecodeFrom(&sub_doc_key, docdb::HybridTimeRequired::kFalse));
 
       // Check whether operation is WRITE or DELETE.
-      if (decoded_value.value_type() == docdb::ValueType::kTombstone &&
+      if (decoded_value.value_type() == docdb::ValueEntryType::kTombstone &&
           decoded_key.num_subkeys() == 0) {
         SetOperation(row_message, OpType::DELETE, schema);
       } else {
-        docdb::PrimitiveValue column_id;
+        docdb::KeyEntryValue column_id;
         Slice key_column(key.WithoutPrefix(key_size));
-        RETURN_NOT_OK(docdb::SubDocument::DecodeKey(&key_column, &column_id));
+        RETURN_NOT_OK(docdb::KeyEntryValue::DecodeKey(&key_column, &column_id));
 
-        if (column_id.value_type() == docdb::ValueType::kSystemColumnId &&
-            decoded_value.value_type() == docdb::ValueType::kNullLow) {
+        if (column_id.type() == docdb::KeyEntryType::kSystemColumnId &&
+            decoded_value.value_type() == docdb::ValueEntryType::kNullLow) {
           SetOperation(row_message, OpType::INSERT, schema);
         } else {
           SetOperation(row_message, OpType::UPDATE, schema);
@@ -335,18 +342,18 @@ CHECKED_STATUS PopulateCDCSDKWriteRecord(
     DCHECK(proto_record);
 
     if (IsInsertOrUpdate(*row_message)) {
-      docdb::PrimitiveValue column_id;
-      Slice key_column((const char*)(key.data() + key_size));
-      RETURN_NOT_OK(docdb::SubDocument::DecodeKey(&key_column, &column_id));
-      if (column_id.value_type() == docdb::ValueType::kColumnId) {
+      docdb::KeyEntryValue column_id;
+      Slice key_column = key.WithoutPrefix(key_size);
+      RETURN_NOT_OK(docdb::KeyEntryValue::DecodeKey(&key_column, &column_id));
+      if (column_id.type() == docdb::KeyEntryType::kColumnId) {
         const ColumnSchema& col = VERIFY_RESULT(schema.column_by_id(column_id.GetColumnId()));
 
         AddColumnToMap(
             tablet_peer, col, decoded_value.primitive_value(), row_message->add_new_tuple());
         row_message->add_old_tuple();
 
-      } else if (column_id.value_type() != docdb::ValueType::kSystemColumnId) {
-        LOG(DFATAL) << "Unexpected value type in key: " << column_id.value_type();
+      } else if (column_id.type() != docdb::KeyEntryType::kSystemColumnId) {
+        LOG(DFATAL) << "Unexpected value type in key: " << column_id.type();
       }
     }
   }
@@ -420,7 +427,6 @@ CHECKED_STATUS PopulateCDCSDKTruncateRecord(
   row_message = proto_record->mutable_row_message();
   row_message->set_op(RowMessage_Op_TRUNCATE);
   row_message->set_pgschema_name(schema.SchemaName());
-  row_message->mutable_truncate_request_info()->CopyFrom(msg->truncate());
 
   CDCSDKOpIdPB* cdc_sdk_op_id_pb;
 
@@ -581,7 +587,6 @@ Status GetChangesForCDCSDK(
   // It is snapshot call.
   if (from_op_id.write_id() == -1) {
     auto txn_participant = tablet_peer->tablet()->transaction_participant();
-    tablet::RemoveIntentsData data;
     ReadHybridTime time;
     std::string nextKey;
     SchemaPB schema_pb;
@@ -590,19 +595,21 @@ Status GetChangesForCDCSDK(
       if (txn_participant == nullptr || txn_participant->context() == nullptr)
         return STATUS_SUBSTITUTE(
             Corruption, "Cannot read data as the transaction participant context is null");
-      txn_participant->context()->GetLastReplicatedData(&data);
+      tablet::RemoveIntentsData data;
+      RETURN_NOT_OK(txn_participant->context()->GetLastReplicatedData(&data));
       // Set the checkpoint and communicate to the follower.
       VLOG(1) << "The first snapshot term " << data.op_id.term << "index  " << data.op_id.index
               << "time " << data.log_ht.ToUint64();
       // Update the CDCConsumerOpId.
-      {
-        std::shared_ptr<consensus::Consensus> shared_consensus = tablet_peer->shared_consensus();
-        shared_consensus->UpdateCDCConsumerOpId(data.op_id);
-      }
-      if (txn_participant == nullptr || txn_participant->context() == nullptr)
+      std::shared_ptr<consensus::Consensus> shared_consensus = tablet_peer->shared_consensus();
+      shared_consensus->UpdateCDCConsumerOpId(data.op_id);
+
+      if (txn_participant == nullptr || txn_participant->context() == nullptr) {
         return STATUS_SUBSTITUTE(
             Corruption, "Cannot read data as the transaction participant context is null");
-      txn_participant->context()->GetLastReplicatedData(&data);
+      }
+      txn_participant->SetRetainOpId(data.op_id);
+      RETURN_NOT_OK(txn_participant->context()->GetLastReplicatedData(&data));
       time = ReadHybridTime::SingleTime(data.log_ht);
 
       // This should go to cdc_state table.
@@ -667,7 +674,7 @@ Status GetChangesForCDCSDK(
     stream_state.key = from_op_id.key();
     stream_state.write_id = from_op_id.write_id();
 
-    RETURN_NOT_OK(reverse_index_key_slice.consume_byte(docdb::ValueTypeAsChar::kTransactionId));
+    RETURN_NOT_OK(reverse_index_key_slice.consume_byte(docdb::KeyEntryTypeAsChar::kTransactionId));
     auto transaction_id = VERIFY_RESULT(DecodeTransactionId(&reverse_index_key_slice));
 
     RETURN_NOT_OK(ProcessIntents(
@@ -680,7 +687,6 @@ Status GetChangesForCDCSDK(
     }
     checkpoint_updated = true;
   } else {
-    OpId checkpoint_op_id;
     RequestScope request_scope;
 
     auto read_ops = VERIFY_RESULT(tablet_peer->consensus()->ReadReplicatedMessagesForCDC(
@@ -720,8 +726,6 @@ Status GetChangesForCDCSDK(
         current_schema = **cached_schema;
       }
 
-      const auto& batch = msg->write().write_batch();
-
       switch (msg->op_type()) {
         case consensus::OperationType::UPDATE_TRANSACTION_OP:
           // Ignore intents.
@@ -750,16 +754,19 @@ Status GetChangesForCDCSDK(
           checkpoint_updated = true;
           break;
 
-        case consensus::OperationType::WRITE_OP:
+        case consensus::OperationType::WRITE_OP: {
+          const auto& batch = msg->write().write_batch();
+
           if (!batch.has_transaction()) {
-            RETURN_NOT_OK(
+                RETURN_NOT_OK(
                 PopulateCDCSDKWriteRecord(msg, stream_metadata, tablet_peer, resp, current_schema));
 
             SetCheckpoint(
                 msg->id().term(), msg->id().index(), 0, "", 0, &checkpoint, last_streamed_op_id);
             checkpoint_updated = true;
           }
-          break;
+        }
+        break;
 
         case consensus::OperationType::CHANGE_METADATA_OP: {
           RETURN_NOT_OK(SchemaFromPB(msg->change_metadata_request().schema(), &current_schema));
@@ -786,13 +793,15 @@ Status GetChangesForCDCSDK(
         break;
 
         case consensus::OperationType::TRUNCATE_OP: {
-          RETURN_NOT_OK(
-              PopulateCDCSDKTruncateRecord(msg, resp->add_cdc_sdk_proto_records(), current_schema));
-
-          SetCheckpoint(
-              msg->id().term(), msg->id().index(), 0, "", 0, &checkpoint, last_streamed_op_id);
-          checkpoint_updated = true;
-        } break;
+          if (FLAGS_stream_truncate_record) {
+            RETURN_NOT_OK(PopulateCDCSDKTruncateRecord(
+                msg, resp->add_cdc_sdk_proto_records(), current_schema));
+            SetCheckpoint(
+                msg->id().term(), msg->id().index(), 0, "", 0, &checkpoint, last_streamed_op_id);
+            checkpoint_updated = true;
+          }
+        }
+        break;
 
         default:
           // Nothing to do for other operation types.
@@ -813,17 +822,17 @@ Status GetChangesForCDCSDK(
   checkpoint_updated ? resp->mutable_cdc_sdk_checkpoint()->CopyFrom(checkpoint)
                        : resp->mutable_cdc_sdk_checkpoint()->CopyFrom(from_op_id);
 
-  if (checkpoint_updated) {
-    VLOG(1) << "The checkpoint is updated " << resp->checkpoint().DebugString();
-  } else {
-    VLOG(1) << "The checkpoint is not updated " << resp->checkpoint().DebugString();
-  }
-
   if (last_streamed_op_id->index > 0) {
-    resp->mutable_checkpoint()->mutable_op_id()->set_term(last_streamed_op_id->term);
-    resp->mutable_checkpoint()->mutable_op_id()->set_index(last_streamed_op_id->index);
+    last_streamed_op_id->ToPB(resp->mutable_checkpoint()->mutable_op_id());
   }
-
+  if (checkpoint_updated) {
+    VLOG(1) << "The cdcsdk checkpoint is updated " << resp->cdc_sdk_checkpoint().ShortDebugString();
+    VLOG(1) << "The checkpoint is updated " << resp->checkpoint().ShortDebugString();
+  } else {
+    VLOG(1) << "The cdcsdk checkpoint is not  updated "
+            << resp->cdc_sdk_checkpoint().ShortDebugString();
+    VLOG(1) << "The checkpoint is not updated " << resp->checkpoint().ShortDebugString();
+  }
   return Status::OK();
 }
 

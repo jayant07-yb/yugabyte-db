@@ -18,7 +18,6 @@ import static com.yugabyte.yw.commissioner.tasks.BackupUniverse.SCHEDULED_BACKUP
 import static com.yugabyte.yw.commissioner.tasks.BackupUniverse.SCHEDULED_BACKUP_SUCCESS_COUNTER;
 import static com.yugabyte.yw.common.Util.SYSTEM_PLATFORM_DB;
 import static com.yugabyte.yw.common.Util.getUUIDRepresentation;
-import static com.yugabyte.yw.common.Util.lockedUpdateBackupState;
 import static com.yugabyte.yw.common.metrics.MetricService.buildMetricTemplate;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,7 +25,6 @@ import com.google.api.client.util.Throwables;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.Commissioner;
 import com.yugabyte.yw.commissioner.ITask.Abortable;
-import com.yugabyte.yw.commissioner.SubTaskGroupQueue;
 import com.yugabyte.yw.commissioner.UserTaskDetails;
 import com.yugabyte.yw.common.metrics.MetricLabelsBuilder;
 import com.yugabyte.yw.forms.BackupTableParams;
@@ -89,7 +87,6 @@ public class MultiTableBackup extends UniverseTaskBase {
     boolean isUniverseLocked = false;
     try {
       checkUniverseVersion();
-      subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
 
       // Update the universe DB with the update to be performed and set the 'updateInProgress' flag
       // to prevent other updates from happening.
@@ -98,7 +95,7 @@ public class MultiTableBackup extends UniverseTaskBase {
 
       // Update universe 'backupInProgress' flag to true or throw an exception if universe is
       // already having a backup in progress.
-      lockedUpdateBackupState(params().universeUUID, this, true);
+      lockedUpdateBackupState(true);
       try {
         String masterAddresses = universe.getMasterAddresses(true);
         String certificate = universe.getCertificateNodetoNode();
@@ -240,7 +237,8 @@ public class MultiTableBackup extends UniverseTaskBase {
           throw new RuntimeException("Invalid Keyspace or no tables to backup");
         }
 
-        subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
+        // Clear previous subtasks if any.
+        getRunnableTask().reset();
         if (params().alterLoadBalancer) {
           createLoadBalancerStateChangeTask(false)
               .setSubTaskGroupType(UserTaskDetails.SubTaskGroupType.ConfigureUniverse);
@@ -259,6 +257,9 @@ public class MultiTableBackup extends UniverseTaskBase {
           tableBackupParams.timeBeforeDelete = params().timeBeforeDelete;
           tableBackupParams.transactionalBackup = params().transactionalBackup;
           tableBackupParams.backupType = params().backupType;
+          tableBackupParams.isFullBackup = true;
+          tableBackupParams.disableChecksum = params().disableChecksum;
+          tableBackupParams.useTablespaces = params().useTablespaces;
 
           Backup backup = Backup.create(params().customerUUID, tableBackupParams);
           backup.setTaskUUID(userTaskUUID);
@@ -290,6 +291,8 @@ public class MultiTableBackup extends UniverseTaskBase {
             backup.setTaskUUID(userTaskUUID);
             tableParams.backupUuid = backup.backupUUID;
             tableParams.customerUuid = backup.customerUUID;
+            tableParams.disableChecksum = params().disableChecksum;
+            tableBackupParams.useTablespaces = params().useTablespaces;
             log.info("Task id {} for the backup {}", backup.taskUUID, backup.backupUUID);
 
             createEncryptedUniverseKeyBackupTask(tableParams)
@@ -312,7 +315,7 @@ public class MultiTableBackup extends UniverseTaskBase {
         unlockUniverseForUpdate();
         isUniverseLocked = false;
 
-        subTaskGroupQueue.run();
+        getRunnableTask().runSubTasks();
 
         if (params().actionType == ActionType.CREATE) {
           BACKUP_SUCCESS_COUNTER.labels(metricLabelsBuilder.getPrometheusValues()).inc();
@@ -321,16 +324,17 @@ public class MultiTableBackup extends UniverseTaskBase {
         }
       } catch (Throwable t) {
         if (params().alterLoadBalancer) {
-          subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
+          // Clear previous subtasks if any.
+          getRunnableTask().reset();
           // If the task failed, we don't want the loadbalancer to be
           // disabled, so we enable it again in case of errors.
           createLoadBalancerStateChangeTask(true)
               .setSubTaskGroupType(UserTaskDetails.SubTaskGroupType.ConfigureUniverse);
-          subTaskGroupQueue.run();
+          getRunnableTask().runSubTasks();
         }
         throw t;
       } finally {
-        lockedUpdateBackupState(params().universeUUID, this, false);
+        lockedUpdateBackupState(false);
       }
     } catch (Throwable t) {
       log.error("Error executing task {} with error='{}'.", getName(), t.getMessage(), t);
@@ -368,6 +372,8 @@ public class MultiTableBackup extends UniverseTaskBase {
     backupParams.setKeyspace(tableKeySpace);
     backupParams.backupType = backupType;
     backupParams.transactionalBackup = params().transactionalBackup;
+    backupParams.disableChecksum = params().disableChecksum;
+    backupParams.useTablespaces = params().useTablespaces;
 
     if (tableName != null && tableUUID != null) {
       if (backupParams.tableNameList == null) {
@@ -411,6 +417,8 @@ public class MultiTableBackup extends UniverseTaskBase {
     backupParams.parallelism = params().parallelism;
     backupParams.timeBeforeDelete = params().timeBeforeDelete;
     backupParams.scheduleUUID = params().scheduleUUID;
+    backupParams.disableChecksum = params().disableChecksum;
+    backupParams.useTablespaces = params().useTablespaces;
     return backupParams;
   }
 

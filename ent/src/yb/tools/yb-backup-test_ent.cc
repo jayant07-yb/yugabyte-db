@@ -45,6 +45,7 @@
 #include "yb/yql/redis/redisserver/redis_parser.h"
 
 using namespace std::chrono_literals;
+using namespace std::literals;
 using std::unique_ptr;
 using std::vector;
 using std::string;
@@ -63,7 +64,7 @@ CHECKED_STATUS RedisGet(std::shared_ptr<client::YBSession> session,
                         const string& value) {
   auto get_op = std::make_shared<client::YBRedisReadOp>(table);
   RETURN_NOT_OK(redisserver::ParseGet(get_op.get(), redisserver::RedisClientCommand({"get", key})));
-  RETURN_NOT_OK(session->ReadSync(get_op));
+  RETURN_NOT_OK(session->TEST_ReadSync(get_op));
   if (get_op->response().code() != RedisResponsePB_RedisStatusCode_OK) {
     return STATUS_FORMAT(RuntimeError,
                          "Redis get returned bad response code: $0",
@@ -84,7 +85,7 @@ CHECKED_STATUS RedisSet(std::shared_ptr<client::YBSession> session,
   auto set_op = std::make_shared<client::YBRedisWriteOp>(table);
   RETURN_NOT_OK(redisserver::ParseSet(set_op.get(),
                                       redisserver::RedisClientCommand({"set", key, value})));
-  RETURN_NOT_OK(session->ApplyAndFlush(set_op));
+  RETURN_NOT_OK(session->TEST_ApplyAndFlush(set_op));
   return Status::OK();
 }
 } // namespace helpers
@@ -115,6 +116,41 @@ class YBBackupTest : public pgwrapper::PgCommandTestBase {
     ASSERT_NO_FATALS(RunPsqlCommand(string("DROP DATABASE ") + db, "DROP DATABASE"));
     ASSERT_NO_FATALS(RunPsqlCommand(string("CREATE DATABASE ") + db, "CREATE DATABASE"));
     SetDbName(db); // Connecting to the recreated 'yugabyte' DB from the moment.
+  }
+
+  Result<string> GetTableId(
+      const string& table_name, const string& log_prefix, const string& ns = string()) {
+    LOG(INFO) << log_prefix << ": get table";
+    vector<client::YBTableName> tables = VERIFY_RESULT(client_->ListTables(table_name));
+    if (!ns.empty()) {
+      // Filter tables with provided namespace name.
+      for (vector<client::YBTableName>::iterator it = tables.begin(); it != tables.end();) {
+        if (it->namespace_name()  != ns) {
+          it = tables.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+
+    if (tables.size() != 1) {
+      return STATUS_FORMAT(InternalError, "Expected 1 table: got $0", tables.size());
+    }
+
+    const client::YBTableName name = tables.front();
+    LOG(INFO) << log_prefix << ": found table: " << name.namespace_name()
+              << "." << name.table_name() << " : " << name.table_id();
+    return name.table_id();
+  }
+
+  Result<google::protobuf::RepeatedPtrField<yb::master::TabletLocationsPB>> GetTablets(
+      const string& table_name, const string& log_prefix, const string& ns = string()) {
+    auto table_id = VERIFY_RESULT(GetTableId(table_name, log_prefix, ns));
+
+    LOG(INFO) << log_prefix << ": get tablets";
+    google::protobuf::RepeatedPtrField<yb::master::TabletLocationsPB> tablets;
+    RETURN_NOT_OK(client_->GetTabletsFromTableId(table_id, -1, &tablets));
+    return tablets;
   }
 
   void DoTestYEDISBackup(helpers::TableOp tableOp);
@@ -473,7 +509,7 @@ TEST_F(YBBackupTest, YB_DISABLE_TEST_IN_SANITIZERS_OR_MAC(TestYSQLSameIdDifferen
   // Initialize data:
   // - s1.mytbl: (1, 1)
   // - s2.mytbl: (2, 2)
-  auto schemas = {"s1", "s2"};
+  const auto schemas = {"s1"s, "s2"s};
   for (const string& schema : schemas) {
     ASSERT_NO_FATALS(CreateSchema(Format("CREATE SCHEMA $0", schema)));
     ASSERT_NO_FATALS(CreateTable(
@@ -973,31 +1009,14 @@ class YBBackupTestNumTablets : public YBBackupTest {
     // For convenience, rather than create a subclass for tablet splitting tests, add tablet split
     // flags here since they shouldn't really affect non-tablet splitting tests.
     options->extra_master_flags.push_back("--enable_automatic_tablet_splitting=false");
+    options->extra_tserver_flags.push_back("--db_filter_block_size_bytes=2048");
+    options->extra_tserver_flags.push_back("--db_index_block_size_bytes=2048");
     options->extra_tserver_flags.push_back("--db_block_size_bytes=1024");
     options->extra_tserver_flags.push_back("--ycql_num_tablets=3");
     options->extra_tserver_flags.push_back("--ysql_num_tablets=3");
   }
 
  protected:
-  Result<string> GetTableId(const string& table_name, const string& log_prefix) {
-    LOG(INFO) << log_prefix << ": get table";
-    vector<client::YBTableName> tables = VERIFY_RESULT(client_->ListTables(table_name));
-    if (tables.size() != 1) {
-      return STATUS_FORMAT(InternalError, "Expected 1 table: got $0", tables.size());
-    }
-    return tables.front().table_id();
-  }
-
-  Result<google::protobuf::RepeatedPtrField<yb::master::TabletLocationsPB>> GetTablets(
-      const string& table_name, const string& log_prefix) {
-    auto table_id = VERIFY_RESULT(GetTableId(table_name, log_prefix));
-
-    LOG(INFO) << log_prefix << ": get tablets";
-    google::protobuf::RepeatedPtrField<yb::master::TabletLocationsPB> tablets;
-    RETURN_NOT_OK(client_->GetTabletsFromTableId(table_id, -1, &tablets));
-    return tablets;
-  }
-
   Result<bool> CheckPartitions(
       const google::protobuf::RepeatedPtrField<yb::master::TabletLocationsPB>& tablets,
       const vector<string>& expected_splits) {
@@ -1237,6 +1256,44 @@ TEST_F_EX(YBBackupTest,
   LOG(INFO) << "Test finished: " << CURRENT_TEST_CASE_AND_TEST_NAME_STR();
 }
 
+// The backup script should disable automatic tablet splitting temporarily to avoid race conditions.
+TEST_F(YBBackupTest,
+       YB_DISABLE_TEST_IN_SANITIZERS_OR_MAC(TestBackupDisablesAutomaticTabletSplitting)) {
+  const string table_name = "mytbl";
+
+  // Create table.
+  ASSERT_NO_FATALS(CreateTable(Format("CREATE TABLE $0 (k INT PRIMARY KEY)", table_name)));
+  ASSERT_NO_FATALS(InsertRows(
+      Format("INSERT INTO $0 VALUES (generate_series(1, 1000))", table_name), 1000));
+
+  ASSERT_OK(cluster_->SetFlagOnMasters("tablet_split_low_phase_shard_count_per_node", "100"));
+  // This threshold is set to a value less than the initial tablet size (~12KB) so they can split
+  // but larger than the child tablet size (~6KB) to avoid a situation where we repeatedly try to
+  // split tablets that are too small to be split.
+  ASSERT_OK(cluster_->SetFlagOnMasters("tablet_split_low_phase_size_threshold_bytes", "10000"));
+  ASSERT_OK(cluster_->SetFlagOnMasters("process_split_tablet_candidates_interval_msec", "60000"));
+  ASSERT_OK(cluster_->SetFlagOnMasters("enable_automatic_tablet_splitting", "true"));
+
+  const string backup_dir = GetTempDir("backup");
+  ASSERT_OK(RunBackupCommand(
+      {"--backup_location", backup_dir, "--keyspace", "ysql.yugabyte",
+       "--TEST_sleep_after_find_snapshot_dirs", "create"}));
+  ASSERT_OK(RunBackupCommand(
+      {"--backup_location", backup_dir, "--keyspace", "ysql.yugabyte_new", "restore"}));
+
+  LOG(INFO) << "Test finished: " << CURRENT_TEST_CASE_AND_TEST_NAME_STR();
+}
+
+// When trying to run yb_admin with a command that is not supported, we should get a
+// YbAdminOpNotSupportedException.
+TEST_F(YBBackupTest, YB_DISABLE_TEST_IN_SANITIZERS_OR_MAC(TestYBAdminUnsupportedCommands)) {
+  // Dummy command for yb_backup.py, no restore actually runs.
+  const string backup_dir = GetTempDir("backup");
+  ASSERT_OK(RunBackupCommand(
+      {"--backup_location", backup_dir, "--TEST_yb_admin_unsupported_commands", "restore"}));
+  LOG(INFO) << "Test finished: " << CURRENT_TEST_CASE_AND_TEST_NAME_STR();
+}
+
 class YBFailSnapshotTest: public YBBackupTest {
   void SetUp() override {
     YBBackupTest::SetUp();
@@ -1285,6 +1342,90 @@ TEST_F(YBBackupTest, YB_DISABLE_TEST_IN_SANITIZERS_OR_MAC(TestYCQLKeyspaceBackup
   ASSERT_OK(RunBackupCommand(
       {"--backup_location", backup_dir, "--keyspace", "new_" + keyspace,
        "--TEST_sleep_during_download_dir", "restore"}));
+
+  LOG(INFO) << "Test finished: " << CURRENT_TEST_CASE_AND_TEST_NAME_STR();
+}
+
+TEST_F(YBBackupTest, YB_DISABLE_TEST_IN_SANITIZERS_OR_MAC(TestYSQLBackupWithLearnerTS)) {
+  ASSERT_NO_FATALS(CreateTable("CREATE TABLE mytbl (k INT PRIMARY KEY, v INT)"));
+  ASSERT_NO_FATALS(InsertOneRow("INSERT INTO mytbl (k, v) VALUES (100, 200)"));
+
+  const string backup_dir = GetTempDir("backup");
+  ASSERT_OK(RunBackupCommand(
+      {"--backup_location", backup_dir, "--keyspace", "ysql.yugabyte", "create"}));
+  ASSERT_NO_FATALS(InsertOneRow("INSERT INTO mytbl (k, v) VALUES (999, 999)"));
+
+  // Create the new DB and the table. Calling 'ysqlsh YSQL_Dump' below (from 'yb_backup restore')
+  // will not create the table as the table has been already created here. The manual table
+  // creation allows to change the number of peers to get the LEARNER peer.
+  ASSERT_NO_FATALS(RunPsqlCommand("CREATE DATABASE yugabyte_new WITH TEMPLATE = template0 "
+      "ENCODING = 'UTF8' LC_COLLATE = 'C' LC_CTYPE = 'en_US.UTF-8'", "CREATE DATABASE"));
+  SetDbName("yugabyte_new"); // Connecting to the second DB from the moment.
+
+  ASSERT_NO_FATALS(CreateTable("CREATE TABLE mytbl (k INT PRIMARY KEY, v INT)"));
+  ASSERT_NO_FATALS(RunPsqlCommand(
+      "SELECT k, v FROM mytbl",
+      R"#(
+        k | v
+        ---+---
+        (0 rows)
+      )#"
+  ));
+
+  // Wait for a LEARNER peer.
+  bool learner_found = false;
+  int num_new_ts = 0;
+  for (int round = 0; round < 300; ++round) {
+    // Add a new TS every 60 seconds to trigger the load balancer and
+    // so to trigger creation of new peers for existing tables.
+    if (round % 60 == 0 && num_new_ts < 3) {
+      ++num_new_ts;
+      LOG(INFO) << "Add new TS " << num_new_ts;
+      ASSERT_OK(cluster_->AddTabletServer());
+
+      // Delay a new peer commiting from LEARNER to FOLLOWER.
+      vector<ExternalTabletServer*> tservers = cluster_->tserver_daemons();
+      for (ExternalTabletServer* ts : tservers) {
+        ASSERT_OK(cluster_->SetFlag(ts, "inject_delay_commit_pre_voter_to_voter_secs", "20"));
+      }
+    }
+
+    auto tablets = ASSERT_RESULT(GetTablets("mytbl", "", "yugabyte_new"));
+    for (const master::TabletLocationsPB& loc : tablets) {
+      for (const auto& replica : loc.replicas()) {
+        if (replica.role() != PeerRole::LEADER && replica.role() != PeerRole::FOLLOWER) {
+          learner_found = true;
+          break;
+        }
+      }
+      if (learner_found) {
+        break;
+      }
+    }
+
+    LOG(INFO) << "Learner found = " << learner_found << " round = " << round;
+    if (learner_found) {
+      break;
+    }
+    std::this_thread::sleep_for(1s);
+  }
+
+  // LEARNER is found in ~90% of runs.
+  if (!learner_found) {
+    LOG(WARNING) << "Could not catch the LEARNER TS";
+  }
+
+  ASSERT_OK(RunBackupCommand(
+      {"--backup_location", backup_dir, "--keyspace", "ysql.yugabyte_new", "restore"}));
+  ASSERT_NO_FATALS(RunPsqlCommand(
+      "SELECT k, v FROM mytbl ORDER BY k",
+      R"#(
+          k  |  v
+        -----+-----
+         100 | 200
+        (1 row)
+      )#"
+  ));
 
   LOG(INFO) << "Test finished: " << CURRENT_TEST_CASE_AND_TEST_NAME_STR();
 }

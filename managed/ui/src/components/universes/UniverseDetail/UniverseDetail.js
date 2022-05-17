@@ -5,6 +5,7 @@ import { Link, withRouter, browserHistory } from 'react-router';
 import { Grid, DropdownButton, MenuItem, Tab, Alert } from 'react-bootstrap';
 import Measure from 'react-measure';
 import { mouseTrap } from 'react-mousetrap';
+
 import { CustomerMetricsPanel } from '../../metrics';
 import { RollingUpgradeFormContainer } from '../../../components/common/forms';
 import {
@@ -25,7 +26,6 @@ import { ListTablesContainer, ListBackupsContainer, ReplicationContainer } from 
 import { QueriesViewer } from '../../queries';
 import { isEmptyObject, isNonEmptyObject } from '../../../utils/ObjectUtils';
 import {
-  isOnpremUniverse,
   isKubernetesUniverse,
   isPausableUniverse,
   isUniverseType
@@ -40,14 +40,17 @@ import { YBMenuItem } from './compounds/YBMenuItem';
 import { MenuItemsContainer } from './compounds/MenuItemsContainer';
 import {
   isNonAvailable,
-  isEnabled,
   isDisabled,
   isNotHidden,
   getFeatureState
 } from '../../../utils/LayoutUtils';
-import './UniverseDetail.scss';
 import { SecurityMenu } from '../SecurityModal/SecurityMenu';
 import Replication from '../../xcluster/Replication';
+import { UniverseLevelBackup } from '../../backupv2/Universe/UniverseLevelBackup';
+import { UniverseSupportBundle } from '../UniverseSupportBundle/UniverseSupportBundle';
+import { YBTag } from '../../common/YBTag';
+
+import './UniverseDetail.scss';
 
 const INSTANCE_WITH_EPHEMERAL_STORAGE_ONLY = ['i3', 'c5d', 'c6gd'];
 
@@ -105,6 +108,7 @@ class UniverseDetail extends Component {
         this.props.getHealthCheck(uuid);
       }
     }
+    this.props.fetchRunTimeConfigs();
   }
 
   componentDidUpdate(prevProps) {
@@ -209,10 +213,12 @@ class UniverseDetail extends Component {
       universe: { currentUniverse },
       location: { query, pathname },
       showSoftwareUpgradesModal,
+      showVMImageUpgradeModal,
       showTLSConfigurationModal,
       showRollingRestartModal,
       showUpgradeSystemdModal,
       showRunSampleAppsModal,
+      showSupportBundleModal,
       showGFlagsModal,
       showManageKeyModal,
       showDeleteUniverseModal,
@@ -221,7 +227,7 @@ class UniverseDetail extends Component {
       updateBackupState,
       closeModal,
       customer,
-      customer: { currentCustomer, currentUser },
+      customer: { currentCustomer, currentUser, runtimeConfigs },
       params: { tab },
       featureFlags,
       providers,
@@ -307,18 +313,6 @@ class UniverseDetail extends Component {
       currentCustomer.data.features,
       'universes.details.overview.manageEncryption'
     );
-
-    // enable edit TLS menu item for onprem universes with rootCA of a "CustomCertHostPath" type
-    if (isEnabled(editTLSAvailability)) {
-      if (isOnpremUniverse(currentUniverse.data) && Array.isArray(customer.userCertificates.data)) {
-        const rootCert = customer.userCertificates.data.find(
-          (item) => item.uuid === currentUniverse.data.universeDetails.rootCA
-        );
-        if (rootCert?.certType !== 'CustomCertHostPath') editTLSAvailability = 'disabled';
-      } else {
-        editTLSAvailability = 'disabled';
-      }
-    }
 
     const defaultTab = isNotHidden(currentCustomer.data.features, 'universes.details.overview')
       ? 'overview'
@@ -455,13 +449,24 @@ class UniverseDetail extends Component {
             isNotHidden(currentCustomer.data.features, 'universes.details.backups') && (
               <Tab.Pane
                 eventKey={'backups'}
-                tabtitle="Backups"
+                tabtitle={
+                  <>
+                    Backups
+                    {(featureFlags.test['backupv2'] || featureFlags.released['backupv2']) && (
+                      <YBTag>Beta</YBTag>
+                    )}
+                  </>
+                }
                 key="backups-tab"
                 mountOnEnter={true}
                 unmountOnExit={true}
                 disabled={isDisabled(currentCustomer.data.features, 'universes.details.backups')}
               >
-                <ListBackupsContainer currentUniverse={currentUniverse.data} />
+                {featureFlags.test['backupv2'] || featureFlags.released['backupv2'] ? (
+                  <UniverseLevelBackup />
+                ) : (
+                  <ListBackupsContainer currentUniverse={currentUniverse.data} />
+                )}
               </Tab.Pane>
             ),
 
@@ -576,6 +581,18 @@ class UniverseDetail extends Component {
                           )}
                         </YBMenuItem>
                       )}
+                      {!universePaused &&
+                        runtimeConfigs &&
+                        getPromiseState(runtimeConfigs).isSuccess() &&
+                        runtimeConfigs.data.configEntries.find(
+                          (c) => c.key === 'yb.upgrade.vmImage'
+                        ).value === 'true' && (
+                          <YBMenuItem disabled={updateInProgress} onClick={showVMImageUpgradeModal}>
+                            <YBLabelWithIcon icon="fa fa-arrow-up fa-fw">
+                              Upgrade VM Image
+                            </YBLabelWithIcon>
+                          </YBMenuItem>
+                        )}
                       {!universePaused && !useSystemd && (
                         <YBMenuItem
                           disabled={updateInProgress || onPremSkipProvisioning}
@@ -685,6 +702,31 @@ class UniverseDetail extends Component {
                         />
                       )}
 
+                      {(featureFlags.test['supportBundle'] ||
+                        featureFlags.released['supportBundle']) && (
+                        <>
+                          <MenuItem divider />
+                          {!universePaused && (
+                            <UniverseSupportBundle
+                              currentUniverse={currentUniverse.data}
+                              modal={modal}
+                              closeModal={closeModal}
+                              button={
+                                <YBMenuItem
+                                  disabled={updateInProgress}
+                                  onClick={showSupportBundleModal}
+                                >
+                                  <YBLabelWithIcon icon="fa fa-file-archive-o">
+                                    Support Bundles <YBTag>Beta</YBTag>
+                                  </YBLabelWithIcon>
+                                </YBMenuItem>
+                              }
+                            />
+                          )}
+                          <MenuItem divider />
+                        </>
+                      )}
+
                       {!universePaused && (
                         <YBMenuItem
                           disabled={updateInProgress}
@@ -763,7 +805,6 @@ class UniverseDetail extends Component {
                           editTLSAvailability={editTLSAvailability}
                           showManageKeyModal={showManageKeyModal}
                           manageKeyAvailability={manageKeyAvailability}
-                          isItKubernetesUniverse={isItKubernetesUniverse}
                         />
                       </>
                     )
@@ -778,6 +819,7 @@ class UniverseDetail extends Component {
             showModal &&
             (visibleModal === 'gFlagsModal' ||
               visibleModal === 'softwareUpgradesModal' ||
+              visibleModal === 'vmImageUpgradeModal' ||
               visibleModal === 'tlsConfigurationModal' ||
               visibleModal === 'rollingRestart' ||
               visibleModal === 'systemdUpgrade')

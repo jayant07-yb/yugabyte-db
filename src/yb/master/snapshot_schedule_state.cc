@@ -55,9 +55,8 @@ Status SnapshotScheduleState::StoreToWriteBatch(docdb::KeyValueWriteBatchPB* out
   auto pair = out->add_write_pairs();
   pair->set_key(encoded_key.AsSlice().cdata(), encoded_key.size());
   auto* value = pair->mutable_value();
-  value->push_back(docdb::ValueTypeAsChar::kString);
-  pb_util::AppendPartialToString(options_, value);
-  return Status::OK();
+  value->push_back(docdb::ValueEntryTypeAsChar::kString);
+  return pb_util::AppendPartialToString(options_, value);
 }
 
 Status SnapshotScheduleState::ToPB(SnapshotScheduleInfoPB* pb) const {

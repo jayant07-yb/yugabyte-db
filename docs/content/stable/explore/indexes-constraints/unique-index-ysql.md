@@ -1,13 +1,13 @@
 ---
-title: Unique Indexes
-linkTitle:  Unique Indexes
-description: Using Unique Indexes in YSQL
+title: Unique indexes
+linkTitle:  Unique indexes
+description: Using Unique indexes in YSQL
 image: /images/section_icons/secure/create-roles.png
 menu:
   stable:
     identifier: unique-index-ysql
     parent: explore-indexes-constraints
-    weight: 210
+    weight: 230
 isTocNested: true
 showAsideToc: true
 ---
@@ -42,7 +42,7 @@ CREATE INDEX index_name ON table_name(column_list);
 
 ## Example
 
-This example uses the `categories` table from the [Northwind sample database](/latest/sample-data/northwind/). Follow the steps to create a local [cluster](/latest/quick-start/) or in [Yugabyte Cloud](/latest/yugabyte-cloud/cloud-connect/), and [install](/latest/sample-data/northwind/#install-the-northwind-sample-database) the sample Northwind database.
+This example uses the `categories` table from the [Northwind sample database](/preview/sample-data/northwind/). Follow the steps to create a local [cluster](/preview/quick-start/) or in [Yugabyte Cloud](/preview/yugabyte-cloud/cloud-connect/), and [install](/preview/sample-data/northwind/#install-the-northwind-sample-database) the sample Northwind database.
 
 - View the contents of the `categories` table.
 
@@ -127,6 +127,50 @@ northwind=# SELECT * FROM categories;
            6 | Meat/Poultry   | Prepared meats                                             | \x
 (9 rows)
 ```
+
+## UNIQUE constraint
+
+The `UNIQUE` constraint allows you to ensure that values stored in columns are unique across rows in a table. During inserting new rows or updating existing ones, the `UNIQUE` constraint checks if the value is already in the table, in which case the change is rejected and an error is displayed.
+
+When you add a `UNIQUE` constraint to one or more columns, YSQL automatically creates a [unique index](../indexes-1#using-a-unique-index) on these columns.
+
+The following example creates a table with a `UNIQUE` constraint for the `phone` column:
+
+```sql
+CREATE TABLE employees (
+  employee_no integer PRIMARY KEY,
+  name text,
+  department text,
+  phone integer UNIQUE
+);
+```
+
+The following example creates the same constraint for the same column of the same table, only as a table constraint:
+
+```sql
+CREATE TABLE employees (
+  employee_no integer PRIMARY KEY,
+  name text,
+  department text,
+  phone integer,
+  UNIQUE(phone)
+);
+```
+
+The following example creates a `UNIQUE` constraint on a group of columns in a new table:
+
+```sql
+CREATE TABLE employees (
+  employee_no integer PRIMARY KEY,
+  name text,
+  department text,
+  phone integer,
+  email text
+  UNIQUE(phone, email)
+);
+```
+
+For additional examples, see [Table with UNIQUE constraint](../../../api/ysql/the-sql-language/statements/ddl_create_table/#table-with-unique-constraint).
 
 ## Learn more
 

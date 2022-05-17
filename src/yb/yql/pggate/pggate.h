@@ -14,35 +14,43 @@
 #ifndef YB_YQL_PGGATE_PGGATE_H_
 #define YB_YQL_PGGATE_PGGATE_H_
 
-#include <algorithm>
 #include <functional>
-#include <thread>
+#include <memory>
 #include <unordered_map>
 
-#include <boost/preprocessor/cat.hpp>
-#include <boost/preprocessor/seq/for_each.hpp>
-
-#include "yb/util/metrics.h"
-#include "yb/util/mem_tracker.h"
-#include "yb/common/ybc_util.h"
-
-#include "yb/client/callbacks.h"
 #include "yb/client/async_initializer.h"
-#include "yb/server/server_base_options.h"
+#include "yb/client/client_fwd.h"
+
+#include "yb/common/pg_types.h"
+#include "yb/common/transaction.h"
+
+#include "yb/gutil/casts.h"
+#include "yb/gutil/ref_counted.h"
 
 #include "yb/rpc/rpc_fwd.h"
 
+#include "yb/server/hybrid_clock.h"
+#include "yb/server/server_base_options.h"
+
+#include "yb/tserver/tserver_util_fwd.h"
+
+#include "yb/util/mem_tracker.h"
+#include "yb/util/metrics.h"
+#include "yb/util/result.h"
+#include "yb/util/status.h"
+#include "yb/util/status_fwd.h"
+
 #include "yb/yql/pggate/pg_client.h"
 #include "yb/yql/pggate/pg_env.h"
-#include "yb/yql/pggate/pg_session.h"
+#include "yb/yql/pggate/pg_expr.h"
+#include "yb/yql/pggate/pg_gate_fwd.h"
 #include "yb/yql/pggate/pg_statement.h"
-#include "yb/yql/pggate/type_mapping.h"
-
-#include "yb/server/hybrid_clock.h"
-#include "yb/yql/pggate/ybc_pggate.h"
+#include "yb/yql/pggate/ybc_pg_typedefs.h"
 
 namespace yb {
 namespace pggate {
+class PgSysTablePrefetcher;
+class PgSession;
 
 //--------------------------------------------------------------------------------------------------
 
@@ -52,7 +60,6 @@ class PggateOptions : public yb::server::ServerBaseOptions {
   static const uint16_t kDefaultWebPort = 13000;
 
   PggateOptions();
-  virtual ~PggateOptions() {}
 };
 
 struct PgApiContext {
@@ -85,16 +92,10 @@ class PgApiImpl {
  public:
   PgApiImpl(PgApiContext context, const YBCPgTypeEntity *YBCDataTypeTable, int count,
             YBCPgCallbacks pg_callbacks);
-  virtual ~PgApiImpl();
+  ~PgApiImpl();
 
   const YBCPgCallbacks* pg_callbacks() {
     return &pg_callbacks_;
-  }
-
-  //------------------------------------------------------------------------------------------------
-  // Access function to Pggate attribute.
-  client::YBClient* client() {
-    return async_client_init_.client();
   }
 
   void ResetCatalogReadTime();
@@ -105,7 +106,7 @@ class PgApiImpl {
 
   // Initialize a session to process statements that come from the same client connection.
   // If database_name is empty, a session is created without connecting to any database.
-  CHECKED_STATUS InitSession(const PgEnv *pg_env, const string& database_name);
+  CHECKED_STATUS InitSession(const PgEnv *pg_env, const std::string& database_name);
 
   // YB Memctx: Create, Destroy, and Reset must be "static" because a few contexts are created
   //            before YugaByte environments including PgGate are created and initialized.
@@ -243,8 +244,9 @@ class PgApiImpl {
                                 bool is_shared_table,
                                 bool if_not_exist,
                                 bool add_primary_key,
-                                const bool colocated,
+                                bool is_colocated_via_database,
                                 const PgObjectId& tablegroup_oid,
+                                const ColocationId colocation_id,
                                 const PgObjectId& tablespace_oid,
                                 const PgObjectId& matview_pg_table_oid,
                                 PgStatement **handle);
@@ -308,6 +310,7 @@ class PgApiImpl {
                                 const bool skip_index_backfill,
                                 bool if_not_exist,
                                 const PgObjectId& tablegroup_oid,
+                                const YBCPgOid& colocation_id,
                                 const PgObjectId& tablespace_oid,
                                 PgStatement **handle);
 
@@ -421,6 +424,7 @@ class PgApiImpl {
   // Insert.
   CHECKED_STATUS NewInsert(const PgObjectId& table_id,
                            bool is_single_row_txn,
+                           bool is_region_local,
                            PgStatement **handle);
 
   CHECKED_STATUS ExecInsert(PgStatement *handle);
@@ -435,6 +439,7 @@ class PgApiImpl {
   // Update.
   CHECKED_STATUS NewUpdate(const PgObjectId& table_id,
                            bool is_single_row_txn,
+                           bool is_region_local,
                            PgStatement **handle);
 
   CHECKED_STATUS ExecUpdate(PgStatement *handle);
@@ -443,6 +448,7 @@ class PgApiImpl {
   // Delete.
   CHECKED_STATUS NewDelete(const PgObjectId& table_id,
                            bool is_single_row_txn,
+                           bool is_region_local,
                            PgStatement **handle);
 
   CHECKED_STATUS ExecDelete(PgStatement *handle);
@@ -453,6 +459,7 @@ class PgApiImpl {
   // Colocated Truncate.
   CHECKED_STATUS NewTruncateColocated(const PgObjectId& table_id,
                                       bool is_single_row_txn,
+                                      bool is_region_local,
                                       PgStatement **handle);
 
   CHECKED_STATUS ExecTruncateColocated(PgStatement *handle);
@@ -462,6 +469,7 @@ class PgApiImpl {
   CHECKED_STATUS NewSelect(const PgObjectId& table_id,
                            const PgObjectId& index_id,
                            const PgPrepareParameters *prepare_params,
+                           bool is_region_local,
                            PgStatement **handle);
 
   CHECKED_STATUS SetForwardScan(PgStatement *handle, bool is_forward_scan);
@@ -472,6 +480,7 @@ class PgApiImpl {
   // Analyze.
   CHECKED_STATUS NewSample(const PgObjectId& table_id,
                            const int targrows,
+                           bool is_region_local,
                            PgStatement **handle);
 
   CHECKED_STATUS InitRandomState(PgStatement *handle, double rstate_w, uint64 rand_state);
@@ -484,8 +493,6 @@ class PgApiImpl {
 
   //------------------------------------------------------------------------------------------------
   // Transaction control.
-  PgTxnManager* GetPgTxnManager() { return pg_txn_manager_.get(); }
-
   CHECKED_STATUS BeginTransaction();
   CHECKED_STATUS RecreateTransaction();
   CHECKED_STATUS RestartTransaction();
@@ -498,6 +505,7 @@ class PgApiImpl {
   CHECKED_STATUS SetTransactionDeferrable(bool deferrable);
   CHECKED_STATUS EnableFollowerReads(bool enable_follower_reads, int32_t staleness_ms);
   CHECKED_STATUS EnterSeparateDdlTxnMode();
+  bool HasWriteOperationsInDdlTxnMode() const;
   CHECKED_STATUS ExitSeparateDdlTxnMode();
   void ClearSeparateDdlTxnMode();
   CHECKED_STATUS SetActiveSubTransaction(SubTransactionId id);
@@ -546,12 +554,16 @@ class PgApiImpl {
   void DeleteForeignKeyReference(PgOid table_id, const Slice& ybctid);
   void AddForeignKeyReference(PgOid table_id, const Slice& ybctid);
   Result<bool> ForeignKeyReferenceExists(PgOid table_id, const Slice& ybctid, PgOid database_id);
-  void AddForeignKeyReferenceIntent(PgOid table_id, const Slice& ybctid);
+  void AddForeignKeyReferenceIntent(PgOid table_id, bool is_region_local, const Slice& ybctid);
 
   // Sets the specified timeout in the rpc service.
   void SetTimeout(int timeout_ms);
 
   Result<client::TabletServersInfo> ListTabletServers();
+
+  void StartSysTablePrefetching();
+  void StopSysTablePrefetching();
+  void RegisterSysTableForPrefetching(const PgObjectId& table_id, const PgObjectId& index_id);
 
   //------------------------------------------------------------------------------------------------
   // System Validation.
@@ -569,9 +581,6 @@ class PgApiImpl {
   std::shared_ptr<MemTracker> mem_tracker_;
 
   PgApiContext::MessengerHolder messenger_holder_;
-
-  // YBClient is to communicate with either master or tserver.
-  yb::client::AsyncClientInitialiser async_client_init_;
 
   std::unique_ptr<rpc::ProxyCache> proxy_cache_;
 
@@ -595,6 +604,7 @@ class PgApiImpl {
   std::unordered_map<int, const YBCPgTypeEntity *> type_map_;
 
   scoped_refptr<PgSession> pg_session_;
+  std::unique_ptr<PgSysTablePrefetcher> pg_sys_table_prefetcher_;
 };
 
 }  // namespace pggate

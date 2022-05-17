@@ -242,6 +242,7 @@ set(UTIL_SRCS
   threadlocal.cc
   threadpool.cc
   timestamp.cc
+  tostring.cc
   trace.cc
   trilean.cc
   ulimit.cc
@@ -276,10 +277,6 @@ set(UTIL_LIBS
   zlib
   ${OPENSSL_CRYPTO_LIBRARY}
   ${OPENSSL_SSL_LIBRARY})
-
-if (NOT APPLE AND NOT USING_LINUXBREW)
-  set(UTIL_LIBS ${UTIL_LIBS} atomic)
-endif()
 
 if(NOT APPLE)
   set(UTIL_LIBS

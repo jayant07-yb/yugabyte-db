@@ -229,7 +229,7 @@ typedef struct PgSysColumns {
 //       use_secondary_index = false
 //
 // Attribute "querying_colocated_table"
-//   - If 'true', SELECT from SQL system catalogs or colocated tables.
+//   - If 'true', SELECT from colocated tables (of any type - database, tablegroup, system).
 //   - Note that the system catalogs are specifically for Postgres API and not Yugabyte
 //     system-tables.
 typedef struct PgPrepareParameters {
@@ -322,7 +322,6 @@ typedef struct PgAttrValueDescriptor {
 } YBCPgAttrValueDescriptor;
 
 typedef struct PgCallbacks {
-  void (*FetchUniqueConstraintName)(YBCPgOid, char*, size_t);
   YBCPgMemctx (*GetCurrentYbMemctx)();
   const char* (*GetDebugQueryString)();
   void (*WriteExecOutParam)(PgExecOutParam *, const YbcPgExecOutParamValue *);
@@ -343,6 +342,8 @@ typedef struct PgTableProperties {
   uint64_t num_tablets;
   uint64_t num_hash_key_columns;
   bool is_colocated;
+  YBCPgOid tablegroup_oid; /* 0 if none */
+  YBCPgOid colocation_id; /* 0 if not colocated */
 } YBCPgTableProperties;
 
 typedef struct PgYBTupleIdDescriptor {

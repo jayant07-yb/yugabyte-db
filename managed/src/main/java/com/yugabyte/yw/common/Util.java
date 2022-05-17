@@ -1,16 +1,14 @@
 // Copyright (c) YugaByte, Inc.
 package com.yugabyte.yw.common;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.yugabyte.yw.common.PlacementInfoUtil.getNumMasters;
-import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static play.mvc.Http.Status.BAD_REQUEST;
-import static play.mvc.Http.Status.INTERNAL_SERVER_ERROR;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.google.common.annotations.VisibleForTesting;
-import com.yugabyte.yw.commissioner.tasks.UniverseTaskBase;
 import com.yugabyte.yw.common.config.impl.RuntimeConfig;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.Cluster;
@@ -19,11 +17,6 @@ import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import io.swagger.annotations.ApiModel;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.FileWriter;
-import java.io.InputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.InetAddress;
@@ -31,11 +24,7 @@ import java.net.InetSocketAddress;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.UnknownHostException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.nio.ByteBuffer;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -47,14 +36,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.TimeZone;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
 import lombok.Getter;
+import org.apache.commons.codec.binary.Hex;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import play.libs.Json;
@@ -82,6 +70,10 @@ public class Util {
   public static final String BLACKLIST_LEADERS = "yb.upgrade.blacklist_leaders";
   public static final String BLACKLIST_LEADER_WAIT_TIME_MS =
       "yb.upgrade.blacklist_leader_wait_time_ms";
+
+  public static final String AVAILABLE_MEMORY = "MemAvailable";
+
+  public static final String UNIVERSE_NAME_REGEX = "^[a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?$";
 
   /**
    * Returns a list of Inet address objects in the proxy tier. This is needed by Cassandra clients.
@@ -272,12 +264,13 @@ public class Util {
         && needMasterQuorumRestore(currentNode, nodes, replFactor - numMasters);
   }
 
-  public static String UNIV_NAME_ERROR_MESG =
-      "Invalid universe name format, valid characters [a-zA-Z0-9-].";
+  public static String UNIVERSE_NAME_ERROR_MESG =
+      String.format(
+          "Invalid universe name format, regex used for validation is %s.", UNIVERSE_NAME_REGEX);
 
   // Validate the universe name pattern.
   public static boolean isValidUniverseNameFormat(String univName) {
-    return univName.matches("^[a-zA-Z0-9-]*$");
+    return univName.matches(UNIVERSE_NAME_REGEX);
   }
 
   // Helper API to create a CSV of any keys present in existing map but not in new
@@ -320,81 +313,6 @@ public class Util {
     SimpleDateFormat format = new SimpleDateFormat();
 
     return format.format(date);
-  }
-
-  public static void writeStringToFile(File file, String contents) throws Exception {
-    try (FileWriter writer = new FileWriter(file)) {
-      writer.write(contents);
-    }
-  }
-
-  /**
-   * Extracts the name and extension parts of a file name.
-   *
-   * <p>The resulting string is the rightmost characters of fullName, starting with the first
-   * character after the path separator that separates the path information from the name and
-   * extension.
-   *
-   * <p>The resulting string is equal to fullName, if fullName contains no path.
-   *
-   * @param fullName
-   * @return
-   */
-  public static String getFileName(String fullName) {
-    if (fullName == null) {
-      return null;
-    }
-    int delimiterIndex = fullName.lastIndexOf(File.separatorChar);
-    return delimiterIndex >= 0 ? fullName.substring(delimiterIndex + 1) : fullName;
-  }
-
-  public static String getFileChecksum(String file) throws IOException, NoSuchAlgorithmException {
-    FileInputStream fis = new FileInputStream(file);
-    byte[] byteArray = new byte[1024];
-    int bytesCount = 0;
-
-    MessageDigest digest = MessageDigest.getInstance("MD5");
-
-    while ((bytesCount = fis.read(byteArray)) != -1) {
-      digest.update(byteArray, 0, bytesCount);
-    }
-
-    fis.close();
-
-    byte[] bytes = digest.digest();
-    StringBuilder sb = new StringBuilder();
-    for (byte b : bytes) {
-      sb.append(Integer.toString((b & 0xff) + 0x100, 16).substring(1));
-    }
-    return sb.toString();
-  }
-
-  public static List<File> listFiles(Path backupDir, String pattern) throws IOException {
-    try (DirectoryStream<Path> directoryStream = Files.newDirectoryStream(backupDir, pattern)) {
-      return StreamSupport.stream(directoryStream.spliterator(), false)
-          .map(Path::toFile)
-          .sorted(File::compareTo)
-          .collect(Collectors.toList());
-    }
-  }
-
-  public static void moveFile(Path source, Path destination) throws IOException {
-    Files.move(source, destination, REPLACE_EXISTING);
-  }
-
-  public static void writeJsonFile(String filePath, ArrayNode json) {
-    writeFile(filePath, Json.prettyPrint(json));
-  }
-
-  public static void writeFile(String filePath, String contents) {
-    try (FileWriter file = new FileWriter(filePath)) {
-      file.write(contents);
-      file.flush();
-      LOG.info("Written: {}", filePath);
-    } catch (IOException e) {
-      LOG.error("Unable to write: {}", filePath);
-      throw new RuntimeException(e.getMessage());
-    }
   }
 
   /**
@@ -536,7 +454,7 @@ public class Util {
       RuntimeConfig<Universe> config, Map<String, String> configKeysMap) {
     configKeysMap.forEach(
         (key, value) -> {
-          config.setValue(key, value);
+          config.setValue(key, value, false);
         });
   }
 
@@ -559,17 +477,6 @@ public class Util {
             config.deleteEntry(key);
           }
         });
-  }
-
-  /** deleteDirectory deletes entire directory recursively. */
-  public static boolean deleteDirectory(File directoryToBeDeleted) {
-    File[] allContents = directoryToBeDeleted.listFiles();
-    if (allContents != null) {
-      for (File file : allContents) {
-        deleteDirectory(file);
-      }
-    }
-    return directoryToBeDeleted.delete();
   }
 
   /**
@@ -597,20 +504,6 @@ public class Util {
     return formatter.format(new Date(unixTimestampMs));
   }
 
-  // Update the Universe's 'backupInProgress' flag to new state in synchronized manner to avoid
-  // race condition.
-  public static synchronized void lockedUpdateBackupState(
-      UUID universeUUID, UniverseTaskBase backupTask, boolean newState) {
-    if (Universe.getOrBadRequest(universeUUID).getUniverseDetails().backupInProgress == newState) {
-      if (newState) {
-        throw new RuntimeException("A backup for this universe is already in progress.");
-      } else {
-        return;
-      }
-    }
-    backupTask.updateBackupState(newState);
-  }
-
   public static String getHostname() {
     try {
       return InetAddress.getLocalHost().getHostName();
@@ -629,14 +522,6 @@ public class Util {
     }
   }
 
-  public static InputStream getInputStreamOrFail(File file) {
-    try {
-      return new FileInputStream(file);
-    } catch (FileNotFoundException e) {
-      throw new PlatformServiceException(INTERNAL_SERVER_ERROR, e.getMessage());
-    }
-  }
-
   public static String getNodeIp(Universe universe, NodeDetails node) {
     String ip = null;
     if (node.cloudInfo == null || node.cloudInfo.private_ip == null) {
@@ -646,5 +531,56 @@ public class Util {
       ip = node.cloudInfo.private_ip;
     }
     return ip;
+  }
+
+  // Generate a deterministic node UUID from the universe UUID and the node name.
+  public static UUID generateNodeUUID(UUID universeUuid, String nodeName) {
+    return UUID.nameUUIDFromBytes((universeUuid.toString() + nodeName).getBytes());
+  }
+
+  // Generate hash string of given length for a given name.
+  // As each byte is represented by two hex chars, the length doubles.
+  public static String hashString(String name) {
+    int hashCode = name.hashCode();
+    byte[] bytes = ByteBuffer.allocate(4).putInt(hashCode).array();
+    return Hex.encodeHexString(bytes);
+  }
+
+  // Sanitize helm release name.
+  public static String sanitizeHelmReleaseName(String name) {
+    return sanitizeKubernetesNamespace(name, 0);
+  }
+
+  // Sanitize kubernetes namespace name. Additional suffix length can be reserved.
+  // Valid namespaces are not modified for backward compatibility.
+  // Only the non-conforming ones which have passed the UNIVERSE_NAME_REGEX are sanitized.
+  public static String sanitizeKubernetesNamespace(String name, int reserveSuffixLen) {
+    // Max allowed namespace length is 63.
+    int maxNamespaceLen = 63;
+    int firstPartLength = maxNamespaceLen - reserveSuffixLen;
+    checkArgument(firstPartLength > 0, "Invalid suffix length");
+    String sanitizedName = name.toLowerCase();
+    if (sanitizedName.equals(name) && firstPartLength >= sanitizedName.length()) {
+      // Backward compatibility taken care as old namespaces must have already passed this test for
+      // k8s.
+      return name;
+    }
+    // Decrease by 8 hash hex chars + 1 dash(-).
+    firstPartLength -= 9;
+    checkArgument(firstPartLength > 0, "Invalid suffix length");
+    if (sanitizedName.length() > firstPartLength) {
+      sanitizedName = sanitizedName.substring(0, firstPartLength);
+      LOG.warn("Name {} is longer than {}, truncated to {}.", name, firstPartLength, sanitizedName);
+    }
+    return String.format("%s-%s", sanitizedName, hashString(name));
+  }
+
+  public static boolean canConvertJsonNode(JsonNode jsonNode, Class<?> toValueType) {
+    try {
+      new ObjectMapper().treeToValue(jsonNode, toValueType);
+    } catch (JsonProcessingException e) {
+      return false;
+    }
+    return true;
   }
 }

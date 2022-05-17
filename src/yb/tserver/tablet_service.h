@@ -129,6 +129,10 @@ class TabletServiceImpl : public TabletServerServiceIf, public ReadTabletProvide
                         AbortTransactionResponsePB* resp,
                         rpc::RpcContext context) override;
 
+  void UpdateTransactionStatusLocation(const UpdateTransactionStatusLocationRequestPB* req,
+                                       UpdateTransactionStatusLocationResponsePB* resp,
+                                       rpc::RpcContext context) override;
+
   void Truncate(const TruncateRequestPB* req,
                 TruncateResponsePB* resp,
                 rpc::RpcContext context) override;
@@ -169,6 +173,10 @@ class TabletServiceImpl : public TabletServerServiceIf, public ReadTabletProvide
   void PerformAtLeader(const Req& req, Resp* resp, rpc::RpcContext* context, const F& f);
 
   Result<uint64_t> DoChecksum(const ChecksumRequestPB* req, CoarseTimePoint deadline);
+
+  Status HandleUpdateTransactionStatusLocation(const UpdateTransactionStatusLocationRequestPB* req,
+                                               UpdateTransactionStatusLocationResponsePB* resp,
+                                               std::shared_ptr<rpc::RpcContext> context);
 
   TabletServerIf *const server_;
 };
@@ -238,6 +246,9 @@ class TabletServiceAdminImpl : public TabletServerAdminServiceIf {
       UpgradeYsqlResponsePB* resp,
       rpc::RpcContext context) override;
 
+  void TestRetry(
+      const TestRetryRequestPB* req, TestRetryResponsePB* resp, rpc::RpcContext context) override;
+
  private:
   TabletServer* server_;
 
@@ -249,6 +260,7 @@ class TabletServiceAdminImpl : public TabletServerAdminServiceIf {
   mutable std::mutex backfill_lock_;
   std::condition_variable backfill_cond_;
   std::atomic<int32_t> num_tablets_backfilling_{0};
+  std::atomic<int32_t> num_test_retry_calls{0};
 };
 
 class ConsensusServiceImpl : public consensus::ConsensusServiceIf {

@@ -26,8 +26,10 @@
 #include "yb/common/schema.h"
 
 #include "yb/docdb/conflict_resolution.h"
+#include "yb/docdb/consensus_frontier.h"
 #include "yb/docdb/cql_operation.h"
 #include "yb/docdb/doc_write_batch.h"
+#include "yb/docdb/packed_row.h"
 #include "yb/docdb/pgsql_operation.h"
 #include "yb/docdb/redis_operation.h"
 
@@ -42,6 +44,7 @@
 
 #include "yb/util/logging.h"
 #include "yb/util/metrics.h"
+#include "yb/util/sync_point.h"
 #include "yb/util/trace.h"
 
 using namespace std::placeholders;
@@ -230,8 +233,13 @@ Result<bool> WriteQuery::PrepareExecute() {
     }
   } else {
     const auto* request = operation().request();
-    if (request && request->has_write_batch() && !request->write_batch().read_pairs().empty()) {
-      return SimplePrepareExecute();
+    if (request && request->has_write_batch()) {
+      const auto& write_batch = request->write_batch();
+      // We allow the empty case if transaction is set since that is an update in transaction
+      // metadata.
+      if (!write_batch.read_pairs().empty() || write_batch.has_transaction()) {
+        return SimplePrepareExecute();
+      }
     }
   }
 
@@ -276,6 +284,9 @@ Result<bool> WriteQuery::CqlPrepareExecute() {
   auto& metadata = *tablet().metadata();
   DVLOG(2) << "Schema version for  " << metadata.table_name() << ": " << metadata.schema_version();
 
+  docdb::AddTableSchemaVersion(
+      Uuid::Nil(), metadata.schema_version(), request().mutable_write_batch());
+
   const auto& ql_write_batch = client_request_->ql_write_batch();
 
   doc_ops_.reserve(ql_write_batch.size());
@@ -305,8 +316,10 @@ Result<bool> WriteQuery::CqlPrepareExecute() {
       DVLOG(3) << "Version matches : " << table_info->schema_version << " for "
                << AsString(req);
       auto write_op = std::make_unique<docdb::QLWriteOperation>(
-          req, std::shared_ptr<Schema>(table_info, table_info->schema.get()),
-          *table_info->index_map, tablet().unique_index_key_schema(),
+          req,
+          rpc::SharedField(table_info, table_info->doc_read_context.get()),
+          *table_info->index_map,
+          tablet().unique_index_key_schema(),
           txn_op_ctx);
       RETURN_NOT_OK(write_op->Init(resp));
       doc_ops_.emplace_back(std::move(write_op));
@@ -351,15 +364,19 @@ Result<bool> WriteQuery::PgsqlPrepareExecute() {
                  table_info->schema_version,
                  req.schema_version()));
     } else {
+      docdb::AddTableSchemaVersion(
+          table_info->cotable_id, table_info->schema_version, request().mutable_write_batch());
       if (doc_ops_.empty()) {
         // Use the value of is_ysql_catalog_table from the first operation in the batch.
         txn_op_ctx = VERIFY_RESULT(tablet().CreateTransactionOperationContext(
             request().write_batch().transaction(),
-            table_info->schema->table_properties().is_ysql_catalog_table(),
+            table_info->schema().table_properties().is_ysql_catalog_table(),
             &request().write_batch().subtransaction()));
       }
       auto write_op = std::make_unique<docdb::PgsqlWriteOperation>(
-          req, *table_info->schema, txn_op_ctx);
+          req,
+          *table_info->doc_read_context,
+          txn_op_ctx);
       RETURN_NOT_OK(write_op->Init(resp));
       doc_ops_.emplace_back(std::move(write_op));
     }
@@ -411,8 +428,10 @@ CHECKED_STATUS WriteQuery::DoExecute() {
   docdb::PartialRangeKeyIntents partial_range_key_intents(metadata.UsePartialRangeKeyIntents());
   prepare_result_ = VERIFY_RESULT(docdb::PrepareDocWriteOperation(
       doc_ops_, write_batch.read_pairs(), tablet().metrics()->write_lock_latency,
-      isolation_level_, kind(), row_mark_type, transactional_table,
+      isolation_level_, kind(), row_mark_type, transactional_table, write_batch.has_transaction(),
       deadline(), partial_range_key_intents, tablet().shared_lock_manager()));
+
+  TEST_SYNC_POINT("WriteQuery::DoExecute::PreparedDocWriteOps");
 
   auto* transaction_participant = tablet().transaction_participant();
   if (transaction_participant) {
@@ -455,7 +474,7 @@ CHECKED_STATUS WriteQuery::DoExecute() {
         pair->set_key(key.data(), key.size());
         // Empty values are disallowed by docdb.
         // https://github.com/YugaByte/yugabyte-db/issues/736
-        pair->set_value(std::string(1, docdb::ValueTypeAsChar::kNullLow));
+        pair->set_value(std::string(1, docdb::KeyEntryTypeAsChar::kNullLow));
         write_batch.set_wait_policy(WAIT_ERROR);
       }
     }

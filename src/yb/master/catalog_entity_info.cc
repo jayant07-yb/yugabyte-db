@@ -41,8 +41,10 @@
 #include "yb/master/master_client.pb.h"
 #include "yb/master/master_defaults.h"
 #include "yb/master/master_error.h"
+#include "yb/master/master_util.h"
 #include "yb/master/ts_descriptor.h"
 
+#include "yb/gutil/map-util.h"
 #include "yb/util/atomic.h"
 #include "yb/util/format.h"
 #include "yb/util/status_format.h"
@@ -288,7 +290,8 @@ void PersistentTabletInfo::set_state(SysTabletsEntryPB::State state, const strin
 // TableInfo
 // ================================================================================================
 
-TableInfo::TableInfo(TableId table_id, scoped_refptr<TasksTracker> tasks_tracker)
+TableInfo::TableInfo(TableId table_id,
+                     scoped_refptr<TasksTracker> tasks_tracker)
     : table_id_(std::move(table_id)),
       tasks_tracker_(tasks_tracker) {
 }
@@ -752,9 +755,10 @@ TabletInfos TableInfo::GetTablets(IncludeInactive include_inactive) const {
 
 TabletInfoPtr TableInfo::GetColocatedTablet() const {
   SharedLock<decltype(lock_)> l(lock_);
-  if (colocated() && !partitions_.empty()) {
-    return partitions_.begin()->second;
+  if (colocated() && !tablets_.empty()) {
+    return tablets_.begin()->second;
   }
+  LOG(INFO) << "Colocated Tablet not found for table " << name();
   return nullptr;
 }
 
@@ -774,23 +778,30 @@ bool TableInfo::UsesTablespacesForPlacement() const {
   bool is_transaction_table_using_tablespaces =
       l->pb.table_type() == TRANSACTION_STATUS_TABLE_TYPE &&
       l->pb.has_transaction_table_tablespace_id();
-  bool is_regular_pgsql_table =
-      l->pb.table_type() == PGSQL_TABLE_TYPE && !IsColocatedUserTable() &&
+  bool is_regular_ysql_table =
+      l->pb.table_type() == PGSQL_TABLE_TYPE &&
       l->namespace_id() != kPgSequencesDataNamespaceId &&
-      !IsColocatedParentTable();
-  return is_transaction_table_using_tablespaces || is_regular_pgsql_table;
+      !IsColocatedUserTable() &&
+      !IsColocationParentTable();
+  return is_transaction_table_using_tablespaces ||
+         is_regular_ysql_table ||
+         IsTablegroupParentTable();
+}
+
+bool TableInfo::IsColocationParentTable() const {
+  return IsColocationParentTableId(table_id_);
+}
+
+bool TableInfo::IsColocatedDbParentTable() const {
+  return IsColocatedDbParentTableId(table_id_);
 }
 
 bool TableInfo::IsTablegroupParentTable() const {
-  return id().find(master::kTablegroupParentTableIdSuffix) != std::string::npos;
-}
-
-bool TableInfo::IsColocatedParentTable() const {
-  return id().find(master::kColocatedParentTableIdSuffix) != std::string::npos;
+  return IsTablegroupParentTableId(table_id_);
 }
 
 bool TableInfo::IsColocatedUserTable() const {
-  return colocated() && !IsColocatedParentTable() && !IsTablegroupParentTable();
+  return colocated() && !IsColocationParentTable();
 }
 
 TablespaceId TableInfo::TablespaceIdForTableCreation() const {
@@ -886,47 +897,6 @@ bool NamespaceInfo::colocated() const {
 
 string NamespaceInfo::ToString() const {
   return Substitute("$0 [id=$1]", name(), namespace_id_);
-}
-
-// ================================================================================================
-// TablegroupInfo
-// ================================================================================================
-
-TablegroupInfo::TablegroupInfo(TablegroupId tablegroup_id, NamespaceId namespace_id) :
-                               tablegroup_id_(tablegroup_id), namespace_id_(namespace_id) {}
-
-void TablegroupInfo::AddChildTable(const TableId& table_id) {
-  std::lock_guard<simple_spinlock> l(lock_);
-  if (table_set_.find(table_id) != table_set_.end()) {
-    LOG(WARNING) << "Table ID " << table_id << " already in Tablegroup " << tablegroup_id_;
-  } else {
-    table_set_.insert(table_id);
-  }
-}
-
-void TablegroupInfo::DeleteChildTable(const TableId& table_id) {
-  std::lock_guard<simple_spinlock> l(lock_);
-  if (table_set_.find(table_id) != table_set_.end()) {
-    table_set_.erase(table_id);
-  } else {
-    LOG(WARNING) << "Table ID " << table_id << " not found in Tablegroup " << tablegroup_id_;
-  }
-}
-
-bool TablegroupInfo::HasChildTables() const {
-  std::lock_guard<simple_spinlock> l(lock_);
-  return !table_set_.empty();
-}
-
-
-std::size_t TablegroupInfo::NumChildTables() const {
-  std::lock_guard<simple_spinlock> l(lock_);
-  return table_set_.size();
-}
-
-std::unordered_set<TableId> TablegroupInfo::ChildTables() const {
-  std::lock_guard<simple_spinlock> l(lock_);
-  return table_set_;
 }
 
 // ================================================================================================

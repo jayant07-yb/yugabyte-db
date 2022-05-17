@@ -173,8 +173,9 @@ YBCStatus YBCPgNewCreateTable(const char *database_name,
                               bool is_shared_table,
                               bool if_not_exist,
                               bool add_primary_key,
-                              const bool colocated,
+                              bool is_colocated_via_database,
                               YBCPgOid tablegroup_oid,
+                              YBCPgOid colocation_id,
                               YBCPgOid tablespace_oid,
                               YBCPgOid matview_pg_table_oid,
                               YBCPgStatement *handle);
@@ -225,8 +226,10 @@ YBCStatus YBCPgGetColumnInfo(YBCPgTableDesc table_desc,
                              int16_t attr_number,
                              YBCPgColumnInfo *column_info);
 
-YBCStatus YBCPgGetTableProperties(YBCPgTableDesc table_desc,
-                                  YBCPgTableProperties *properties);
+// Does not set tablegroup_oid.
+// Callers should probably use YbGetTableDescAndProps instead.
+YBCStatus YBCPgGetSomeTableProperties(YBCPgTableDesc table_desc,
+                                      YBCPgTableProperties *properties);
 
 YBCStatus YBCPgDmlModifiesRow(YBCPgStatement handle, bool *modifies_row);
 
@@ -234,9 +237,10 @@ YBCStatus YBCPgSetIsSysCatalogVersionChange(YBCPgStatement handle);
 
 YBCStatus YBCPgSetCatalogCacheVersion(YBCPgStatement handle, uint64_t catalog_cache_version);
 
-YBCStatus YBCPgIsTableColocated(const YBCPgOid database_oid,
-                                const YBCPgOid table_oid,
-                                bool *colocated);
+// Whether the table is colocated (including tablegroups, excluding system tables).
+YBCStatus YbPgIsUserTableColocated(const YBCPgOid database_oid,
+                                   const YBCPgOid table_oid,
+                                   bool *colocated);
 
 YBCStatus YBCPgTableExists(const YBCPgOid database_oid,
                            const YBCPgOid table_oid,
@@ -257,6 +261,7 @@ YBCStatus YBCPgNewCreateIndex(const char *database_name,
                               const bool skip_index_backfill,
                               bool if_not_exist,
                               YBCPgOid tablegroup_oid,
+                              YBCPgOid colocation_id,
                               YBCPgOid tablespace_oid,
                               YBCPgStatement *handle);
 
@@ -385,7 +390,8 @@ YBCStatus YBCPgFlushBufferedOperations();
 
 YBCStatus YBCPgNewSample(const YBCPgOid database_oid,
                          const YBCPgOid table_oid,
-                         const int targrows,
+                         int targrows,
+                         bool is_region_local,
                          YBCPgStatement *handle);
 
 YBCStatus YBCPgInitRandomState(YBCPgStatement handle, double rstate_w, uint64_t rand_state);
@@ -400,6 +406,7 @@ YBCStatus YBCPgGetEstimatedRowCount(YBCPgStatement handle, double *liverows, dou
 YBCStatus YBCPgNewInsert(YBCPgOid database_oid,
                          YBCPgOid table_oid,
                          bool is_single_row_txn,
+                         bool is_region_local,
                          YBCPgStatement *handle);
 
 YBCStatus YBCPgExecInsert(YBCPgStatement handle);
@@ -414,6 +421,7 @@ YBCStatus YBCPgInsertStmtSetIsBackfill(YBCPgStatement handle, const bool is_back
 YBCStatus YBCPgNewUpdate(YBCPgOid database_oid,
                          YBCPgOid table_oid,
                          bool is_single_row_txn,
+                         bool is_region_local,
                          YBCPgStatement *handle);
 
 YBCStatus YBCPgExecUpdate(YBCPgStatement handle);
@@ -422,6 +430,7 @@ YBCStatus YBCPgExecUpdate(YBCPgStatement handle);
 YBCStatus YBCPgNewDelete(YBCPgOid database_oid,
                          YBCPgOid table_oid,
                          bool is_single_row_txn,
+                         bool is_region_local,
                          YBCPgStatement *handle);
 
 YBCStatus YBCPgExecDelete(YBCPgStatement handle);
@@ -432,6 +441,7 @@ YBCStatus YBCPgDeleteStmtSetIsPersistNeeded(YBCPgStatement handle, const bool is
 YBCStatus YBCPgNewTruncateColocated(YBCPgOid database_oid,
                                     YBCPgOid table_oid,
                                     bool is_single_row_txn,
+                                    bool is_region_local,
                                     YBCPgStatement *handle);
 
 YBCStatus YBCPgExecTruncateColocated(YBCPgStatement handle);
@@ -440,6 +450,7 @@ YBCStatus YBCPgExecTruncateColocated(YBCPgStatement handle);
 YBCStatus YBCPgNewSelect(YBCPgOid database_oid,
                          YBCPgOid table_oid,
                          const YBCPgPrepareParameters *prepare_params,
+                         bool is_region_local,
                          YBCPgStatement *handle);
 
 // Set forward/backward scan direction.
@@ -460,6 +471,7 @@ YBCStatus YBCPgSetTransactionReadOnly(bool read_only);
 YBCStatus YBCPgSetTransactionDeferrable(bool deferrable);
 YBCStatus YBCPgEnableFollowerReads(bool enable_follower_reads, int32_t staleness_ms);
 YBCStatus YBCPgEnterSeparateDdlTxnMode();
+bool YBCPgHasWriteOperationsInDdlTxnMode();
 YBCStatus YBCPgExitSeparateDdlTxnMode();
 void YBCPgClearSeparateDdlTxnMode();
 YBCStatus YBCPgSetActiveSubTransaction(uint32_t id);
@@ -523,7 +535,8 @@ void YBCPgDeleteFromForeignKeyReferenceCache(YBCPgOid table_oid, uint64_t ybctid
 void YBCPgAddIntoForeignKeyReferenceCache(YBCPgOid table_oid, uint64_t ybctid);
 YBCStatus YBCPgForeignKeyReferenceCacheDelete(const YBCPgYBTupleIdDescriptor* descr);
 YBCStatus YBCForeignKeyReferenceExists(const YBCPgYBTupleIdDescriptor* descr, bool* res);
-YBCStatus YBCAddForeignKeyReferenceIntent(const YBCPgYBTupleIdDescriptor* descr);
+YBCStatus YBCAddForeignKeyReferenceIntent(const YBCPgYBTupleIdDescriptor* descr,
+                                          bool relation_is_region_local);
 
 bool YBCIsInitDbModeEnvVarSet();
 
@@ -561,6 +574,13 @@ const void* YBCPgGetThreadLocalErrMsg();
 void YBCPgResetCatalogReadTime();
 
 YBCStatus YBCGetTabletServerHosts(YBCServerDescriptor **tablet_servers, size_t* numservers);
+
+void YBCStartSysTablePrefetching();
+
+void YBCStopSysTablePrefetching();
+
+void YBCRegisterSysTableForPrefetching(
+    YBCPgOid database_oid, YBCPgOid table_oid, YBCPgOid index_oid);
 
 #ifdef __cplusplus
 }  // extern "C"

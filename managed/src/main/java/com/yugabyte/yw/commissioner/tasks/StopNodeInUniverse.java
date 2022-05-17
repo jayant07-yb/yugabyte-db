@@ -11,14 +11,12 @@
 package com.yugabyte.yw.commissioner.tasks;
 
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
-import com.yugabyte.yw.commissioner.SubTaskGroupQueue;
 import com.yugabyte.yw.commissioner.UserTaskDetails.SubTaskGroupType;
 import com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType;
 import com.yugabyte.yw.commissioner.tasks.params.NodeTaskParams;
 import com.yugabyte.yw.common.DnsManager;
 import com.yugabyte.yw.common.Util;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
-import com.yugabyte.yw.forms.UniverseDefinitionTaskParams.UserIntent;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.NodeDetails.NodeState;
@@ -51,8 +49,6 @@ public class StopNodeInUniverse extends UniverseTaskBase {
 
     try {
       checkUniverseVersion();
-      // Create the task list sequence.
-      subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
 
       // Set the 'updateInProgress' flag to prevent other updates from happening.
       Universe universe = lockUniverseForUpdate(taskParams().expectedUniverseVersion);
@@ -130,6 +126,9 @@ public class StopNodeInUniverse extends UniverseTaskBase {
             true /* useHostPort */);
         createUpdateNodeProcessTask(taskParams().nodeName, ServerType.MASTER, false)
             .setSubTaskGroupType(SubTaskGroupType.StoppingNodeProcesses);
+        // Update the master addresses on the target universes whose source universe belongs to
+        // this task.
+        createXClusterConfigUpdateMasterAddressesTask();
       }
 
       // Update Node State to Stopped
@@ -145,7 +144,7 @@ public class StopNodeInUniverse extends UniverseTaskBase {
       // Mark universe task state to success
       createMarkUniverseUpdateSuccessTasks().setSubTaskGroupType(SubTaskGroupType.StoppingNode);
 
-      subTaskGroupQueue.run();
+      getRunnableTask().runSubTasks();
     } catch (Throwable t) {
       log.error("Error executing task {}, error='{}'", getName(), t.getMessage(), t);
       hitException = true;
@@ -160,11 +159,12 @@ public class StopNodeInUniverse extends UniverseTaskBase {
         // remove leader blacklist for current node if task failed and leader blacklist is not
         // removed
         if (isBlacklistLeaders) {
-          subTaskGroupQueue = new SubTaskGroupQueue(userTaskUUID);
+          // Clear previous subtasks if any.
+          getRunnableTask().reset();
           createModifyBlackListTask(
                   Arrays.asList(currentNode), false /* isAdd */, true /* isLeaderBlacklist */)
               .setSubTaskGroupType(SubTaskGroupType.StoppingNodeProcesses);
-          subTaskGroupQueue.run();
+          getRunnableTask().runSubTasks();
         }
       } finally {
         unlockUniverseForUpdate();

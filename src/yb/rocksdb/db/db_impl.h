@@ -229,6 +229,9 @@ class DBImpl : public DB {
 
   UserFrontierPtr GetMutableMemTableFrontier(UpdateUserValueType type) override;
 
+  // Calculates specified frontier_type for all mem tables (active and immutable).
+  UserFrontierPtr CalcMemTableFrontier(UpdateUserValueType frontier_type) override;
+
   // Obtains the meta data of the specified column family of the DB.
   // STATUS(NotFound, "") will be returned if the current DB does not have
   // any column family match the specified name.
@@ -492,8 +495,7 @@ class DBImpl : public DB {
   const std::string dbname_;
   unique_ptr<VersionSet> versions_;
   const DBOptions db_options_;
-  Statistics* stats_;
-
+  std::shared_ptr<Statistics> stats_;
   InternalIterator* NewInternalIterator(const ReadOptions&,
                                         ColumnFamilyData* cfd,
                                         SuperVersion* super_version,
@@ -596,9 +598,6 @@ class DBImpl : public DB {
 
   // Wait for memtable flushed
   Status WaitForFlushMemTable(ColumnFamilyData* cfd);
-
-  void RecordFlushIOStats();
-  void RecordCompactionIOStats();
 
 #ifndef ROCKSDB_LITE
   Status CompactFilesImpl(

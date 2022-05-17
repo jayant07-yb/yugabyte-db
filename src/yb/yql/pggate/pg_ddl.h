@@ -15,9 +15,10 @@
 #ifndef YB_YQL_PGGATE_PG_DDL_H_
 #define YB_YQL_PGGATE_PG_DDL_H_
 
+#include "yb/common/constants.h"
 #include "yb/common/transaction.h"
 
-#include "yb/tserver/pg_client.pb.h"
+#include "yb/tserver/pg_client.messages.h"
 
 #include "yb/yql/pggate/pg_statement.h"
 
@@ -142,8 +143,9 @@ class PgCreateTable : public PgDdl {
                 bool is_shared_table,
                 bool if_not_exist,
                 bool add_primary_key,
-                const bool colocated,
+                bool is_colocated_via_database,
                 const PgObjectId& tablegroup_oid,
+                const ColocationId colocation_id,
                 const PgObjectId& tablespace_oid,
                 const PgObjectId& matview_pg_table_oid);
 
