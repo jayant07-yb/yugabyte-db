@@ -357,9 +357,7 @@ struct pg_conn
 	char	   *sslrootcert;	/* root certificate filename */
 	char	   *sslcrl;			/* certificate revocation list filename */
 	char	   *requirepeer;	/* required peer credentials for local sockets */
-	
-	char	   *topology_keys; 	/* Stores the details about the topology */
-	char 	   *load_balance ; 	/* For enabling the load_balancing feature */ 
+
 #if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
 	char	   *krbsrvname;		/* Kerberos service name */
 #endif
@@ -521,17 +519,6 @@ struct pg_cancel
  */
 extern char *const pgresStatus[];
 
-/*
- *  yb_connectLoadBalance function will be used to make any   LoadBalanced connection
- *	Input - PGconn connection object
- *		1.	Check that the control connection is established
- *  	2.	Consider the host with lowest number of connections and try to connect with it.
- *		3. 	If the connection fails goto step 2 and repeat until all the available hosts are checked.
- * 		4.	Once a connection is established return true else false if unable to establish connection with any host.
- */
-
-bool YBconnectLoadBalance(PGconn *conn  )  ; 
-bool YBserverStatusChange(char *server_address , bool new_status , bool check_map_ready ) ; 
 
 #ifdef USE_SSL
 
