@@ -15,28 +15,28 @@ showAsideToc: true
 [Camunda](https://camunda.com/) is a Java-based framework supporting BPMN for workflow and process automation, CMMN for Case Management and DMN for Business Decision Management. This page shows how it can be integrated with YugabyteDB's YSQL API.
 
 ## Prerequisites
-
-Before you start using the KairosDB plugin, ensure that you have:
 Make sure you have the following set of tools installed:
 
 - Java JDK 1.8+,
-- A modern web browser (recent Firefox, Chrome or Microsoft Edge will work fine).
 - Eclipse integrated development environment (IDE)/Visual Studio Code.
-- A YugabyteDB cluster. Refer to [YugabyteDB Quick start guide](/preview/quick-start/) to install and start a local cluster.
-- YugabyteDB JDBC Driver jar [file](https://repo1.maven.org/maven2/com/yugabyte/jdbc-yugabytedb/42.3.5-yb-1/jdbc-yugabytedb-42.3.5-yb-1.jar).
-- Postgres JDBC Driver jar [file](https://jdbc.postgresql.org/download/postgresql-42.3.5.jar).
 - Camunda Modeler, you can get it from [here](https://camunda.com/download/modeler).
 - NodeJS >= v10 (Download available [here](https://nodejs.org/en/download/)).
 - [Postman API Platform](https://www.postman.com/downloads/) (optional).
 
 ## Configure Camunda Platform 7
+- Start the YugabyteDB cluster.
+  Refer to [YugabyteDB Quick start guide](/preview/quick-start/) to install and start a local cluster.
+  Or you can use Docker container 
+  `docker run -p7000:7000 -p9000:9000 -p5433:5433 -p9042:9042 yugabytedb/yugabyte:latest bin/yugabyted start\`
+  Refer [here](https://hub.docker.com/r/yugabytedb/yugabyte) for more details regarding the docker image.
 - Download Camunda Platform 7 from [here](https://camunda.com/download/) and unzip it.
-- Configuration the following files
+
+- In the following configuration files find the spring.datasource stanza and replace it with the appropiate configurations
   - camunda-bpm-run-7.17.0/configuration/default.yml
   - camunda-bpm-run-7.17.0/configuration/production.yml
+
 - For YugabyteDB JDBC driver:
 
-Find the spring.datasource stanza and replace it with the below configurations.
 ```yml
 # datasource configuration is required
 spring.datasource:
@@ -45,12 +45,11 @@ spring.datasource:
  username: yugabyte
  password: yugabyte
 ```
-Download the “.jar” file of the YugabyteDB JDBC driver and save it in camunda-bpm-run-7.17.0/configuration/userlib 
+Change the `connection url` to point to the YugabyteDB cluster you started.
+Download the YugabyteDB JDBC driver jar and place it in camunda-bpm-run-7.17.0/configuration/userlib directory.
 You can get the jar [file](https://repo1.maven.org/maven2/com/yugabyte/jdbc-yugabytedb/42.3.5-yb-1/jdbc-yugabytedb-42.3.5-yb-1.jar).
 
 - For Postgres JDBC Driver:
-
-Find the spring.datasource stanza and replace it with the below configurations.
 
 ```yml
 # datasource configuration is required
@@ -60,8 +59,8 @@ spring.datasource:
  username: yugabyte
  password: yugabyte
 ```
-
-Download the “.jar” file of the Postgres JDBC driver and save it in	camunda-bpm-run-7.17.0/configuration/userlib 
+Change the `connection url` to point to the YugabyteDB cluster you started.
+Download the Postgres JDBC driver jar and place it in camunda-bpm-run-7.17.0/configuration/userlib directory.
 You can get the jar [file](https://jdbc.postgresql.org/download/postgresql-42.3.5.jar).
 
 Run the Camunda Platform server using `./start.sh` for Linux/MacOS systems or `./start.bat` for Windows System.
