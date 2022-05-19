@@ -12,28 +12,26 @@ isTocNested: true
 showAsideToc: true
 ---
 
-[Camunda](https://camunda.com/) is a Java-based framework supporting BPMN (Business Process Modeling Notation) for workflow and process automation, CMMN(Case Management Model and Notation) for Case Management and DMN(Decision Model and Notation) for Business Decision Management. 
-While using Camunda we are required to configure a datasource. In this doc we discuss how YugabyteDB (ysql) can be used as a datasource in Camunda.
+[Camunda](https://camunda.com/) is a Java-based framework supporting BPMN (Business Process Modeling Notation) for workflow and process automation, CMMN(Case Management Model and Notation) for Case Management and DMN(Decision Model and Notation) for Business Decision Management.
+
+Camunda supports Postgres as a datasource. Since YugabyteDB is wire compatible with Postgres, it works out of the box with Camunda as a datasource. In this doc we discuss how to
+- Configure Camunda to use YugabyteDB (ysql) as a datasource.
+- Run a simple hello world example in Camunda.
+
 
 ## Prerequisites
-Make sure you have the following set of tools installed:
-
+Before moving forward make sure that you have:
+- A running YugabyteDB cluster. If you're new to YugabyteDB, you can download, install, and have YugabyteDB up and running within minutes by following the steps in [Quick start](/preview/quick-start/). Alternatively, you can use [YugabyteDB Managed](http://cloud.yugabyte.com/) to get a fully managed database-as-a-service (DBaaS) for YugabyteDB.
 - Java JDK 1.8+
 - NodeJS >= v10 
-- Camunda Modeler, you can get it from [here](https://camunda.com/download/modeler).
+- [Camunda Modeler](https://camunda.com/download/modeler).
 
 ## Configure Camunda Platform 7
-- Start the YugabyteDB cluster.
-  Refer to [YugabyteDB Quick start guide](/preview/quick-start/) to install and start a local cluster.
-  Or you can use Docker container 
-  `docker run -p7000:7000 -p9000:9000 -p5433:5433 -p9042:9042 yugabytedb/yugabyte:latest bin/yugabyted start\`
-  Refer [here](https://hub.docker.com/r/yugabytedb/yugabyte) for more details regarding the docker image.
 - Download Camunda Platform 7 from [here](https://camunda.com/download/) and unzip it.
-
-- In the following configuration files find the spring.datasource section and replace it with the appropiate configurations
+- Locate the `spring.datasource` section in the below files
   - `camunda-bpm-run-7.17.0/configuration/default.yml`
   - `camunda-bpm-run-7.17.0/configuration/production.yml`
-
+- Modify this section with the configuration given below which uses standard Postgresql JDBC driver.
 ```yml
 # datasource configuration is required
 spring.datasource:
@@ -42,11 +40,9 @@ spring.datasource:
  username: yugabyte
  password: yugabyte
 ```
-Change the `connection url` to point to the YugabyteDB cluster you started.
-Download the Postgres JDBC driver jar and place it in `camunda-bpm-run-7.17.0/configuration/userlib` directory.
-You can get the jar [file](https://jdbc.postgresql.org/download/postgresql-42.3.5.jar).
-This configuration uses Postgres JDBC driver to connect with the yugabyteDB, for using YugabyteDB JDBC driver 
-Use the below configuration.
+Change the `url` to point to the YugabyteDB cluster you started.
+- Download the Postgres JDBC driver [jar](https://jdbc.postgresql.org/download/postgresql-42.3.5.jar) and place it in `camunda-bpm-run-7.17.0/configuration/userlib` directory. 
+- Alternatively for using YugabyteDB JDBC driver use the below configuration.
 ```yml
 # datasource configuration is required
 spring.datasource:
@@ -55,23 +51,25 @@ spring.datasource:
  username: yugabyte
  password: yugabyte
 ```
-Download the YugabyteDB JDBC driver jar and place it in `camunda-bpm-run-7.17.0/configuration/userlib` directory.
-You can get the jar [file](https://repo1.maven.org/maven2/com/yugabyte/jdbc-yugabytedb/42.3.5-yb-1/jdbc-yugabytedb-42.3.5-yb-1.jar).
+- Download the YugabyteDB JDBC driver [jar](https://repo1.maven.org/maven2/com/yugabyte/jdbc-yugabytedb/42.3.5-yb-1/jdbc-yugabytedb-42.3.5-yb-1.jar) and place it in `camunda-bpm-run-7.17.0/configuration/userlib` directory. You can read more about YugabyteDB JDBC driver [here](https://docs.yugabyte.com/preview/integrations/jdbc-driver/).
 
-You can read more about YugabyteDB JDBC driver [here](https://docs.yugabyte.com/preview/integrations/jdbc-driver/).
-
-Run the Camunda Platform server using `./start.sh` for Linux/MacOS systems or `./start.bat` for Windows System.
+- Run the Camunda Platform server using `./start.sh` for Linux/MacOS systems or `./start.bat` for Windows System.
 
 ## Verify the integration
-Once server is started you will be able to see a few tables getting created in the database. To do so, login to the database using ysqlsh
-`./bin/ysqsh`
-Use `\d` to see the list of tables.
-A list of tables with the prefix `ACT_` will appear.
-More details regarding the tables created are mentioned [here](https://docs.camunda.org/manual/7.16/user-guide/process-engine/database/database-schema/).
+Once server is started you will be able to see a few tables getting created in the database. 
+
+To do so
+- Login to the database using `./bin/ysqsh`
+- Use `\d` to see the list of tables.
+- Verify that a list of tables with the prefix `ACT_` are created.
+  More details regarding the tables created are mentioned [here](https://docs.camunda.org/manual/7.16/user-guide/process-engine/database/database-schema/).
 
 ## Hello World Application using Camunda
-We are going to use Camunda Modeler to design and deploy a simple BPMN for charging the cards. This example is taken from the [quick-start example](https://docs.camunda.org/get-started/quick-start/) in Camunda Docs.
-We are going to need 3 events:
+We are going to use Camunda Modeler to design and deploy a simple BPMN for charging the cards. 
+
+This example is taken from the [quick-start example](https://docs.camunda.org/get-started/quick-start/) in Camunda Docs.
+
+We are going to need three events:
 - Start Event   
 - Service Event
 - End Event
