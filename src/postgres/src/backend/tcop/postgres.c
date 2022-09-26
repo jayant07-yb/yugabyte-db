@@ -4372,6 +4372,18 @@ yb_restart_portal(const char* portal_name)
 	/* no need to call PortalSetResultFormat either - formats array is already set */
 }
 
+void send_notice()
+{
+
+		ErrorData  dummy ;
+		dummy.elevel = NOTICE ;
+		dummy.output_to_client = true;
+		dummy.hint  = "Identified Stickyness";
+		dummy.sqlerrcode = 'a';	/* Temperory error code */
+		send_message_to_frontend(&dummy);
+
+}
+
 static long
 yb_get_sleep_usecs_on_txn_conflict(int attempt) {
 	/* Use exponential backoff to calculate the sleep duration. */
@@ -5144,7 +5156,7 @@ PostgresMain(int argc, char *argv[],
 				set_ps_display("idle", false);
 				pgstat_report_activity(STATE_IDLE, NULL);
 			}
-
+			send_notice();
 			ReadyForQuery(whereToSendOutput);
 			send_ready_for_query = false;
 		}
