@@ -386,7 +386,10 @@ SocketBackend(StringInfo inBuf)
 	 * as soon as possible.
 	 */
 	switch (qtype)
-	{
+	{	
+		case 'A':
+			/* Auth Message */
+			break;
 		case 'Q':				/* simple query */
 			doing_extended_query_message = false;
 			if (PG_PROTOCOL_MAJOR(FrontendProtocol) < 3)
@@ -4908,6 +4911,9 @@ PostgresMain(int argc, char *argv[],
 		/* Need not flush since ReadyForQuery will do it. */
 	}
 
+	ereport(LOG,
+			(errmsg("SENT THE ,ESSAGE ")));
+
 	/* Welcome banner for standalone case */
 	if (whereToSendOutput == DestDebug)
 		printf("\nPostgreSQL stand-alone backend %s\n", PG_VERSION);
@@ -5217,9 +5223,29 @@ PostgresMain(int argc, char *argv[],
 			YBCPgResetCatalogReadTime();
 			YBCheckSharedCatalogCacheVersion();
 		}
-
+		//struct Port Dummyclient;
+				
 		switch (firstchar)
 		{
+			case 'A':			/* yb-changes: Authenticate message*/
+				/* Get the structure */
+				/* Start the authentication packet */
+				//PerformAuthentication(&Dummyclient);
+				
+			ereport(LOG,
+			(errmsg("Found the packet with type 'A'")));
+					//PerformAuthentication(MyProcPort);
+			//sendAuthRequest(MyProcPort, AUTH_REQ_OK, NULL, 0);
+			StringInfoData buf;
+
+			pq_beginmessage(&buf, 'R');
+			pq_sendint32(&buf, (int32) 0);
+
+			pq_endmessage(&buf);
+
+			pq_flush();
+			
+			break;
 			case 'Q':			/* simple query */
 			{
 				const char *query_string;
