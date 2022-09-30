@@ -49,6 +49,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
+#include "libpq/auth.h"
 #include "miscadmin.h"
 #include "nodes/print.h"
 #include "optimizer/planner.h"
@@ -386,9 +387,17 @@ SocketBackend(StringInfo inBuf)
 	 * as soon as possible.
 	 */
 	switch (qtype)
-	{	
-		case 'A':
-			/* Auth Message */
+	{
+		case 'A':				/* Auth Message */
+			/*
+			 * The `AUTH` message will have following format
+			 * Int32	Length of message contents in bytes, including self.
+			 * String	The parameter name. Currently recognized names are:
+			 * 		user		The database user name to connect as. Required; there is no default.
+			 * 		database	The database to connect to. Defaults to the user name.
+			 * 		port		The port details of the `client which is trying to connect via the connection_pooler.
+			 */
+
 			break;
 		case 'Q':				/* simple query */
 			doing_extended_query_message = false;
@@ -4866,7 +4875,7 @@ PostgresMain(int argc, char *argv[],
 	 * ... else we'd need to copy the Port data first.  Also, subsidiary data
 	 * such as the username isn't lost either; see ProcessStartupPacket().
 	 */
-	if (PostmasterContext)
+	if (0 && PostmasterContext)
 	{
 		MemoryContextDelete(PostmasterContext);
 		PostmasterContext = NULL;
@@ -4910,9 +4919,6 @@ PostgresMain(int argc, char *argv[],
 		pq_endmessage(&buf);
 		/* Need not flush since ReadyForQuery will do it. */
 	}
-
-	ereport(LOG,
-			(errmsg("SENT THE ,ESSAGE ")));
 
 	/* Welcome banner for standalone case */
 	if (whereToSendOutput == DestDebug)
@@ -5223,27 +5229,30 @@ PostgresMain(int argc, char *argv[],
 			YBCPgResetCatalogReadTime();
 			YBCheckSharedCatalogCacheVersion();
 		}
-		//struct Port Dummyclient;
-				
+
 		switch (firstchar)
 		{
-			case 'A':			/* yb-changes: Authenticate message*/
-				/* Get the structure */
-				/* Start the authentication packet */
-				//PerformAuthentication(&Dummyclient);
+			case 'A':			
+			/*
+			 * yb-changes: Authenticate message
+			 * Construct the a temperory port object for the client Port 
+			 * Set the `STATE`
+			 * Pass it to the `yb_Clientauthentication()`
+			 * Reset the `STATE` to the previous state
+			 */
 				
 			ereport(LOG,
 			(errmsg("Found the packet with type 'A'")));
-					//PerformAuthentication(MyProcPort);
-			//sendAuthRequest(MyProcPort, AUTH_REQ_OK, NULL, 0);
-			StringInfoData buf;
-
-			pq_beginmessage(&buf, 'R');
-			pq_sendint32(&buf, (int32) 0);
-
-			pq_endmessage(&buf);
-
-			pq_flush();
+			
+			start_xact_command();
+			MyProcPort->user_name = (char *) pq_getmsgstring(&input_message);
+			const char * db_name = pq_getmsgstring(&input_message);
+			strcpy(MyProcPort->database_name, db_name);
+			
+			//MyProcPort->database_name =  (char *) pq_getmsgstring(&input_message);
+			//pq_getmsgend(&input_message);
+			yb_ClientAuthentication(MyProcPort);
+			ReadyForQuery(DestRemote);
 			
 			break;
 			case 'Q':			/* simple query */

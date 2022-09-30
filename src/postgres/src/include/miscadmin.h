@@ -458,5 +458,3 @@ extern bool BackupInProgress(void);
 extern void CancelBackup(void);
 
 #endif							/* MISCADMIN_H */
-
-extern void PerformAuthentication(struct Port *port);

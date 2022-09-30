@@ -636,6 +636,285 @@ ClientAuthentication(Port *port)
 
 
 /*
+ * Client authentication starts here.  If there is an error, this
+ * function does not return and the backend process is terminated.
+ */
+void
+yb_ClientAuthentication(Port *port)
+{
+	int			status = STATUS_ERROR;
+	char	   *logdetail = NULL;
+
+	/*
+	 * Get the authentication method to use for this frontend/database
+	 * combination.  Note: we do not parse the file at this point; this has
+	 * already been done elsewhere.  hba.c dropped an error message into the
+	 * server logfile if parsing the hba config file failed.
+	 */
+	hba_getauthmethod(port);
+
+	CHECK_FOR_INTERRUPTS();
+
+	/*
+	 * This is the first point where we have access to the hba record for the
+	 * current connection, so perform any verifications based on the hba
+	 * options field that should be done *before* the authentication here.
+	 */
+	if (port->hba->clientcert)
+	{
+		/* If we haven't loaded a root certificate store, fail */
+		if (!secure_loaded_verify_locations())
+			ereport(FATAL,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("client certificates can only be checked if a root certificate store is available")));
+
+		/*
+		 * If we loaded a root certificate store, and if a certificate is
+		 * present on the client, then it has been verified against our root
+		 * certificate store, and the connection would have been aborted
+		 * already if it didn't verify ok.
+		 */
+		if (!port->peer_cert_valid)
+			ereport(FATAL,
+					(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+					 errmsg("connection requires a valid client certificate")));
+	}
+
+	/*
+	 * Now proceed to do the actual authentication check
+	 */
+	switch (port->hba->auth_method)
+	{
+		case uaReject:
+
+			/*
+			 * An explicit "reject" entry in pg_hba.conf.  This report exposes
+			 * the fact that there's an explicit reject entry, which is
+			 * perhaps not so desirable from a security standpoint; but the
+			 * message for an implicit reject could confuse the DBA a lot when
+			 * the true situation is a match to an explicit reject.  And we
+			 * don't want to change the message for an implicit reject.  As
+			 * noted below, the additional information shown here doesn't
+			 * expose anything not known to an attacker.
+			 */
+			{
+				char		hostinfo[NI_MAXHOST];
+
+				pg_getnameinfo_all(&port->raddr.addr, port->raddr.salen,
+								   hostinfo, sizeof(hostinfo),
+								   NULL, 0,
+								   NI_NUMERICHOST);
+
+				if (am_walsender)
+				{
+#ifdef USE_SSL
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("pg_hba.conf rejects replication connection for host \"%s\", user \"%s\", %s",
+									hostinfo, port->user_name,
+									port->ssl_in_use ? _("SSL on") : _("SSL off"))));
+#else
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("pg_hba.conf rejects replication connection for host \"%s\", user \"%s\"",
+									hostinfo, port->user_name)));
+#endif
+				}
+				else
+				{
+#ifdef USE_SSL
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("pg_hba.conf rejects connection for host \"%s\", user \"%s\", database \"%s\", %s",
+									hostinfo, port->user_name,
+									port->database_name,
+									port->ssl_in_use ? _("SSL on") : _("SSL off"))));
+#else
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("pg_hba.conf rejects connection for host \"%s\", user \"%s\", database \"%s\"",
+									hostinfo, port->user_name,
+									port->database_name)));
+#endif
+				}
+				break;
+			}
+
+		case uaImplicitReject:
+
+			/*
+			 * No matching entry, so tell the user we fell through.
+			 *
+			 * NOTE: the extra info reported here is not a security breach,
+			 * because all that info is known at the frontend and must be
+			 * assumed known to bad guys.  We're merely helping out the less
+			 * clueful good guys.
+			 */
+			{
+				char		hostinfo[NI_MAXHOST];
+
+				pg_getnameinfo_all(&port->raddr.addr, port->raddr.salen,
+								   hostinfo, sizeof(hostinfo),
+								   NULL, 0,
+								   NI_NUMERICHOST);
+
+#define HOSTNAME_LOOKUP_DETAIL(port) \
+				(port->remote_hostname ? \
+				 (port->remote_hostname_resolv == +1 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup matches.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == 0 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup not checked.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == -1 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup does not match.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == -2 ? \
+				  errdetail_log("Could not translate client host name \"%s\" to IP address: %s.", \
+								port->remote_hostname, \
+								gai_strerror(port->remote_hostname_errcode)) : \
+				  0) \
+				 : (port->remote_hostname_resolv == -2 ? \
+					errdetail_log("Could not resolve client IP address to a host name: %s.", \
+								  gai_strerror(port->remote_hostname_errcode)) : \
+					0))
+
+				if (am_walsender)
+				{
+#ifdef USE_SSL
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("no pg_hba.conf entry for replication connection from host \"%s\", user \"%s\", %s",
+									hostinfo, port->user_name,
+									port->ssl_in_use ? _("SSL on") : _("SSL off")),
+							 HOSTNAME_LOOKUP_DETAIL(port)));
+#else
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("no pg_hba.conf entry for replication connection from host \"%s\", user \"%s\"",
+									hostinfo, port->user_name),
+							 HOSTNAME_LOOKUP_DETAIL(port)));
+#endif
+				}
+				else
+				{
+#ifdef USE_SSL
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("no pg_hba.conf entry for host \"%s\", user \"%s\", database \"%s\", %s",
+									hostinfo, port->user_name,
+									port->database_name,
+									port->ssl_in_use ? _("SSL on") : _("SSL off")),
+							 HOSTNAME_LOOKUP_DETAIL(port)));
+#else
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+							 errmsg("no pg_hba.conf entry for host \"%s\", user \"%s\", database \"%s\"",
+									hostinfo, port->user_name,
+									port->database_name),
+							 HOSTNAME_LOOKUP_DETAIL(port)));
+#endif
+				}
+				break;
+			}
+
+		case uaGSS:
+#ifdef ENABLE_GSS
+			sendAuthRequest(port, AUTH_REQ_GSS, NULL, 0);
+			status = pg_GSS_recvauth(port);
+#else
+			Assert(false);
+#endif
+			break;
+
+		case uaSSPI:
+#ifdef ENABLE_SSPI
+			sendAuthRequest(port, AUTH_REQ_SSPI, NULL, 0);
+			status = pg_SSPI_recvauth(port);
+#else
+			Assert(false);
+#endif
+			break;
+
+		case uaPeer:
+#ifdef HAVE_UNIX_SOCKETS
+			status = auth_peer(port);
+#else
+			Assert(false);
+#endif
+			break;
+
+		case uaIdent:
+			status = ident_inet(port);
+			break;
+
+		case uaMD5:
+		case uaSCRAM:
+			status = CheckPWChallengeAuth(port, &logdetail);
+			break;
+
+		case uaPassword:
+			status = CheckPasswordAuth(port, &logdetail);
+			break;
+
+		case uaYbTserverKey:
+#ifdef HAVE_UNIX_SOCKETS
+			Assert(IsYugaByteEnabled());
+			status = CheckYbTserverKeyAuth(port, &logdetail);
+#else
+			Assert(false);
+#endif
+			break;
+
+		case uaPAM:
+#ifdef USE_PAM
+			status = CheckPAMAuth(port, port->user_name, "");
+#else
+			Assert(false);
+#endif							/* USE_PAM */
+			break;
+
+		case uaBSD:
+#ifdef USE_BSD_AUTH
+			status = CheckBSDAuth(port, port->user_name);
+#else
+			Assert(false);
+#endif							/* USE_BSD_AUTH */
+			break;
+
+		case uaLDAP:
+#ifdef USE_LDAP
+			status = CheckLDAPAuth(port);
+#else
+			Assert(false);
+#endif
+			break;
+
+		case uaCert:
+#ifdef USE_SSL
+			status = CheckCertAuth(port);
+#else
+			Assert(false);
+#endif
+			break;
+		case uaRADIUS:
+			status = CheckRADIUSAuth(port);
+			break;
+		case uaTrust:
+			status = STATUS_OK;
+			break;
+	}
+
+	if (ClientAuthentication_hook)
+		(*ClientAuthentication_hook) (port, status);
+
+	if (status == STATUS_OK)
+		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
+	else
+		sendAuthRequest(port, AUTH_REQ_FAILED, NULL, 0);
+}
+
+/*
  * Send an authentication request packet to the frontend.
  */
 static void
@@ -2883,7 +3162,8 @@ CheckCertAuth(Port *port)
 						port->user_name)));
 		return STATUS_ERROR;
 	}
-
+		ereport(LOG,
+			(errmsg("User client Cert  %s---%s -- %s",port->hba->usermap,port->user_name,port->peer_cn)));
 	/* Just pass the certificate CN to the usermap check */
 	return check_usermap(port->hba->usermap, port->user_name, port->peer_cn, false);
 }
