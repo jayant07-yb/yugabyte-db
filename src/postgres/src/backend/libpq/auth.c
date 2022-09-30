@@ -792,6 +792,10 @@ CheckPasswordAuth(Port *port, char **logdetail)
 static int
 CheckPWChallengeAuth(Port *port, char **logdetail)
 {
+		
+	ereport(LOG,
+			(errmsg(" Inside the auth block ")));
+
 	int			auth_result;
 	char	   *shadow_pass;
 	PasswordType pwtype;
@@ -802,6 +806,9 @@ CheckPWChallengeAuth(Port *port, char **logdetail)
 	/* First look up the user's password. */
 	shadow_pass = get_role_password(port->user_name, logdetail);
 
+		
+	ereport(LOG,
+			(errmsg(" Inside the auth block :: got role ")));
 	/*
 	 * If the user does not exist, or has no password or it's expired, we
 	 * still go through the motions of authentication, to avoid revealing to
@@ -864,10 +871,19 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 				(errmsg("could not generate random MD5 salt")));
 		return STATUS_ERROR;
 	}
-
+	ereport(LOG,
+			(errmsg(" Inside the checkMd5 ")));
+	
 	sendAuthRequest(port, AUTH_REQ_MD5, md5Salt, 4);
-
+	
+	ereport(LOG,
+			(errmsg("Sent authentication request")));
+	
 	passwd = recv_password_packet(port);
+	
+	ereport(LOG,
+			(errmsg("Received the password")));
+	
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
 
@@ -877,6 +893,8 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 	else
 		result = STATUS_ERROR;
 
+	ereport(LOG,
+			(errmsg("Password Verification completed")));
 	pfree(passwd);
 
 	return result;
@@ -3377,3 +3395,34 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 		}
 	}							/* while (true) */
 }
+
+void
+yb_ClientAuthentication(Port *port)
+{
+
+
+	CHECK_FOR_INTERRUPTS();
+
+	int			status = STATUS_ERROR;
+	char	   *logdetail = NULL;
+
+	
+	/*
+	 * Now proceed to do the actual authentication check
+	 */
+	
+	port->hba->auth_method  = uaMD5;
+	status = CheckMD5Auth(port, "yugabyte", &logdetail);
+
+	if (ClientAuthentication_hook)
+		(*ClientAuthentication_hook) (port, status);
+
+	if (status == STATUS_OK)
+		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
+	else
+		sendAuthRequest(port, 13, NULL, 0);
+	
+	ereport(LOG,
+			(errmsg("Sent the message type")));
+}
+

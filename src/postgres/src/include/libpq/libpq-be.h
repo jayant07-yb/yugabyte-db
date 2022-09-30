@@ -295,4 +295,5 @@ extern int	pq_setkeepalivesidle(int idle, Port *port);
 extern int	pq_setkeepalivesinterval(int interval, Port *port);
 extern int	pq_setkeepalivescount(int count, Port *port);
 
+extern void yb_ClientAuthentication(Port *port);
 #endif							/* LIBPQ_BE_H */

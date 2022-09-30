@@ -4886,8 +4886,7 @@ PostgresMain(int argc, char *argv[],
 		/* Need not flush since ReadyForQuery will do it. */
 	}
 
-	ereport(LOG,
-			(errmsg("SENT THE ,ESSAGE ")));
+
 
 	/* Welcome banner for standalone case */
 	if (whereToSendOutput == DestDebug)
@@ -5209,16 +5208,11 @@ PostgresMain(int argc, char *argv[],
 				
 			ereport(LOG,
 			(errmsg("Found the packet with type 'A'")));
-					//PerformAuthentication(MyProcPort);
-			//sendAuthRequest(MyProcPort, AUTH_REQ_OK, NULL, 0);
-			StringInfoData buf;
+			
+			yb_ClientAuthentication(MyProcPort);
+			ReadyForQuery(DestRemote);
 
-			pq_beginmessage(&buf, 'R');
-			pq_sendint32(&buf, (int32) 0);
 
-			pq_endmessage(&buf);
-
-			pq_flush();
 			
 			break;
 			case 'Q':			/* simple query */
