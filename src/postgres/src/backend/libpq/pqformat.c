@@ -591,10 +591,13 @@ pq_getmsgstring(StringInfo msg)
 	 * message.
 	 */
 	slen = strlen(str);
+			ereport(WARNING,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("strlen:%d", slen)));
 	if (msg->cursor + slen >= msg->len)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("invalid string in message")));
+				 errmsg("invalid string in message strlen:%d", slen)));
 	msg->cursor += slen + 1;
 
 	return pg_client_to_server(str, slen);

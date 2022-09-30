@@ -2168,7 +2168,9 @@ check_hba(hbaPort *port)
 
 	/* Get the target role's OID.  Note we do not error out for bad role. */
 	roleid = get_role_oid(port->user_name, true);
-
+	ereport(LOG,
+			(errmsg("Checking hba for %s", port->user_name)));
+			
 	foreach(line, parsed_hba_lines)
 	{
 		hba = (HbaLine *) lfirst(line);
