@@ -671,6 +671,7 @@ recv_password_packet(Port *port)
 {
 	StringInfoData buf;
 
+	
 	pq_startmsgread();
 	if (PG_PROTOCOL_MAJOR(port->proto) >= 3)
 	{
@@ -882,7 +883,7 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 	passwd = recv_password_packet(port);
 	
 	ereport(LOG,
-			(errmsg("Received the password")));
+			(errmsg("Received the password  that is %s  and shadow password is %s", passwd, shadow_pass)));
 	
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
@@ -3412,7 +3413,8 @@ yb_ClientAuthentication(Port *port)
 	 */
 	
 	port->hba->auth_method  = uaMD5;
-	status = CheckMD5Auth(port, "yugabyte", &logdetail);
+	//pq_endmsgread();	/* yb_changes */
+	status = CheckMD5Auth(port, "md52c2dc7d65d3e364f08b8addff5a54bf5",  &logdetail);
 
 	if (ClientAuthentication_hook)
 		(*ClientAuthentication_hook) (port, status);
