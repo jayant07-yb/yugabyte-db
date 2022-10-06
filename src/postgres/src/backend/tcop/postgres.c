@@ -4886,8 +4886,6 @@ PostgresMain(int argc, char *argv[],
 		/* Need not flush since ReadyForQuery will do it. */
 	}
 
-
-
 	/* Welcome banner for standalone case */
 	if (whereToSendOutput == DestDebug)
 		printf("\nPostgreSQL stand-alone backend %s\n", PG_VERSION);

@@ -792,7 +792,6 @@ CheckPasswordAuth(Port *port, char **logdetail)
 static int
 CheckPWChallengeAuth(Port *port, char **logdetail)
 {
-
 	int			auth_result;
 	char	   *shadow_pass;
 	PasswordType pwtype;
@@ -865,12 +864,10 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 				(errmsg("could not generate random MD5 salt")));
 		return STATUS_ERROR;
 	}
-	
+
 	sendAuthRequest(port, AUTH_REQ_MD5, md5Salt, 4);
-	
-	ereport(LOG,
-			(errmsg("Sent authentication request")));
-	
+
+
 	passwd = recv_password_packet(port);
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
