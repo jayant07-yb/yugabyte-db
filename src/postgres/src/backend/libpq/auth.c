@@ -3400,6 +3400,6 @@ yb_ClientAuthentication(Port *port)
 	if (status == STATUS_OK)
 		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
 	else
-		sendAuthRequest(port, 13, NULL, 0);
+		sendAuthRequest(port, AUTH_REQ_FAILED, NULL, 0);
 }
 
