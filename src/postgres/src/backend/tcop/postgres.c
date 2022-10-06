@@ -387,8 +387,16 @@ SocketBackend(StringInfo inBuf)
 	 */
 	switch (qtype)
 	{	
-		case 'A':
-			/* Auth Message */
+		case 'A':				/* Auth Message */
+			/*
+			 * The `AUTH` message will have following format
+			 * Int32	Length of message contents in bytes, including self.
+			 * String	The parameter name. Currently recognized names are:
+			 * 		user		The database user name to connect as. Required; there is no default.
+			 * 		database	The database to connect to. Defaults to the user name.
+			 * 		port		The port details of the `client which is trying to connect via the connection_pooler.
+			 */
+
 			break;
 		case 'Q':				/* simple query */
 			doing_extended_query_message = false;
@@ -5195,22 +5203,23 @@ PostgresMain(int argc, char *argv[],
 			YBCPgResetCatalogReadTime();
 			YBCheckSharedCatalogCacheVersion();
 		}
-		//struct Port Dummyclient;
-				
-		switch (firstchar)
+	
+	switch (firstchar)
 		{
-			case 'A':			/* yb-changes: Authenticate message*/
-				/* Get the structure */
-				/* Start the authentication packet */
-				//PerformAuthentication(&Dummyclient);
+			case 'A':			
+			/*
+			 * yb-changes: Authenticate message
+			 * Construct the a temperory port object for the client Port 
+			 * Set the `STATE`
+			 * Pass it to the `yb_Clientauthentication()`
+			 * Reset the `STATE` to the previous state
+			 */
 				
 			ereport(LOG,
 			(errmsg("Found the packet with type 'A'")));
 			
 			yb_ClientAuthentication(MyProcPort);
 			ReadyForQuery(DestRemote);
-
-
 			
 			break;
 			case 'Q':			/* simple query */

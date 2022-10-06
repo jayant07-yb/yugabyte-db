@@ -3387,14 +3387,11 @@ yb_ClientAuthentication(Port *port)
 
 	int			status = STATUS_ERROR;
 	char	   *logdetail = NULL;
-
 	
 	/*
-	 * Now proceed to do the actual authentication check
-	 */
-	
+	 * Authentication for MD5
+	 */	
 	port->hba->auth_method  = uaMD5;
-	//pq_endmsgread();	/* yb_changes */
 	status = CheckMD5Auth(port, "md52c2dc7d65d3e364f08b8addff5a54bf5",  &logdetail);
 
 	if (ClientAuthentication_hook)
@@ -3404,8 +3401,5 @@ yb_ClientAuthentication(Port *port)
 		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
 	else
 		sendAuthRequest(port, 13, NULL, 0);
-	
-	ereport(LOG,
-			(errmsg("Sent the message type")));
 }
 
