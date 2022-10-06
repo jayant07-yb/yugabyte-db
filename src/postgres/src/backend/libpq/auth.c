@@ -671,7 +671,6 @@ recv_password_packet(Port *port)
 {
 	StringInfoData buf;
 
-	
 	pq_startmsgread();
 	if (PG_PROTOCOL_MAJOR(port->proto) >= 3)
 	{
@@ -793,9 +792,6 @@ CheckPasswordAuth(Port *port, char **logdetail)
 static int
 CheckPWChallengeAuth(Port *port, char **logdetail)
 {
-		
-	ereport(LOG,
-			(errmsg(" Inside the auth block ")));
 
 	int			auth_result;
 	char	   *shadow_pass;
@@ -807,9 +803,6 @@ CheckPWChallengeAuth(Port *port, char **logdetail)
 	/* First look up the user's password. */
 	shadow_pass = get_role_password(port->user_name, logdetail);
 
-		
-	ereport(LOG,
-			(errmsg(" Inside the auth block :: got role ")));
 	/*
 	 * If the user does not exist, or has no password or it's expired, we
 	 * still go through the motions of authentication, to avoid revealing to
@@ -872,8 +865,6 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 				(errmsg("could not generate random MD5 salt")));
 		return STATUS_ERROR;
 	}
-	ereport(LOG,
-			(errmsg(" Inside the checkMd5 ")));
 	
 	sendAuthRequest(port, AUTH_REQ_MD5, md5Salt, 4);
 	
@@ -881,10 +872,6 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 			(errmsg("Sent authentication request")));
 	
 	passwd = recv_password_packet(port);
-	
-	ereport(LOG,
-			(errmsg("Received the password  that is %s  and shadow password is %s", passwd, shadow_pass)));
-	
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
 
@@ -894,8 +881,6 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 	else
 		result = STATUS_ERROR;
 
-	ereport(LOG,
-			(errmsg("Password Verification completed")));
 	pfree(passwd);
 
 	return result;

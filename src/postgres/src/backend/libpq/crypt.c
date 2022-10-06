@@ -55,8 +55,6 @@ get_role_password(const char *role, char **logdetail)
 							  role);
 		return NULL;			/* no such user */
 	}
-	ereport(LOG,
-			(errmsg(" Search Sys Cache1 finished")));
 
 	datum = SysCacheGetAttr(AUTHNAME, roleTup,
 							Anum_pg_authid_rolpassword, &isnull);

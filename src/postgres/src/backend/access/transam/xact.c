@@ -6198,15 +6198,3 @@ void YbClearCurrentTransactionId()
 	CurrentTransactionState->transactionId = InvalidTransactionId;
 	MyPgXact->xid = InvalidTransactionId;
 }
-
-void yb_setTransaction()
-{
-
-}
-
-void yb_resetTransaction()
-{
-
-}
-
-
