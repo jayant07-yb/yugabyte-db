@@ -867,7 +867,6 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 
 	sendAuthRequest(port, AUTH_REQ_MD5, md5Salt, 4);
 
-
 	passwd = recv_password_packet(port);
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
