@@ -1170,8 +1170,8 @@ process_startup_options(Port *port, bool am_superuser)
 
 	gucctx = am_superuser ? PGC_SU_BACKEND : PGC_BACKEND;
 
-	ereport(INFO, errmsg("Process startup options called"));
-	/*
+			ereport(LOG,
+			(errmsg("Processing the sartup Packets")));	/*
 	 * First process any command-line switches that were included in the
 	 * startup packet, if we are in a regular backend.
 	 */
@@ -1217,17 +1217,12 @@ process_startup_options(Port *port, bool am_superuser)
 
 		value = lfirst(gucopts);
 		gucopts = lnext(gucopts);
-		ereport(INFO, errmsg("The startup options are %s :: %s ",name, value));
-
 		if(strcmp(name,"connection_pooler")==0)
 		{
-			/* Set the connection_pooler variable */
-			ereport(INFO,errmsg("Indentified the connection pooler "));
-		}
-		else 
+			ereport(LOG,
+			(errmsg("Found a connection pooler sartup packets %s ,%s",name, value)));
+		}else
 			SetConfigOption(name, value, gucctx, PGC_S_CLIENT);
-
-		
 
 	}
 }
