@@ -2322,6 +2322,8 @@ CommitTransaction(void)
 	AtEOXact_Snapshot(true, false);
 	AtEOXact_ApplyLauncher(true);
 	pgstat_report_xact_timestamp(0);
+	
+	ereport(LOG,(errmsg("Allocating the NULL"	)));
 
 	CurrentResourceOwner = NULL;
 	ResourceOwnerDelete(TopTransactionResourceOwner);
@@ -2616,6 +2618,7 @@ PrepareTransaction(void)
 	/* don't call AtEOXact_PgStat here; we fixed pgstat state above */
 	AtEOXact_Snapshot(true, true);
 	pgstat_report_xact_timestamp(0);
+	ereport(LOG,(errmsg("Allocating the NULL"	)));
 
 	CurrentResourceOwner = NULL;
 	ResourceOwnerDelete(TopTransactionResourceOwner);

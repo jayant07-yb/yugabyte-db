@@ -110,5 +110,5 @@ extern Size EstimateSnapshotSpace(Snapshot snapshot);
 extern void SerializeSnapshot(Snapshot snapshot, char *start_address);
 extern Snapshot RestoreSnapshot(char *start_address);
 extern void RestoreTransactionSnapshot(Snapshot snapshot, void *master_pgproc);
-
+extern Snapshot GetTransactionSnapshot(void);
 #endif							/* SNAPMGR_H */

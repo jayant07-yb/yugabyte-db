@@ -1414,7 +1414,7 @@ SetCatCacheTuple(CatCache *cache, HeapTuple tup, TupleDesc desc)
 	CatCTup     *ct;
 
 	/* Make sure we're in an xact, even if this ends up being a cache hit */
-	Assert(IsTransactionState());
+	//Assert(IsTransactionState());
 
 	/*
 	 * Initialize cache if needed.
@@ -1583,6 +1583,8 @@ SearchCatCacheInternal(CatCache *cache,
 	/*
 	 * one-time startup overhead for each cache
 	 */
+	
+
 	if (unlikely(cache->cc_tupdesc == NULL))
 		CatalogCacheInitializeCache(cache);
 
@@ -1621,6 +1623,7 @@ SearchCatCacheInternal(CatCache *cache,
 
 		if (!CatalogCacheCompareTuple(cache, nkeys, ct->keys, arguments))
 			continue;
+		ereport(LOG,(errmsg("Moving to buckets "	)));
 
 		/*
 		 * We found a match in the cache.  Move it to the front of the list
@@ -1629,6 +1632,7 @@ SearchCatCacheInternal(CatCache *cache,
 		 * near the front of the hashbucket's list.)
 		 */
 		dlist_move_head(bucket, &ct->cache_elem);
+		ereport(LOG,(errmsg("Moved the buckets"	)));
 
 		/*
 		 * If it's a positive entry, bump its refcount and return it. If it's
@@ -1636,16 +1640,21 @@ SearchCatCacheInternal(CatCache *cache,
 		 */
 		if (!ct->negative)
 		{
+
+			ereport(LOG,(errmsg("Tuple going "	)));
+
 			ResourceOwnerEnlargeCatCacheRefs(CurrentResourceOwner);
+			ereport(LOG,(errmsg("Tuple going 1"	)));
+
 			ct->refcount++;
 			ResourceOwnerRememberCatCacheRef(CurrentResourceOwner, &ct->tuple);
 
 			CACHE3_elog(DEBUG2, "SearchCatCache(%s): found in bucket %d",
 						cache->cc_relname, hashIndex);
-
 #ifdef CATCACHE_STATS
 			cache->cc_hits++;
 #endif
+		ereport(LOG,(errmsg("Tuple found"	)));
 
 			return &ct->tuple;
 		}
@@ -1657,10 +1666,12 @@ SearchCatCacheInternal(CatCache *cache,
 #ifdef CATCACHE_STATS
 			cache->cc_neg_hits++;
 #endif
+		ereport(LOG,(errmsg("returning NULL"	)));
 
 			return NULL;
 		}
 	}
+	ereport(LOG,(errmsg("Search Cat Cacge Miss"	)));
 
 	return SearchCatCacheMiss(cache, nkeys, hashValue, hashIndex, v1, v2, v3, v4);
 }

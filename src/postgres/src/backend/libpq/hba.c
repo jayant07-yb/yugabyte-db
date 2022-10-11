@@ -2166,12 +2166,33 @@ check_hba(hbaPort *port)
 	ListCell   *line;
 	HbaLine    *hba;
 
+	ereport(LOG,(errmsg("User is %s", port->user_name	)));
+
 	/* Get the target role's OID.  Note we do not error out for bad role. */
 	roleid = get_role_oid(port->user_name, true);
+	ereport(LOG,(errmsg("Starting the comparision"	)));
 
 	foreach(line, parsed_hba_lines)
 	{
+		ereport(LOG,(errmsg("Finding a line")));
+		
+		if( line == NULL )
+			ereport(LOG,(errmsg("Got A null FIELD"	)));
+		else
+			ereport(LOG,(errmsg("No null field found"	)));
+		
+		if( &(line->data) == NULL )
+			ereport(LOG,(errmsg("Got A null FIELD"	)));
+		else
+			ereport(LOG,(errmsg("No null field found"	)));
+
+		if( line->data.ptr_value == NULL )
+			ereport(LOG,(errmsg("Got A null FIELD"	)));
+		else
+			ereport(LOG,(errmsg("No null field found"	)));
+
 		hba = (HbaLine *) lfirst(line);
+		ereport(LOG,(errmsg("got a line")));
 
 		/* Check connection type */
 		if (hba->conntype == ctLocal)
@@ -2229,6 +2250,7 @@ check_hba(hbaPort *port)
 					continue;
 			}
 		}						/* != ctLocal */
+		ereport(LOG,(errmsg("Comparing"	)));
 
 		/* Check database and role */
 		if (!check_db(port->database_name, port->user_name, roleid,
@@ -2250,6 +2272,8 @@ check_hba(hbaPort *port)
 
 		return;
 	}
+
+	ereport(LOG,(errmsg("Found the match")));
 
 	/* If no matching entry was found, then implicitly reject. */
 	hba = palloc0(sizeof(HbaLine));

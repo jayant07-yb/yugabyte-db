@@ -5217,7 +5217,8 @@ PostgresMain(int argc, char *argv[],
 				
 			ereport(LOG,
 			(errmsg("Found the packet with type 'A'")));
-			
+			start_xact_command();
+			//load_hba();	--load the Hba.conf
 			yb_ClientAuthentication(MyProcPort);
 			ReadyForQuery(DestRemote);
 			

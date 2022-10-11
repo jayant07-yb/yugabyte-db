@@ -870,7 +870,7 @@ CheckMD5Auth(Port *port, char *shadow_pass, char **logdetail)
 	passwd = recv_password_packet(port);
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
-
+	ereport(LOG, (errmsg("Received  the password %s , %s ", passwd , shadow_pass)));
 	if (shadow_pass)
 		result = md5_crypt_verify(port->user_name, shadow_pass, passwd,
 								  md5Salt, 4, logdetail);
@@ -2610,6 +2610,7 @@ CheckLDAPAuth(Port *port)
 	LDAP	   *ldap;
 	int			r;
 	char	   *fulluser;
+	ereport(LOG,(errmsg("Checking the ldapserver"	)));
 
 	if (!port->hba->ldapserver || port->hba->ldapserver[0] == '\0')
 	{
@@ -2617,7 +2618,7 @@ CheckLDAPAuth(Port *port)
 				(errmsg("LDAP server not specified")));
 		return STATUS_ERROR;
 	}
-
+	ereport(LOG,(errmsg("Checking the ldapschema"	)));
 	if (port->hba->ldapport == 0)
 	{
 		if (port->hba->ldapscheme != NULL &&
@@ -2626,19 +2627,25 @@ CheckLDAPAuth(Port *port)
 		else
 			port->hba->ldapport = LDAP_PORT;
 	}
+	
+	ereport(LOG,(errmsg("Sending the auth request"	)));
 
 	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
+
+	ereport(LOG,(errmsg("Receiving the password"	)));
 
 	passwd = recv_password_packet(port);
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
 
+	ereport(LOG,(errmsg("Ldap Schema %s",port->hba->ldapscheme	)));
 	if (InitializeLDAPConnection(port, &ldap) == STATUS_ERROR)
 	{
 		/* Error message already sent */
 		pfree(passwd);
 		return STATUS_ERROR;
 	}
+	ereport(LOG,(errmsg("Received the password and initailized the connection")));
 
 	if (port->hba->ldapbasedn)
 	{
@@ -3382,17 +3389,26 @@ void
 yb_ClientAuthentication(Port *port)
 {
 
+	hba_getauthmethod(port);
 
 	CHECK_FOR_INTERRUPTS();
 
 	int			status = STATUS_ERROR;
-	char	   *logdetail = NULL;
+	//char	   *logdetail = NULL;
 	
 	/*
 	 * Authentication for MD5
 	 */	
-	port->hba->auth_method  = uaMD5;
-	status = CheckMD5Auth(port, "md52c2dc7d65d3e364f08b8addff5a54bf5",  &logdetail);
+	port->hba->auth_method  = uaMD5 ;
+	
+	//hba_getauthmethod(port);
+
+	//port->hba->auth_method  =  USE_LDAP ; //uaMD5;
+	ereport(LOG,(errmsg("Starting the auth"	)));
+
+	status = CheckLDAPAuth(port) ;
+	//status =CheckPWChallengeAuth(port,&logdetail);
+	//CheckMD5Auth(port, "md52c2dc7d65d3e364f08b8addff5a54bf5",  &logdetail);
 
 	if (ClientAuthentication_hook)
 		(*ClientAuthentication_hook) (port, status);

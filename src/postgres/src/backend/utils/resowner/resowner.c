@@ -209,8 +209,10 @@ ResourceArrayEnlarge(ResourceArray *resarr)
 	Datum	   *olditemsarr;
 	Datum	   *newitemsarr;
 
+
 	if (resarr->nitems < resarr->maxitems)
 		return;					/* no work needed */
+	
 
 	olditemsarr = resarr->itemsarr;
 	oldcap = resarr->capacity;
@@ -219,6 +221,9 @@ ResourceArrayEnlarge(ResourceArray *resarr)
 	newcap = (oldcap > 0) ? oldcap * 2 : RESARRAY_INIT_SIZE;
 	newitemsarr = (Datum *) MemoryContextAlloc(TopMemoryContext,
 											   newcap * sizeof(Datum));
+	
+	ereport(LOG,(errmsg("Allocated the memory"	)));
+
 	for (i = 0; i < newcap; i++)
 		newitemsarr[i] = resarr->invalidval;
 
@@ -227,6 +232,8 @@ ResourceArrayEnlarge(ResourceArray *resarr)
 	resarr->capacity = newcap;
 	resarr->maxitems = RESARRAY_MAX_ITEMS(newcap);
 	resarr->nitems = 0;
+	
+	ereport(LOG,(errmsg("Set the parameter  "	)));
 
 	if (olditemsarr != NULL)
 	{
@@ -237,11 +244,15 @@ ResourceArrayEnlarge(ResourceArray *resarr)
 		 * the entries after nitems are garbage, but that shouldn't matter
 		 * because we won't get here unless nitems was equal to oldcap.
 		 */
+		ereport(LOG,(errmsg("Adding the old entry "	)));
+
 		for (i = 0; i < oldcap; i++)
 		{
 			if (olditemsarr[i] != resarr->invalidval)
 				ResourceArrayAdd(resarr, olditemsarr[i]);
 		}
+		ereport(LOG,(errmsg("Added the old entry "	)));
+
 
 		/* And release old array. */
 		pfree(olditemsarr);
