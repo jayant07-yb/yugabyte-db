@@ -49,6 +49,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
+#include "libpq/auth.h"
 #include "miscadmin.h"
 #include "nodes/print.h"
 #include "optimizer/planner.h"
@@ -4849,11 +4850,13 @@ PostgresMain(int argc, char *argv[],
 	 * ... else we'd need to copy the Port data first.  Also, subsidiary data
 	 * such as the username isn't lost either; see ProcessStartupPacket().
 	 */
-	if (PostmasterContext)
+	if(0) // (PostmasterContext)
 	{
 		MemoryContextDelete(PostmasterContext);
 		PostmasterContext = NULL;
 	}
+	//start_xact_command();
+	//hba_getauthmethod(MyProcPort);
 
 	SetProcessingMode(NormalProcessing);
 
@@ -5219,7 +5222,7 @@ PostgresMain(int argc, char *argv[],
 			(errmsg("Found the packet with type 'A'")));
 			start_xact_command();
 			//load_hba();	--load the Hba.conf
-			yb_ClientAuthentication(MyProcPort);
+			ClientAuthentication(MyProcPort);
 			ReadyForQuery(DestRemote);
 			
 			break;

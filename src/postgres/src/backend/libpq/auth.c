@@ -3384,38 +3384,3 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 		}
 	}							/* while (true) */
 }
-
-void
-yb_ClientAuthentication(Port *port)
-{
-
-	hba_getauthmethod(port);
-
-	CHECK_FOR_INTERRUPTS();
-
-	int			status = STATUS_ERROR;
-	//char	   *logdetail = NULL;
-	
-	/*
-	 * Authentication for MD5
-	 */	
-	port->hba->auth_method  = uaMD5 ;
-	
-	//hba_getauthmethod(port);
-
-	//port->hba->auth_method  =  USE_LDAP ; //uaMD5;
-	ereport(LOG,(errmsg("Starting the auth"	)));
-
-	status = CheckLDAPAuth(port) ;
-	//status =CheckPWChallengeAuth(port,&logdetail);
-	//CheckMD5Auth(port, "md52c2dc7d65d3e364f08b8addff5a54bf5",  &logdetail);
-
-	if (ClientAuthentication_hook)
-		(*ClientAuthentication_hook) (port, status);
-
-	if (status == STATUS_OK)
-		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
-	else
-		sendAuthRequest(port, AUTH_REQ_FAILED, NULL, 0);
-}
-
