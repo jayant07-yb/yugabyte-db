@@ -1338,3 +1338,14 @@ ThereIsAtLeastOneRole(void)
 
 	return result;
 }
+
+void changeDB(char *new_db_name){
+	HeapTuple tuple = GetDatabaseTuple(new_db_name);
+	if (!HeapTupleIsValid(tuple))
+		ereport(FATAL,
+			(errcode(ERRCODE_UNDEFINED_DATABASE),
+			 errmsg("database \"%s\" does not exist", "postgres")));
+		MyDatabaseId = HeapTupleGetOid(tuple);
+
+		
+}

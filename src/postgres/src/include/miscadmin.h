@@ -455,4 +455,5 @@ extern bool has_rolreplication(Oid roleid);
 extern bool BackupInProgress(void);
 extern void CancelBackup(void);
 
+extern void changeDB(char* changeDB);
 #endif							/* MISCADMIN_H */

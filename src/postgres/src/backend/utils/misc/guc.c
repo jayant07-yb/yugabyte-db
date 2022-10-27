@@ -8219,6 +8219,15 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 	GucAction	action = stmt->is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET;
 	bool 		YbDbAdminCanSet = false;
 
+		ereport(WARNING,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("Parameter here 1 configuration parameter \"%s\"", stmt->name)));
+		if(strcmp(stmt->name,"database")==0)
+		{
+			changeDB("postgres");
+			return ;
+		}
+	
 	if (IsYbDbAdminUser(GetUserId()))
 	{
 		for (size_t i = 0;
