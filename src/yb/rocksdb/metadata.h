@@ -54,43 +54,6 @@ struct ColumnFamilyMetaData;
 struct LevelMetaData;
 struct SstFileMetaData;
 
-// The metadata that describes a column family.
-struct ColumnFamilyMetaData {
-  ColumnFamilyMetaData() : size(0), name("") {}
-  ColumnFamilyMetaData(const std::string& _name, uint64_t _size,
-                       const std::vector<LevelMetaData>&& _levels)
-      : size(_size),
-        name(_name),
-        levels(_levels) {}
-
-  // The size of this column family in bytes, which is equal to the sum of
-  // the file size of its "levels".
-  uint64_t size = 0;
-  // The number of files in this column family.
-  size_t file_count = 0;
-  // The name of the column family.
-  std::string name;
-  // The metadata of all levels in this column family.
-  std::vector<LevelMetaData> levels;
-};
-
-// The metadata that describes a level.
-struct LevelMetaData {
-  LevelMetaData(int _level, uint64_t _size,
-                const std::vector<SstFileMetaData>&& _files)
-      : level(_level),
-        size(_size),
-        files(_files) {}
-
-  // The level which this meta data describes.
-  const int level = 0;
-  // The size of this level in bytes, which is equal to the sum of
-  // the file size of its "files".
-  const uint64_t size = 0;
-  // The metadata of all sst files in this level.
-  const std::vector<SstFileMetaData> files;
-};
-
 class UserFrontier;
 
 // Frontier should be copyable, but should still preserve its polymorphic nature. We cannot use
@@ -294,7 +257,6 @@ void UpdateUserValues(
 struct SstFileMetaData {
   typedef FileBoundaryValues<std::string> BoundaryValues;
 
-  SstFileMetaData() = default;
   SstFileMetaData(uint64_t name_id_,
                   const std::string& _path,
                   uint64_t _total_size,
@@ -302,6 +264,7 @@ struct SstFileMetaData {
                   uint64_t _uncompressed_size,
                   const BoundaryValues& _smallest,
                   const BoundaryValues& _largest,
+                  bool _imported,
                   bool _being_compacted)
       : total_size(_total_size),
         base_size(_base_size),
@@ -310,6 +273,7 @@ struct SstFileMetaData {
         db_path(_path),
         smallest(_smallest),
         largest(_largest),
+        imported(_imported),
         being_compacted(_being_compacted) {
   }
 
@@ -333,8 +297,58 @@ struct SstFileMetaData {
   std::string FullName() const;
 };
 
+// The metadata that describes a level.
+struct LevelMetaData {
+  LevelMetaData(int _level, uint64_t _size,
+                const std::vector<SstFileMetaData>&& _files)
+      : level(_level),
+        size(_size),
+        files(_files) {}
+
+  // The level which this meta data describes.
+  const int level = 0;
+  // The size of this level in bytes, which is equal to the sum of
+  // the file size of its "files".
+  const uint64_t size = 0;
+  // The metadata of all sst files in this level.
+  const std::vector<SstFileMetaData> files;
+};
+
+// The metadata that describes a column family.
+struct ColumnFamilyMetaData {
+  ColumnFamilyMetaData() : size(0), name("") {}
+
+  // The size of this column family in bytes, which is equal to the sum of
+  // the file size of its "levels".
+  uint64_t size = 0;
+  // The number of files in this column family.
+  size_t file_count = 0;
+  // The name of the column family.
+  std::string name;
+  // The metadata of all levels in this column family.
+  std::vector<LevelMetaData> levels;
+};
+
 // The full set of metadata associated with each SST file.
 struct LiveFileMetaData : SstFileMetaData {
+  LiveFileMetaData(
+      const std::string& _column_family_name,
+      int _level,
+      uint64_t _name_id,
+      const std::string& _path,
+      uint64_t _total_size,
+      uint64_t _base_size,
+      uint64_t _uncompressed_size,
+      const BoundaryValues& _smallest,
+      const BoundaryValues& _largest,
+      bool _imported,
+      bool _being_compacted)
+      : SstFileMetaData(
+            _name_id, _path, _total_size, _base_size, _uncompressed_size, _smallest, _largest,
+            _imported, _being_compacted),
+        column_family_name(_column_family_name),
+        level(_level) {}
+
   std::string column_family_name;  // Name of the column family
   int level;                       // Level at which this file resides.
 

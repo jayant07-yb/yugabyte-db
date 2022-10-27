@@ -151,6 +151,7 @@ typedef enum NodeTag
 	T_Var,
 	T_Const,
 	T_Param,
+	T_YbBatchedExpr,
 	T_Aggref,
 	T_GroupingFunc,
 	T_WindowFunc,
@@ -478,7 +479,6 @@ typedef enum NodeTag
 	T_PartitionCmd,
 	T_VacuumRelation,
 	T_OptSplit,
-	T_OptTableGroup,
 	T_RowBounds,
 
 	/*
@@ -518,7 +518,11 @@ typedef enum NodeTag
 	T_YbPgExecOutParam,
 	T_YbBackfillInfo,
 	T_PartitionPruneStepFuncOp,
-	T_YbExprParamDesc
+	T_YbExprParamDesc,
+	T_YbSeqScan,
+	T_YbSeqScanState,
+	T_YbBatchedNestLoop,
+	T_YbBatchedNestLoopState
 
 } NodeTag;
 
@@ -822,7 +826,8 @@ typedef enum OnConflictAction
 {
 	ONCONFLICT_NONE,			/* No "ON CONFLICT" clause */
 	ONCONFLICT_NOTHING,			/* ON CONFLICT ... DO NOTHING */
-	ONCONFLICT_UPDATE			/* ON CONFLICT ... DO UPDATE */
+	ONCONFLICT_UPDATE,			/* ON CONFLICT ... DO UPDATE */
+	ONCONFLICT_YB_REPLACE		/* Replace the existing tuple (upsert mode) */
 } OnConflictAction;
 
 #endif							/* NODES_H */

@@ -22,6 +22,9 @@
 #include "yb/util/metrics.h"
 #include "yb/util/status_log.h"
 
+using std::string;
+using std::vector;
+
 DEFINE_int32(metrics_retirement_age_ms, 120 * 1000,
              "The minimum number of milliseconds a metric will be kept for after it is "
              "no longer active. (Advanced option)");
@@ -201,9 +204,12 @@ bool MatchMetricInList(const string& metric_name,
 
 
 Status MetricEntity::WriteAsJson(JsonWriter* writer,
-                                 const vector<string>& requested_metrics,
+                                 const MetricEntityOptions& entity_options,
                                  const MetricJsonOptions& opts) const {
-  bool select_all = MatchMetricInList(id(), requested_metrics);
+  if (MatchMetricInList(id(), entity_options.exclude_metrics)) {
+    return Status::OK();
+  }
+  bool select_all = MatchMetricInList(id(), entity_options.metrics);
 
   // We want the keys to be in alphabetical order when printing, so we use an ordered map here.
   typedef std::map<const char*, scoped_refptr<Metric> > OrderedMetricMap;
@@ -220,7 +226,7 @@ Status MetricEntity::WriteAsJson(JsonWriter* writer,
       const MetricPrototype* prototype = val.first;
       const scoped_refptr<Metric>& metric = val.second;
 
-      if (select_all || MatchMetricInList(prototype->name(), requested_metrics)) {
+      if (select_all || MatchMetricInList(prototype->name(), entity_options.metrics)) {
         InsertOrDie(&metrics, prototype->name(), metric);
       }
     }
@@ -228,7 +234,7 @@ Status MetricEntity::WriteAsJson(JsonWriter* writer,
 
   // If we had a filter, and we didn't either match this entity or any metrics inside
   // it, don't print the entity at all.
-  if (!requested_metrics.empty() && !select_all && metrics.empty()) {
+  if (!entity_options.metrics.empty() && !select_all && metrics.empty()) {
     return Status::OK();
   }
 
@@ -267,9 +273,12 @@ Status MetricEntity::WriteAsJson(JsonWriter* writer,
 }
 
 Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
-                                                const vector<string>& requested_metrics,
-                                                const MetricPrometheusOptions& opts) const {
-  bool select_all = MatchMetricInList(id(), requested_metrics);
+                                        const MetricEntityOptions& entity_options,
+                                        const MetricPrometheusOptions& opts) const {
+  if (MatchMetricInList(id(), entity_options.exclude_metrics)) {
+    return Status::OK();
+  }
+  bool select_all = MatchMetricInList(id(), entity_options.metrics);
 
   // We want the keys to be in alphabetical order when printing, so we use an ordered map here.
   typedef std::map<const char*, scoped_refptr<Metric> > OrderedMetricMap;
@@ -282,11 +291,11 @@ Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
     std::lock_guard<simple_spinlock> l(lock_);
     attrs = attributes_;
     external_metrics_cbs = external_prometheus_metrics_cbs_;
-    for (const MetricMap::value_type& val : metric_map_) {
-      const MetricPrototype* prototype = val.first;
-      const scoped_refptr<Metric>& metric = val.second;
-
-      if (select_all || MatchMetricInList(prototype->name(), requested_metrics)) {
+    for (const auto& [prototype, metric] : metric_map_) {
+      if (MatchMetricInList(prototype->name(), entity_options.exclude_metrics)) {
+        continue;
+      }
+      if (select_all || MatchMetricInList(prototype->name(), entity_options.metrics)) {
         InsertOrDie(&metrics, prototype->name(), metric);
       }
     }
@@ -296,7 +305,7 @@ Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
   // it, don't print the entity at all.
   // If metrics is empty, we'd still call the callbacks if the entity matches,
   // i.e. requested_metrics and select_all is true.
-  if (!requested_metrics.empty() && !select_all && metrics.empty()) {
+  if (!entity_options.metrics.empty() && !select_all && metrics.empty()) {
     return Status::OK();
   }
 
@@ -317,6 +326,13 @@ Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
     prometheus_attr["table_name"] = attrs["table_name"];
     prometheus_attr["namespace_name"] = attrs["namespace_name"];
     prometheus_attr["stream_id"] = attrs["stream_id"];
+  } else if (strcmp(prototype_->name(), "cdcsdk") == 0) {
+    prometheus_attr["table_id"] = attrs["table_id"];
+    prometheus_attr["table_name"] = attrs["table_name"];
+    prometheus_attr["namespace_name"] = attrs["namespace_name"];
+    prometheus_attr["stream_id"] = attrs["stream_id"];
+  } else if (strcmp(prototype_->name(), "drive") == 0) {
+    prometheus_attr["drive_path"] = attrs["drive_path"];
   } else {
     return Status::OK();
   }
@@ -327,7 +343,6 @@ Status MetricEntity::WriteForPrometheus(PrometheusWriter* writer,
   for (OrderedMetricMap::value_type& val : metrics) {
     WARN_NOT_OK(val.second->WriteForPrometheus(writer, prometheus_attr, opts),
                 Format("Failed to write $0 as Prometheus", val.first));
-
   }
   // Run the external metrics collection callback if there is one set.
   for (const ExternalPrometheusMetricsCb& cb : external_metrics_cbs) {

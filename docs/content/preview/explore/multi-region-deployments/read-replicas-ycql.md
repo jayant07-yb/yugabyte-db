@@ -3,6 +3,7 @@ title: Read replicas
 headerTitle: Read replicas
 linkTitle: Read replicas
 description: Read replicas
+headContent: Replicate data asynchronously to one or more read replica clusters
 aliases:
   - /preview/explore/multi-region-deployments/read-replicas
 menu:
@@ -11,8 +12,7 @@ menu:
     identifier: explore-multi-region-deployments-read-replicas-ycql
     parent: explore-multi-region-deployments
     weight: 750
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -35,16 +35,16 @@ showAsideToc: true
 
 YugabyteDB supports the following types of reads:
 
-- [Follower reads](../../multi-region-deployments/follower-reads-ycql/) that enable spreading the read workload across all replicas in the primary cluster.
-- Observer reads that use read replicas. The latter obtain their data via [asynchronous replication](../asynchronous-replication-ycql/) which allows for the read workload to be offloaded from the primary cluster. Read replicas are created as a separate cluster that may be located in a different region, possibly closer to the consumers of the data which would result in lower-latency access and enhanced support of analytics workloads.
+- [Follower reads](../../ysql-language-features/going-beyond-sql/follower-reads-ycql/) that enable spreading the read workload across all replicas in the primary cluster.
+- Observer reads that use read replicas. The latter obtain their data via [xCluster replication](../asynchronous-replication-ycql/) which allows for the read workload to be offloaded from the primary cluster. Read replicas are created as a separate cluster that may be located in a different region, possibly closer to the consumers of the data which would result in lower-latency access and enhanced support of analytics workloads.
 
 A datacenter (also known as universe) can have one primary cluster and several read replica clusters.
 
-Stale reads are possible with an upper bound on the amount of staleness. Reads are guaranteed to be timeline-consistent. You need to set the consistency level to `ONE` in your application to work with follower reads or observer reads. In addition, you have to set the application’s local datacenter to the read replica cluster’s region.
+Stale reads are possible with an upper bound on the amount of staleness. Reads are guaranteed to be timeline-consistent. You need to set the consistency level to `ONE` in your application to work with follower reads or observer reads. In addition, you have to set the application's local datacenter to the read replica cluster's region.
 
 ## Prerequisites
 
-Ensure that you have downloaded and configured YugabyteDB, as described in [Quick Start](/preview/quick-start/install/macos/).
+Ensure that you have downloaded and configured YugabyteDB, as described in [Quick start](/preview/quick-start/).
 
 {{< note title="Note" >}}
 
@@ -52,10 +52,10 @@ This document uses a client application based on the [yb-sample-apps](https://gi
 
 {{< /note >}}
 
-Also, since you cannot use read replicas without a primary cluster, ensure that you have the latter available. The following command sets up a primary cluster of three nodes in cloud `c`, region `r` and zones `z1`, `z2`, and `z3`:
+Also, because you cannot use read replicas without a primary cluster, ensure that you have the latter available. The following command sets up a primary cluster of three nodes in cloud `c`, region `r` and zones `z1`, `z2`, and `z3`:
 
 ```shell
-$ ./bin/yb-ctl create --rf 3 --placement_info "c.r.z1,c.r.z2,c.r.z3" --tserver_flags "placement_uuid=live,max_stale_read_bound_time_ms=60000000”
+$ ./bin/yb-ctl create --rf 3 --placement_info "c.r.z1,c.r.z2,c.r.z3" --tserver_flags "placement_uuid=live,max_stale_read_bound_time_ms=60000000"
 ```
 
 Output:
@@ -204,7 +204,7 @@ java -jar ./yb-sample-apps.jar --workload CassandraKeyValue \
                                --value_size 1024 --local_reads --with_local_dc r
 ```
 
-The following illustration demonstrates the result of exectuting the preceding command (visible via [YugabyteDB Anywhere](/preview/yugabyte-platform/):):
+The following illustration demonstrates the result of executing the preceding command (visible via [YugabyteDB Anywhere](/preview/yugabyte-platform/):):
 
 ![img](/images/explore/multi-region-deployments/read-replicas5.png)
 
@@ -220,7 +220,7 @@ java -jar ./yb-sample-apps.jar --workload CassandraKeyValue \
                                --value_size 1024 --local_reads --with_local_dc r2
 ```
 
-The following illustration demonstrates the result of exectuting the preceding command (visible via [YugabyteDB Anywhere](/preview/yugabyte-platform/)):
+The following illustration demonstrates the result of executing the preceding command (visible via [YugabyteDB Anywhere](/preview/yugabyte-platform/)):
 
 ![img](/images/explore/multi-region-deployments/read-replicas6.png)
 
@@ -228,7 +228,7 @@ For information on deploying read replicas, see [Read Replica Clusters](../../..
 
 ## Fault Tolerance
 
-In the strong consistency mode (default), more failures can be tolerated by increasing the number of replicas: to tolerate a `k` number of failures, `2k+1` replicas are required in the RAFT group. However, follower reads and observer reads can provide Cassandra-style `CL.ONE` fault tolerance. The  `max_stale_read_bound_time_ms` GFlag controls how far behind the followers are allowed to be before they redirect reads back to the RAFT leader (the default is 60 seconds). For "write once, read many times” workloads, this number could be increased. By stopping nodes, you can induce behavior of follower and observer reads such that they continue to read (which would not be possible without follower reads).
+In the strong consistency mode (default), more failures can be tolerated by increasing the number of replicas: to tolerate a `k` number of failures, `2k+1` replicas are required in the RAFT group. However, follower reads and observer reads can provide Cassandra-style `CL.ONE` fault tolerance. The  `max_stale_read_bound_time_ms` GFlag controls how far behind the followers are allowed to be before they redirect reads back to the RAFT leader (the default is 60 seconds). For "write once, read many times" workloads, this number could be increased. By stopping nodes, you can induce behavior of follower and observer reads such that they continue to read (which would not be possible without follower reads).
 
 The following command starts a read-only workload:
 

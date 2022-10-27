@@ -117,6 +117,7 @@ DECLARE_int32(max_tables_metrics_breakdowns);
 
 using std::shared_ptr;
 using std::vector;
+using std::set;
 using strings::Substitute;
 
 namespace yb {
@@ -235,9 +236,9 @@ MetricsSnapshotter::Thread::Thread(const TabletServerOptions& opts, TabletServer
   table_metrics_whitelist_ = CSVToSet(FLAGS_metrics_snapshotter_table_metrics_whitelist);
 
   async_client_init_.emplace(
-      "tserver_metrics_snapshotter_client", 0 /* num_reactors */,
-      FLAGS_tserver_metrics_snapshotter_yb_client_default_timeout_ms / 1000, "" /* tserver_uuid */,
-      &server->options(), server->metric_entity(), server->mem_tracker(),
+      "tserver_metrics_snapshotter_client",
+      std::chrono::milliseconds(FLAGS_tserver_metrics_snapshotter_yb_client_default_timeout_ms),
+      "" /* tserver_uuid */, &server->options(), server->metric_entity(), server->mem_tracker(),
       server->messenger());
 }
 
@@ -272,8 +273,9 @@ void MetricsSnapshotter::Thread::LogSessionErrors(const client::FlushStatus& flu
   }
 }
 
-void MetricsSnapshotter::Thread::FlushSession(const std::shared_ptr<YBSession>& session,
-                       const std::vector<std::shared_ptr<YBqlOp>>& ops) {
+void MetricsSnapshotter::Thread::FlushSession(
+    const std::shared_ptr<YBSession>& session,
+    const std::vector<std::shared_ptr<YBqlOp>>& ops) {
   // TODO(async_flush): https://github.com/yugabyte/yugabyte-db/issues/12173
   auto flush_status = session->TEST_FlushAndGetOpsErrors();
   if (PREDICT_FALSE(!flush_status.status.ok())) {
@@ -329,10 +331,12 @@ Status MetricsSnapshotter::Thread::DoMetricsSnapshot() {
   NMSWriter::EntityMetricsMap table_metrics;
   NMSWriter::MetricsMap server_metrics;
   NMSWriter nmswriter{&table_metrics, &server_metrics};
-  auto opt = MetricPrometheusOptions();
+  MetricPrometheusOptions opt;
+  MetricEntityOptions entity_opts;
+  entity_opts.metrics.push_back("*");
   opt.max_tables_metrics_breakdowns = FLAGS_max_tables_metrics_breakdowns;
   WARN_NOT_OK(
-      server_->metric_registry()->WriteForPrometheus(&nmswriter, opt),
+      server_->metric_registry()->WriteForPrometheus(&nmswriter, entity_opts, opt),
       "Couldn't write metrics for native metrics storage");
   for (const auto& kv : server_metrics) {
     if (tserver_metrics_whitelist_.find(kv.first) != tserver_metrics_whitelist_.end()) {

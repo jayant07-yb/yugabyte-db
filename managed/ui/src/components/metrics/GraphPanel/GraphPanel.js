@@ -1,9 +1,9 @@
 // Copyright (c) YugaByte, Inc.
-
+// TODO: Entire file needs to be removed once Top K metrics is tested and integrated fully (PLAT-5689)
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
 import { Panel } from 'react-bootstrap';
-import { MetricsPanel } from '../../metrics';
+import { MetricsPanelOld } from '../../metrics';
 import './GraphPanel.scss';
 import { YBLoading } from '../../common/indicators';
 import {
@@ -16,10 +16,55 @@ import {
 import { isKubernetesUniverse } from '../../../utils/UniverseUtils';
 import { YUGABYTE_TITLE } from '../../../config';
 
+export const graphPanelTypes = {
+  universe: {
+    data: [
+      'ysql_ops',
+      'ycql_ops',
+      'yedis_ops',
+      'container',
+      'server',
+      'sql',
+      'cql',
+      'redis',
+      'tserver',
+      'master',
+      'master_advanced',
+      'lsmdb'
+    ],
+    isOpen: [true, true, false, false, false, false, false, false, false, false]
+  },
+  customer: {
+    data: [
+      'ysql_ops',
+      'ycql_ops',
+      'yedis_ops',
+      'container',
+      'server',
+      'cql',
+      'redis',
+      'tserver',
+      'master',
+      'master_advanced',
+      'lsmdb'
+    ],
+    isOpen: [true, true, false, false, false, false, false, false, false, false]
+  },
+  table: {
+    data: ['lsmdb_table', 'tserver_table'],
+    isOpen: [true, true]
+  }
+};
+
 export const panelTypes = {
   container: {
     title: 'Container',
-    metrics: ['container_cpu_usage', 'container_memory_usage', 'container_volume_stats']
+    metrics: [
+      'container_cpu_usage',
+      'container_memory_usage',
+      'container_volume_stats',
+      'container_volume_usage_percent'
+    ]
   },
   server: {
     title: 'Node',
@@ -27,6 +72,8 @@ export const panelTypes = {
       'cpu_usage',
       'memory_usage',
       'disk_iops',
+      'disk_usage_percent',
+      'disk_used_size_total',
       'disk_bytes_per_second_per_node',
       'network_packets',
       'network_bytes',
@@ -67,23 +114,49 @@ export const panelTypes = {
     title: 'Master Server',
     metrics: [
       'master_overall_rpc_rate',
+      'master_latency',
       'master_get_tablet_location',
       'master_tsservice_reads',
+      'master_tsservice_reads_latency',
       'master_tsservice_writes',
+      'master_tsservice_writes_latency',
       'master_ts_heartbeats',
       'tserver_rpc_queue_size_master',
       'master_consensus_update',
+      'master_consensus_update_latency',
       'master_multiraft_consensus_update',
+      'master_multiraft_consensus_update_latency',
       'master_table_ops',
       'master_cpu_util_secs',
       'master_yb_rpc_connections'
     ]
   },
+  master_advanced: {
+    title: 'Master Server Advanced',
+    metrics: [
+      'master_threads_running',
+      'master_log_latency',
+      'master_log_bytes_written',
+      'master_log_bytes_read',
+      'master_tc_malloc_stats',
+      'master_glog_info_messages',
+      'master_lsm_rocksdb_seek_next_prev',
+      'master_lsm_rocksdb_num_seeks_per_node',
+      'master_lsm_rocksdb_total_sst_per_node',
+      'master_lsm_rocksdb_avg_num_sst_per_node',
+      'master_lsm_rocksdb_block_cache_hit_miss',
+      'master_lsm_rocksdb_block_cache_usage',
+      'master_lsm_rocksdb_blooms_checked_and_useful',
+      'master_lsm_rocksdb_flush_size',
+      'master_lsm_rocksdb_compaction',
+      'master_lsm_rocksdb_compaction_numfiles',
+      'master_lsm_rocksdb_compaction_time'
+    ]
+  },
   lsmdb: {
     title: 'DocDB',
     metrics: [
-      'lsm_rocksdb_num_seek_or_next',
-      'lsm_rocksdb_num_seeks_per_node',
+      'lsm_rocksdb_seek_next_prev',
       'lsm_rocksdb_total_sst_per_node',
       'lsm_rocksdb_avg_num_sst_per_node',
       'lsm_rocksdb_latencies_get',
@@ -95,8 +168,10 @@ export const panelTypes = {
       'lsm_rocksdb_blooms_checked_and_useful',
       'lsm_rocksdb_stalls',
       'lsm_rocksdb_write_rejections',
+      'lsm_rocksdb_memory_rejections',
       'lsm_rocksdb_flush_size',
       'lsm_rocksdb_compaction',
+      'lsm_rocksdb_compaction_tasks',
       'lsm_rocksdb_compaction_time',
       'lsm_rocksdb_compaction_numfiles',
       'docdb_transaction',
@@ -107,7 +182,8 @@ export const panelTypes = {
     title: 'YSQL Ops and Latency',
     metrics: [
       'ysql_server_rpc_per_second',
-      'ysql_sql_latency'
+      'ysql_sql_latency',
+      'ysql_connections'
       // TODO(bogdan): Add these in once we have histogram support, see #3630.
       // "ysql_server_rpc_p99"
     ]
@@ -170,16 +246,14 @@ export const panelTypes = {
       'tserver_log_bytes_read',
       'tserver_log_ops_second',
       'tserver_log_stats',
-      'tserver_cache_reader_num_ops',
-      'tserver_glog_info_messages'
+      'tserver_cache_reader_num_ops'
     ]
   },
 
   lsmdb_table: {
     title: 'DocDB',
     metrics: [
-      'lsm_rocksdb_num_seek_or_next',
-      'lsm_rocksdb_num_seeks_per_node',
+      'lsm_rocksdb_seek_next_prev',
       'lsm_rocksdb_total_sst_per_node',
       'lsm_rocksdb_avg_num_sst_per_node',
       'lsm_rocksdb_latencies_get',
@@ -192,8 +266,7 @@ export const panelTypes = {
       'lsm_rocksdb_compaction',
       'lsm_rocksdb_compaction_time',
       'lsm_rocksdb_compaction_numfiles',
-      'docdb_transaction',
-      'docdb_transaction_pool_cache'
+      'docdb_transaction'
     ]
   }
 };
@@ -223,13 +296,12 @@ class GraphPanel extends Component {
     const { startMoment, endMoment, nodeName, nodePrefix } = graphFilter;
     const { type } = this.props;
     const splitTopNodes = (isNonEmptyString(nodeName) && nodeName === 'top') ? 1 : 0;
-    const metricsWithSettings = panelTypes[type].metrics.map((metric) =>
-     {
-        return {
-          metric: metric,
-          splitTopNodes: splitTopNodes
-        }
-     })
+    const metricsWithSettings = panelTypes[type].metrics.map((metric) => {
+      return {
+        metric: metric,
+        splitTopNodes: splitTopNodes
+      }
+    })
     const params = {
       metricsWithSettings: metricsWithSettings,
       start: startMoment.format('X'),
@@ -239,7 +311,7 @@ class GraphPanel extends Component {
       params.nodePrefix = nodePrefix;
     }
     if (isNonEmptyString(nodeName) && nodeName !== 'all' && nodeName !== 'top') {
-      params.nodeName = nodeName;
+      params.nodeNames = [nodeName];
     }
     // In case of universe metrics , nodePrefix comes from component itself
     if (isNonEmptyArray(this.props.nodePrefixes)) {
@@ -285,6 +357,7 @@ class GraphPanel extends Component {
       graph: { metrics, prometheusQueryEnabled },
       customer: { currentUser }
     } = this.props;
+    const { nodeName } = this.props.graph.graphFilter;
 
     let panelData = <YBLoading />;
 
@@ -303,10 +376,11 @@ class GraphPanel extends Component {
         and group metrics by panel type and filter out anything that is empty.
         */
         const width = this.props.width;
+
         panelData = panelTypes[type].metrics
           .map(function (metricKey, idx) {
             return isNonEmptyObject(metrics[type][metricKey]) && !metrics[type][metricKey].error ? (
-              <MetricsPanel
+              <MetricsPanelOld
                 currentUser={currentUser}
                 metricKey={metricKey}
                 key={idx}
@@ -321,10 +395,32 @@ class GraphPanel extends Component {
       }
       const invalidPanelType =
         selectedUniverse && isKubernetesUniverse(selectedUniverse)
-          ? panelTypes[type].title === 'Node'
-          : panelTypes[type].title === 'Container';
+          ? panelTypes[type]?.title === 'Node'
+          : panelTypes[type]?.title === 'Container';
       if (invalidPanelType) {
         return null;
+      }
+
+      if (selectedUniverse && isKubernetesUniverse(selectedUniverse)) {
+        //Hide master related panels for tserver pods.
+        if (nodeName.match('yb-tserver-') != null) {
+          if (panelTypes[type].title === 'Master Server' || panelTypes[type].title === 'Master Server Advanced') {
+            return null;
+          }
+        }
+        //Hide empty panels for master pods.
+        if (nodeName.match('yb-master-') != null) {
+          const skipList = ['Tablet Server',
+            'YSQL Ops and Latency',
+            'YCQL Ops and Latency',
+            'YEDIS Ops and Latency',
+            'YEDIS Advanced',
+            'YSQL Advanced',
+            'YCQL Advanced']
+          if (skipList.includes(panelTypes[type].title)) {
+            return null;
+          }
+        }
       }
 
       if (isEmptyArray(panelData)) {

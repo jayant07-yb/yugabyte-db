@@ -29,7 +29,6 @@
 #include "yb/docdb/consensus_frontier.h"
 #include "yb/docdb/cql_operation.h"
 #include "yb/docdb/doc_write_batch.h"
-#include "yb/docdb/packed_row.h"
 #include "yb/docdb/pgsql_operation.h"
 #include "yb/docdb/redis_operation.h"
 
@@ -88,7 +87,7 @@ bool CheckSchemaVersion(
     return true;
   }
 
-  DVLOG(1) << " On " << table_info->table_name
+  VLOG(1) << " On " << table_info->table_name
            << " Setting status for write as YQL_STATUS_SCHEMA_VERSION_MISMATCH tserver's: "
            << table_info->schema_version << " vs req's : " << schema_version
            << " is req compatible with prev version: "
@@ -119,11 +118,12 @@ WriteQuery::WriteQuery(
     int64_t term,
     CoarseTimePoint deadline,
     WriteQueryContext* context,
-    Tablet* tablet,
+    TabletPtr tablet,
     tserver::WriteResponsePB* response,
     docdb::OperationKind kind)
-    : operation_(std::make_unique<WriteOperation>(tablet)),
-      term_(term), deadline_(deadline),
+    : operation_(std::make_unique<WriteOperation>(std::move(tablet))),
+      term_(term),
+      deadline_(deadline),
       context_(context),
       response_(response),
       kind_(kind),
@@ -199,7 +199,7 @@ void WriteQuery::Finished(WriteOperation* operation, const Status& status) {
     TabletMetrics* metrics = operation->tablet()->metrics();
     if (metrics) {
       auto op_duration_usec = MonoDelta(CoarseMonoClock::now() - start_time_).ToMicroseconds();
-      metrics->write_op_duration_client_propagated_consistency->Increment(op_duration_usec);
+      metrics->ql_write_latency->Increment(op_duration_usec);
     }
   }
 
@@ -311,7 +311,7 @@ Result<bool> WriteQuery::CqlPrepareExecute() {
   RETURN_NOT_OK(InitExecute(ExecuteMode::kCql));
 
   auto& metadata = *tablet().metadata();
-  DVLOG(2) << "Schema version for  " << metadata.table_name() << ": " << metadata.schema_version();
+  VLOG(2) << "Schema version for  " << metadata.table_name() << ": " << metadata.schema_version();
 
   if (!CqlCheckSchemaVersion()) {
     return false;
@@ -358,7 +358,8 @@ Result<bool> WriteQuery::PgsqlPrepareExecute() {
   TransactionOperationContext txn_op_ctx;
 
   auto& metadata = *tablet().metadata();
-  bool colocated = metadata.colocated();
+  // Colocated via DB/tablegroup/syscatalog.
+  bool colocated = metadata.colocated() || tablet().is_sys_catalog();
 
   for (const auto& req : pgsql_write_batch) {
     PgsqlResponsePB* resp = response_->add_pgsql_response_batch();
@@ -380,7 +381,7 @@ Result<bool> WriteQuery::PgsqlPrepareExecute() {
     }
     auto write_op = std::make_unique<docdb::PgsqlWriteOperation>(
         req,
-        *table_info->doc_read_context,
+        rpc::SharedField(table_info, table_info->doc_read_context.get()),
         txn_op_ctx);
     RETURN_NOT_OK(write_op->Init(resp));
     doc_ops_.emplace_back(std::move(write_op));
@@ -435,7 +436,7 @@ Status WriteQuery::DoExecute() {
 
   auto* transaction_participant = tablet().transaction_participant();
   if (transaction_participant) {
-    request_scope_ = RequestScope(transaction_participant);
+    request_scope_ = VERIFY_RESULT(RequestScope::Create(transaction_participant));
   }
 
   if (!tablet().txns_enabled() || !transactional_table) {
@@ -445,9 +446,10 @@ Status WriteQuery::DoExecute() {
 
   if (isolation_level_ == IsolationLevel::NON_TRANSACTIONAL) {
     auto now = tablet().clock()->Now();
-    docdb::ResolveOperationConflicts(
+    return docdb::ResolveOperationConflicts(
         doc_ops_, now, tablet().doc_db(), partial_range_key_intents,
         transaction_participant, tablet().metrics()->transaction_conflicts.get(),
+        &prepare_result_.lock_batch, tablet().wait_queue(),
         [this, now](const Result<HybridTime>& result) {
           if (!result.ok()) {
             ExecuteDone(result.status());
@@ -457,7 +459,6 @@ Status WriteQuery::DoExecute() {
           NonTransactionalConflictsResolved(now, *result);
           TRACE("NonTransactionalConflictsResolved");
         });
-    return Status::OK();
   }
 
   if (isolation_level_ == IsolationLevel::SERIALIZABLE_ISOLATION &&
@@ -480,11 +481,13 @@ Status WriteQuery::DoExecute() {
     }
   }
 
-  docdb::ResolveTransactionConflicts(
+  // TODO(pessimistic): Ensure that wait_queue respects deadline() during conflict resolution.
+  return docdb::ResolveTransactionConflicts(
       doc_ops_, write_batch, tablet().clock()->Now(),
       read_time_ ? read_time_.read : HybridTime::kMax,
       tablet().doc_db(), partial_range_key_intents,
       transaction_participant, tablet().metrics()->transaction_conflicts.get(),
+      &prepare_result_.lock_batch, tablet().wait_queue(),
       [this](const Result<HybridTime>& result) {
         if (!result.ok()) {
           ExecuteDone(result.status());
@@ -494,8 +497,6 @@ Status WriteQuery::DoExecute() {
         TransactionalConflictsResolved();
         TRACE("TransactionalConflictsResolved");
       });
-
-  return Status::OK();
 }
 
 void WriteQuery::NonTransactionalConflictsResolved(HybridTime now, HybridTime result) {
@@ -600,6 +601,7 @@ Status WriteQuery::DoCompleteExecute() {
 }
 
 Tablet& WriteQuery::tablet() const {
+  // TODO(tablet_ptr): add error handling here to prevent crashes.
   return *operation_->tablet();
 }
 
@@ -621,24 +623,25 @@ void WriteQuery::RedisExecuteDone(const Status& status) {
 }
 
 bool WriteQuery::CqlCheckSchemaVersion() {
+  constexpr auto error_code = QLResponsePB::YQL_STATUS_SCHEMA_VERSION_MISMATCH;
   auto& metadata = *tablet().metadata();
-  const auto& ql_write_batch = client_request_->ql_write_batch();
+  const auto& req_batch = client_request_->ql_write_batch();
+  auto& resp_batch = *response_->mutable_ql_response_batch();
 
   auto table_info = metadata.primary_table_info();
   int index = 0;
   int num_mismatches = 0;
-  for (const auto& req : ql_write_batch) {
+  for (const auto& req : req_batch) {
     if (!CheckSchemaVersion(
             table_info.get(), req.schema_version(), req.is_compatible_with_previous_version(),
-            QLResponsePB::YQL_STATUS_SCHEMA_VERSION_MISMATCH, index,
-            response_->mutable_ql_response_batch())) {
+            error_code, index, &resp_batch)) {
       ++num_mismatches;
     }
     ++index;
   }
 
   if (num_mismatches != 0) {
-    SchemaVersionMismatch(num_mismatches, ql_write_batch.size());
+    SchemaVersionMismatch(error_code, req_batch.size(), &resp_batch);
     return false;
   }
 
@@ -662,9 +665,17 @@ void WriteQuery::CqlExecuteDone(const Status& status) {
   }
 }
 
-void WriteQuery::SchemaVersionMismatch(int num_mismatches, int batch_size) {
-  LOG_IF(DFATAL, num_mismatches != batch_size)
-      << "Wrong number or mismatches: " << num_mismatches << " vs " << batch_size;
+template <class Code, class Resp>
+void WriteQuery::SchemaVersionMismatch(Code code, int size, Resp* resp) {
+  for (int i = 0; i != size; ++i) {
+    auto* entry = resp->size() > i ? resp->Mutable(i) : resp->Add();
+    if (entry->status() == code) {
+      continue;
+    }
+    entry->Clear();
+    entry->set_status(code);
+    entry->set_error_message("Other request entry schema version mismatch");
+  }
   auto self = std::move(self_);
   submit_token_.Reset();
   Cancel(Status::OK());
@@ -685,12 +696,15 @@ void WriteQuery::CompleteQLWriteBatch(const Status& status) {
         ql_write_op->request().type() == QLWriteRequestPB::QL_STMT_INSERT &&
         ql_write_op->response()->has_applied() && !ql_write_op->response()->applied()) {
       // If this is an insert into a unique index and it fails to apply, report duplicate value err.
-      ql_write_op->response()->set_status(QLResponsePB::YQL_STATUS_USAGE_ERROR);
+      // has_applied is only true if we have evaluated the requests if_expr and is only false if
+      // that if_expr ws not satisfied or if the remote index was unique and had a duplicate value
+      // to the one we're trying to insert here.
+      VLOG(1) << "Could not apply operation to remote index " << AsString(ql_write_op->request())
+               << " due to " << AsString(ql_write_op->response());
       ql_write_op->response()->set_error_message(
           Format("Duplicate value disallowed by unique index $0",
           tablet().metadata()->table_name()));
-      DVLOG(1) << "Could not apply the given operation " << AsString(ql_write_op->request())
-               << " due to " << AsString(ql_write_op->response());
+      ql_write_op->response()->set_status(QLResponsePB::YQL_STATUS_USAGE_ERROR);
     } else if (ql_write_op->rowblock() != nullptr) {
       // If the QL write op returns a rowblock, move the op to the transaction state to return the
       // rows data as a sidecar after the transaction completes.
@@ -709,7 +723,7 @@ void WriteQuery::UpdateQLIndexes() {
   const ChildTransactionDataPB* child_transaction_data = nullptr;
   for (auto& doc_op : doc_ops_) {
     auto* write_op = down_cast<docdb::QLWriteOperation*>(doc_op.get());
-    if (write_op->index_requests()->empty()) {
+    if (write_op->index_requests().empty()) {
       continue;
     }
     if (!client) {
@@ -718,19 +732,13 @@ void WriteQuery::UpdateQLIndexes() {
       session->SetDeadline(deadline());
       if (write_op->request().has_child_transaction_data()) {
         child_transaction_data = &write_op->request().child_transaction_data();
-        if (!tablet().transaction_manager()) {
-          StartSynchronization(
-              std::move(self_),
-              STATUS(Corruption, "Transaction manager is not present for index update"));
-          return;
-        }
         auto child_data = client::ChildTransactionData::FromPB(
             write_op->request().child_transaction_data());
         if (!child_data.ok()) {
           StartSynchronization(std::move(self_), child_data.status());
           return;
         }
-        txn = std::make_shared<client::YBTransaction>(tablet().transaction_manager(), *child_data);
+        txn = std::make_shared<client::YBTransaction>(&tablet().transaction_manager(), *child_data);
         session->SetTransaction(txn);
       } else {
         child_transaction_data = nullptr;
@@ -745,7 +753,7 @@ void WriteQuery::UpdateQLIndexes() {
     }
 
     // Apply the write ops to update the index
-    for (auto& pair : *write_op->index_requests()) {
+    for (auto& [index_info, index_request] : write_op->index_requests()) {
       client::YBTablePtr index_table;
       bool cache_used_ignored = false;
       auto metadata_cache = tablet().YBMetaDataCache();
@@ -757,15 +765,15 @@ void WriteQuery::UpdateQLIndexes() {
       }
       // TODO create async version of GetTable.
       // It is ok to have sync call here, because we use cache and it should not take too long.
-      auto status = metadata_cache->GetTable(pair.first->table_id(), &index_table,
-                                             &cache_used_ignored);
+      auto status = metadata_cache->GetTable(
+          index_info->table_id(), &index_table, &cache_used_ignored);
       if (!status.ok()) {
         StartSynchronization(std::move(self_), status);
         return;
       }
       std::shared_ptr<client::YBqlWriteOp> index_op(index_table->NewQLWrite());
-      index_op->mutable_request()->Swap(&pair.second);
-      index_op->mutable_request()->MergeFrom(pair.second);
+      index_op->mutable_request()->Swap(&index_request);
+      index_op->mutable_request()->MergeFrom(index_request);
       session->Apply(index_op);
       index_ops.emplace_back(std::move(index_op), write_op);
     }
@@ -818,7 +826,8 @@ void WriteQuery::UpdateQLIndexesFlushed(
     auto* index_response = index_op->mutable_response();
 
     if (index_response->status() != QLResponsePB::YQL_STATUS_OK) {
-      DVLOG(1) << "Got status " << index_response->status() << " for " << AsString(index_op);
+      VLOG(1) << "Got response " << index_response->ShortDebugString()
+              << " for " << AsString(index_op);
       response->set_status(index_response->status());
       response->set_error_message(std::move(*index_response->mutable_error_message()));
     }
@@ -832,12 +841,14 @@ void WriteQuery::UpdateQLIndexesFlushed(
 }
 
 bool WriteQuery::PgsqlCheckSchemaVersion() {
+  constexpr auto error_code = PgsqlResponsePB::PGSQL_STATUS_SCHEMA_VERSION_MISMATCH;
   auto& metadata = *tablet().metadata();
-  const auto& pgsql_write_batch = client_request_->pgsql_write_batch();
+  const auto& req_batch = client_request_->pgsql_write_batch();
+  auto& resp_batch = *response_->mutable_pgsql_response_batch();
 
   int index = 0;
   int num_mismatches = 0;
-  for (const auto& req : pgsql_write_batch) {
+  for (const auto& req : req_batch) {
     auto table_info = metadata.GetTableInfo(req.table_id());
     if (!table_info.ok()) {
       StartSynchronization(std::move(self_), table_info.status());
@@ -845,15 +856,14 @@ bool WriteQuery::PgsqlCheckSchemaVersion() {
     }
     if (!CheckSchemaVersion(
             table_info->get(), req.schema_version(), /* compatible_with_previous_version= */ false,
-            PgsqlResponsePB::PGSQL_STATUS_SCHEMA_VERSION_MISMATCH, index,
-            response_->mutable_pgsql_response_batch())) {
+            error_code, index, &resp_batch)) {
       ++num_mismatches;
     }
     ++index;
   }
 
   if (num_mismatches != 0) {
-    SchemaVersionMismatch(num_mismatches, pgsql_write_batch.size());
+    SchemaVersionMismatch(error_code, req_batch.size(), &resp_batch);
     return false;
   }
 

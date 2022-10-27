@@ -78,6 +78,8 @@ namespace yb {
 
 class DeletedColumnPB;
 
+static const int kNoDefaultTtl = -1;
+
 // Struct for storing information about deleted columns for cleanup.
 struct DeletedColumn {
   ColumnId id;
@@ -89,6 +91,8 @@ struct DeletedColumn {
 
   static Status FromPB(const DeletedColumnPB& col, DeletedColumn* ret);
   void CopyToPB(DeletedColumnPB* pb) const;
+
+  friend bool operator==(const DeletedColumn&, const DeletedColumn&) = default;
 };
 
 // The schema for a given column.
@@ -199,12 +203,18 @@ class ColumnSchema {
     return is_counter_;
   }
 
+  bool is_collection() const;
+
   int32_t order() const {
     return order_;
   }
 
   int32_t pg_type_oid() const {
     return pg_type_oid_;
+  }
+
+  void set_pg_type_oid(uint32_t pg_type_oid) {
+    pg_type_oid_ = pg_type_oid;
   }
 
   SortingType sorting_type() const {
@@ -277,6 +287,9 @@ class ColumnSchema {
   // Should be used when allocated on the heap.
   size_t memory_footprint_including_this() const;
 
+  // Should account for every field in ColumnSchema.
+  static bool TEST_Equals(const ColumnSchema& lhs, const ColumnSchema& rhs);
+
  private:
   friend class SchemaBuilder;
 
@@ -300,12 +313,14 @@ class ColumnSchema {
 class ContiguousRow;
 extern const TableId kNoCopartitionTableId;
 
-// TODO(tsplit): default value must be revisit after #12190 and #12191 are fixed
-inline constexpr uint32_t kCurrentPartitionKeyVersion = 0;
-
+inline constexpr uint32_t kCurrentPartitioningVersion = 1;
 
 class TableProperties {
  public:
+  inline TableProperties() {
+    Reset();
+  }
+
   // Containing counters is a internal property instead of a user-defined property, so we don't use
   // it when comparing table properties.
   bool operator==(const TableProperties& other) const {
@@ -319,8 +334,7 @@ class TableProperties {
 
     // Ignoring num_tablets_.
     // Ignoring retain_delete_markers_.
-    // Ignoring wal_retention_secs_.
-    // Ignoring partition_key_version_.
+    // Ignoring partitioning_version_.
   }
 
   bool operator!=(const TableProperties& other) const {
@@ -351,8 +365,7 @@ class TableProperties {
     // Ignoring use_mangled_column_name_.
     // Ignoring contain_counters_.
     // Ignoring retain_delete_markers_.
-    // Ignoring wal_retention_secs_.
-    // Ignoring partition_key_version_.
+    // Ignoring partitioning_version_.
     return true;
   }
 
@@ -440,12 +453,12 @@ class TableProperties {
     retain_delete_markers_ = retain_delete_markers;
   }
 
-  uint32_t partition_key_version() const {
-    return partition_key_version_;
+  uint32_t partitioning_version() const {
+    return partitioning_version_;
   }
 
-  void set_partition_key_version(uint32_t value) {
-    partition_key_version_ = value;
+  void set_partitioning_version(uint32_t value) {
+    partitioning_version_ = value;
   }
 
   void ToTablePropertiesPB(TablePropertiesPB *pb) const;
@@ -463,18 +476,16 @@ class TableProperties {
   // operator== and Equivalent methods to make sure that the new property
   // is being taken into consideration when deciding whether properties between
   // two different tables are equal or equivalent.
-  static const int kNoDefaultTtl = -1;
-  int64_t default_time_to_live_ = kNoDefaultTtl;
-  bool contain_counters_ = false;
-  bool is_transactional_ = false;
-  bool retain_delete_markers_ = false;
-  YBConsistencyLevel consistency_level_ = YBConsistencyLevel::STRONG;
-  TableId copartition_table_id_ = kNoCopartitionTableId;
-  boost::optional<uint32_t> wal_retention_secs_;
-  bool use_mangled_column_name_ = false;
-  int num_tablets_ = 0;
-  bool is_ysql_catalog_table_ = false;
-  uint32_t partition_key_version_ = kCurrentPartitionKeyVersion;
+  int64_t default_time_to_live_;
+  bool contain_counters_;
+  bool is_transactional_;
+  bool retain_delete_markers_;
+  YBConsistencyLevel consistency_level_;
+  TableId copartition_table_id_;
+  bool use_mangled_column_name_;
+  int num_tablets_;
+  bool is_ysql_catalog_table_;
+  uint32_t partitioning_version_;
 };
 
 typedef std::string PgSchemaName;
@@ -520,7 +531,7 @@ class Schema {
   // empty schema and then use Reset(...)  so that errors can be
   // caught. If an invalid schema is passed to this constructor, an
   // assertion will be fired!
-  Schema(const vector<ColumnSchema>& cols,
+  Schema(const std::vector<ColumnSchema>& cols,
          size_t key_columns,
          const TableProperties& table_properties = TableProperties(),
          const Uuid& cotable_id = Uuid::Nil(),
@@ -533,8 +544,8 @@ class Schema {
   // empty schema and then use Reset(...)  so that errors can be
   // caught. If an invalid schema is passed to this constructor, an
   // assertion will be fired!
-  Schema(const vector<ColumnSchema>& cols,
-         const vector<ColumnId>& ids,
+  Schema(const std::vector<ColumnSchema>& cols,
+         const std::vector<ColumnId>& ids,
          size_t key_columns,
          const TableProperties& table_properties = TableProperties(),
          const Uuid& cotable_id = Uuid::Nil(),
@@ -544,7 +555,7 @@ class Schema {
   // Reset this Schema object to the given schema.
   // If this fails, the Schema object is left in an inconsistent
   // state and may not be used.
-  Status Reset(const vector<ColumnSchema>& cols, size_t key_columns,
+  Status Reset(const std::vector<ColumnSchema>& cols, size_t key_columns,
                        const TableProperties& table_properties = TableProperties(),
                        const Uuid& cotable_id = Uuid::Nil(),
                        const ColocationId colocation_id = kColocationIdNotSet,
@@ -553,8 +564,8 @@ class Schema {
   // Reset this Schema object to the given schema.
   // If this fails, the Schema object is left in an inconsistent
   // state and may not be used.
-  Status Reset(const vector<ColumnSchema>& cols,
-                       const vector<ColumnId>& ids,
+  Status Reset(const std::vector<ColumnSchema>& cols,
+                       const std::vector<ColumnId>& ids,
                        size_t key_columns,
                        const TableProperties& table_properties = TableProperties(),
                        const Uuid& cotable_id = Uuid::Nil(),
@@ -837,9 +848,9 @@ class Schema {
   // TODO this should probably be cached since the key projection
   // is not supposed to change, for a single schema.
   Schema CreateKeyProjection() const {
-    vector<ColumnSchema> key_cols(cols_.begin(),
+    std::vector<ColumnSchema> key_cols(cols_.begin(),
                                   cols_.begin() + num_key_columns_);
-    vector<ColumnId> col_ids;
+    std::vector<ColumnId> col_ids;
     if (!col_ids_.empty()) {
       col_ids.assign(col_ids_.begin(), col_ids_.begin() + num_key_columns_);
     }
@@ -896,22 +907,28 @@ class Schema {
     return Equals(other, ColumnSchema::CompareByDefault);
   }
 
-  // Return true if the schemas have exactly the same set of columns
-  // and respective types, and equivalent properties.
-  // For example, one table property could have different properties for wal_retention_secs_ and
-  // retain_delete_markers_ but still be equivalent.
-  bool EquivalentForDataCopy(const Schema& other) const {
-    if (this == &other) return true;
-    if (this->num_key_columns_ != other.num_key_columns_) return false;
-    if (!this->table_properties_.Equivalent(other.table_properties_)) return false;
-    if (this->cols_.size() != other.cols_.size()) return false;
+  // Return true if this schema is a subset of the source. The set of columns and respective types
+  // should match exactly
+  bool IsSubsetOf(const Schema& source) const {
+    if (this == &source) return true;
+    if (this->num_key_columns_ != source.num_key_columns_) return false;
+    if (!this->table_properties_.Equivalent(source.table_properties_)) return false;
+    if (this->cols_.size() < source.cols_.size()) return false;
 
-    for (size_t i = 0; i < other.cols_.size(); i++) {
-      if (!this->cols_[i].Equals(other.cols_[i])) return false;
-      if (this->column_id(i) != other.column_id(i)) return false;
+    for (size_t i = 0; i < source.cols_.size(); i++) {
+      if (!this->cols_[i].Equals(source.cols_[i])) return false;
+      if (this->column_id(i) != source.column_id(i)) return false;
     }
 
     return true;
+  }
+
+  // Return true if this schema has exactly the same set of columns and respective types, and
+  // equivalent properties as the source.  The source must be an equivalent of this object.
+  // With Packed columns, number of columns of the source and this object also need to match
+  // for equivalency
+  bool EquivalentForDataCopy(const Schema& source) const {
+    return (this->cols_.size() == source.cols_.size()) && IsSubsetOf(source);
   }
 
   // Return true if the key projection schemas have exactly the same set of
@@ -1017,9 +1034,13 @@ class Schema {
 
   static ColumnId first_column_id();
 
+  // Should account for every field in Schema.
+  // TODO: Some of them should be in Equals too?
+  static bool TEST_Equals(const Schema& lhs, const Schema& rhs);
+
  private:
 
-  void ResetColumnIds(const vector<ColumnId>& ids);
+  void ResetColumnIds(const std::vector<ColumnId>& ids);
 
   // Return a stringified version of the first 'num_columns' columns of the
   // row.
@@ -1041,12 +1062,12 @@ class Schema {
 
   friend class SchemaBuilder;
 
-  vector<ColumnSchema> cols_;
+  std::vector<ColumnSchema> cols_;
   size_t num_key_columns_;
   size_t num_hash_key_columns_;
   ColumnId max_col_id_;
-  vector<ColumnId> col_ids_;
-  vector<size_t> col_offsets_;
+  std::vector<ColumnId> col_ids_;
+  std::vector<size_t> col_offsets_;
 
   // The keys of this map are GStringPiece references to the actual name members of the
   // ColumnSchema objects inside cols_. This avoids an extra copy of those strings,
@@ -1206,13 +1227,14 @@ class SchemaBuilder {
 
   Status RemoveColumn(const std::string& name);
   Status RenameColumn(const std::string& old_name, const std::string& new_name);
+  Status SetColumnPGType(const std::string& name, const uint32_t pg_type_oid);
   Status AlterProperties(const TablePropertiesPB& pb);
 
  private:
   ColumnId next_id_;
-  vector<ColumnId> col_ids_;
-  vector<ColumnSchema> cols_;
-  std::unordered_set<string> col_names_;
+  std::vector<ColumnId> col_ids_;
+  std::vector<ColumnSchema> cols_;
+  std::unordered_set<std::string> col_names_;
   size_t num_key_columns_;
   TableProperties table_properties_;
   ColocationId colocation_id_ = kColocationIdNotSet;

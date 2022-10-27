@@ -4,11 +4,13 @@ package com.yugabyte.yw.commissioner.tasks;
 
 import static com.yugabyte.yw.common.TestHelper.testDatabase;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 import static play.inject.Bindings.bind;
 
-import com.yugabyte.yw.cloud.AWSInitializer;
-import com.yugabyte.yw.cloud.GCPInitializer;
+import com.typesafe.config.Config;
+import com.yugabyte.yw.cloud.aws.AWSInitializer;
+import com.yugabyte.yw.cloud.gcp.GCPInitializer;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.CallHome;
 import com.yugabyte.yw.commissioner.Commissioner;
@@ -20,15 +22,14 @@ import com.yugabyte.yw.common.ApiHelper;
 import com.yugabyte.yw.common.CloudQueryHelper;
 import com.yugabyte.yw.common.ConfigHelper;
 import com.yugabyte.yw.common.DnsManager;
-import com.yugabyte.yw.common.ShellKubernetesManager;
-import com.yugabyte.yw.common.supportbundle.SupportBundleComponent;
-import com.yugabyte.yw.common.supportbundle.SupportBundleComponentFactory;
 import com.yugabyte.yw.common.ModelFactory;
 import com.yugabyte.yw.common.NetworkManager;
 import com.yugabyte.yw.common.NodeManager;
 import com.yugabyte.yw.common.NodeUniverseManager;
 import com.yugabyte.yw.common.PlatformExecutorFactory;
 import com.yugabyte.yw.common.PlatformGuiceApplicationBaseTest;
+import com.yugabyte.yw.common.ReleaseManager;
+import com.yugabyte.yw.common.ShellKubernetesManager;
 import com.yugabyte.yw.common.SwamperHelper;
 import com.yugabyte.yw.common.TableManager;
 import com.yugabyte.yw.common.TableManagerYb;
@@ -37,10 +38,15 @@ import com.yugabyte.yw.common.YsqlQueryExecutor;
 import com.yugabyte.yw.common.alerts.AlertConfigurationService;
 import com.yugabyte.yw.common.alerts.AlertDefinitionService;
 import com.yugabyte.yw.common.alerts.AlertService;
+import com.yugabyte.yw.common.config.impl.SettableRuntimeConfigFactory;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
+import com.yugabyte.yw.common.gflags.GFlagsValidation;
 import com.yugabyte.yw.common.kms.EncryptionAtRestManager;
 import com.yugabyte.yw.common.metrics.MetricService;
 import com.yugabyte.yw.common.services.YBClientService;
+import com.yugabyte.yw.common.supportbundle.SupportBundleComponent;
+import com.yugabyte.yw.common.supportbundle.SupportBundleComponentFactory;
+import com.yugabyte.yw.metrics.MetricQueryHelper;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.Provider;
 import com.yugabyte.yw.models.TaskInfo;
@@ -57,12 +63,16 @@ import org.yb.master.CatalogEntityInfo;
 import play.Application;
 import play.Environment;
 import play.inject.guice.GuiceApplicationBuilder;
-import play.modules.swagger.SwaggerModule;
 
 public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseTest {
   private static final int MAX_RETRY_COUNT = 2000;
+  protected static final String ENABLE_CUSTOM_HOOKS_PATH =
+      "yb.security.custom_hooks.enable_custom_hooks";
+  protected static final String ENABLE_SUDO_PATH = "yb.security.custom_hooks.enable_sudo";
+
   protected AccessManager mockAccessManager;
   protected NetworkManager mockNetworkManager;
+  protected Config mockConfig;
   protected ConfigHelper mockConfigHelper;
   protected AWSInitializer mockAWSInitializer;
   protected GCPInitializer mockGCPInitializer;
@@ -78,6 +88,7 @@ public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseT
   protected CallbackController mockCallbackController;
   protected PlayCacheSessionStore mockSessionStore;
   protected ApiHelper mockApiHelper;
+  protected MetricQueryHelper mockMetricQueryHelper;
   protected MetricService metricService;
   protected AlertService alertService;
   protected AlertDefinitionService alertDefinitionService;
@@ -89,6 +100,8 @@ public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseT
   protected EncryptionAtRestManager mockEARManager;
   protected SupportBundleComponent mockSupportBundleComponent;
   protected SupportBundleComponentFactory mockSupportBundleComponentFactory;
+  protected ReleaseManager mockReleaseManager;
+  protected GFlagsValidation mockGFlagsValidation;
 
   @Mock protected BaseTaskDependencies mockBaseTaskDependencies;
 
@@ -96,11 +109,13 @@ public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseT
   protected Provider defaultProvider;
   protected Provider gcpProvider;
   protected Provider onPremProvider;
+  protected SettableRuntimeConfigFactory factory;
 
   protected Commissioner commissioner;
 
   @Before
   public void setUp() {
+    mockConfig = spy(app.config());
     commissioner = app.injector().instanceOf(Commissioner.class);
     defaultCustomer = ModelFactory.testCustomer();
     defaultProvider = ModelFactory.awsProvider(defaultCustomer);
@@ -110,11 +125,16 @@ public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseT
     alertService = app.injector().instanceOf(AlertService.class);
     alertDefinitionService = app.injector().instanceOf(AlertDefinitionService.class);
     RuntimeConfigFactory configFactory = app.injector().instanceOf(RuntimeConfigFactory.class);
-    alertConfigurationService = app.injector().instanceOf(AlertConfigurationService.class);
+    alertConfigurationService = spy(app.injector().instanceOf(AlertConfigurationService.class));
     taskExecutor = app.injector().instanceOf(TaskExecutor.class);
 
+    // Enable custom hooks in tests
+    factory = app.injector().instanceOf(SettableRuntimeConfigFactory.class);
+    factory.globalRuntimeConf().setValue(ENABLE_CUSTOM_HOOKS_PATH, "true");
+    factory.globalRuntimeConf().setValue(ENABLE_SUDO_PATH, "true");
+
     when(mockBaseTaskDependencies.getApplication()).thenReturn(app);
-    when(mockBaseTaskDependencies.getConfig()).thenReturn(app.config());
+    when(mockBaseTaskDependencies.getConfig()).thenReturn(mockConfig);
     when(mockBaseTaskDependencies.getConfigHelper()).thenReturn(mockConfigHelper);
     when(mockBaseTaskDependencies.getEnvironment())
         .thenReturn(app.injector().instanceOf(Environment.class));
@@ -149,16 +169,18 @@ public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseT
     mockCallbackController = mock(CallbackController.class);
     mockSessionStore = mock(PlayCacheSessionStore.class);
     mockApiHelper = mock(ApiHelper.class);
+    mockMetricQueryHelper = mock(MetricQueryHelper.class);
     mockYcqlQueryExecutor = mock(YcqlQueryExecutor.class);
     mockYsqlQueryExecutor = mock(YsqlQueryExecutor.class);
     mockNodeUniverseManager = mock(NodeUniverseManager.class);
     mockEARManager = mock(EncryptionAtRestManager.class);
     mockSupportBundleComponent = mock(SupportBundleComponent.class);
     mockSupportBundleComponentFactory = mock(SupportBundleComponentFactory.class);
+    mockGFlagsValidation = mock(GFlagsValidation.class);
+    mockReleaseManager = mock(ReleaseManager.class);
 
     return configureApplication(
             new GuiceApplicationBuilder()
-                .disable(SwaggerModule.class)
                 .disable(GuiceModule.class)
                 .configure(testDatabase())
                 .overrides(bind(AccessManager.class).toInstance(mockAccessManager))
@@ -178,6 +200,7 @@ public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseT
                 .overrides(bind(CallbackController.class).toInstance(mockCallbackController))
                 .overrides(bind(PlaySessionStore.class).toInstance(mockSessionStore))
                 .overrides(bind(ApiHelper.class).toInstance(mockApiHelper))
+                .overrides(bind(MetricQueryHelper.class).toInstance(mockMetricQueryHelper))
                 .overrides(bind(BaseTaskDependencies.class).toInstance(mockBaseTaskDependencies))
                 .overrides(
                     bind(SupportBundleComponent.class).toInstance(mockSupportBundleComponent))
@@ -189,7 +212,9 @@ public abstract class CommissionerBaseTest extends PlatformGuiceApplicationBaseT
                 .overrides(bind(NodeUniverseManager.class).toInstance(mockNodeUniverseManager))
                 .overrides(
                     bind(ExecutorServiceProvider.class).to(DefaultExecutorServiceProvider.class))
-                .overrides(bind(EncryptionAtRestManager.class).toInstance(mockEARManager)))
+                .overrides(bind(EncryptionAtRestManager.class).toInstance(mockEARManager))
+                .overrides(bind(GFlagsValidation.class).toInstance(mockGFlagsValidation))
+                .overrides(bind(ReleaseManager.class).toInstance(mockReleaseManager)))
         .build();
   }
 

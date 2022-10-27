@@ -39,15 +39,25 @@ class MasterReplicationServiceImpl : public MasterServiceBase, public MasterRepl
     (DeleteUniverseReplication)
     (GetCDCStream)
     (GetUniverseReplication)
+    (GetUDTypeMetadata)
     (IsSetupUniverseReplicationDone)
     (UpdateConsumerOnProducerSplit)
+    (UpdateConsumerOnProducerMetadata)
     (ListCDCStreams)
     (SetUniverseReplicationEnabled)
     (SetupUniverseReplication)
     (UpdateCDCStream)
     (GetCDCDBStreamInfo)
     (IsBootstrapRequired)
+    (WaitForReplicationDrain)
+    (SetupNSUniverseReplication)
+    (GetReplicationStatus)
+    (GetTableSchemaFromSysCatalog)
+    (ChangeXClusterRole)
   )
+
+  MASTER_SERVICE_IMPL_ON_LEADER_WITHOUT_LOCK(
+      CatalogManager, (GetXClusterEstimatedDataLoss)(GetXClusterSafeTime))
 };
 
 } // namespace

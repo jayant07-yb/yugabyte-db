@@ -15,7 +15,6 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -38,6 +37,9 @@ import com.yugabyte.yw.models.TaskInfo;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.PlacementInfo;
 import com.yugabyte.yw.models.helpers.TaskType;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.PodList;
+import io.fabric8.kubernetes.api.model.PodStatus;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
@@ -53,10 +55,6 @@ import org.yb.client.ChangeMasterClusterConfigResponse;
 import org.yb.client.GetLoadMovePercentResponse;
 import org.yb.client.IsServerReadyResponse;
 import org.yb.client.YBClient;
-
-import io.fabric8.kubernetes.api.model.Pod;
-import io.fabric8.kubernetes.api.model.PodList;
-import io.fabric8.kubernetes.api.model.PodStatus;
 import play.libs.Json;
 
 @RunWith(MockitoJUnitRunner.class)
@@ -91,7 +89,6 @@ public class EditKubernetesUniverseTest extends CommissionerBaseTest {
     } catch (Exception e) {
     }
     when(mockClient.waitForServer(any(), anyLong())).thenReturn(true);
-    when(mockClient.waitForLoadBalance(anyLong(), anyInt())).thenReturn(true);
     when(mockYBClient.getClient(any(), any())).thenReturn(mockClient);
   }
 
@@ -132,7 +129,6 @@ public class EditKubernetesUniverseTest extends CommissionerBaseTest {
           TaskType.KubernetesCommandExecutor,
           TaskType.WaitForServer,
           TaskType.UpdatePlacementInfo,
-          TaskType.WaitForLoadBalance,
           TaskType.KubernetesCommandExecutor,
           TaskType.SwamperTargetsFileUpdate,
           TaskType.UniverseUpdateSucceeded);
@@ -144,7 +140,6 @@ public class EditKubernetesUniverseTest extends CommissionerBaseTest {
         Json.toJson(ImmutableMap.of("commandType", HELM_UPGRADE.name())),
         Json.toJson(ImmutableMap.of("commandType", WAIT_FOR_PODS.name())),
         Json.toJson(ImmutableMap.of("commandType", POD_INFO.name())),
-        Json.toJson(ImmutableMap.of()),
         Json.toJson(ImmutableMap.of()),
         Json.toJson(ImmutableMap.of()),
         Json.toJson(ImmutableMap.of("commandType", POD_INFO.name())),
@@ -257,7 +252,8 @@ public class EditKubernetesUniverseTest extends CommissionerBaseTest {
       PlacementInfo pi) {
     taskParams.upsertPrimaryCluster(userIntent, pi);
     taskParams.nodePrefix = NODE_PREFIX;
-
+    taskParams.getPrimaryCluster().uuid =
+        defaultUniverse.getUniverseDetails().getPrimaryCluster().uuid;
     try {
       UUID taskUUID = commissioner.submit(TaskType.EditKubernetesUniverse, taskParams);
       return waitForTask(taskUUID);

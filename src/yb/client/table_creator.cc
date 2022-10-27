@@ -28,6 +28,8 @@
 
 #include "yb/yql/redis/redisserver/redis_constants.h"
 
+using std::string;
+
 DECLARE_bool(client_suppress_created_logs);
 
 namespace yb {
@@ -107,6 +109,11 @@ YBTableCreator& YBTableCreator::colocation_id(ColocationId colocation_id) {
 
 YBTableCreator& YBTableCreator::tablespace_id(const std::string& tablespace_id) {
   tablespace_id_ = tablespace_id;
+  return *this;
+}
+
+YBTableCreator& YBTableCreator::is_matview(bool is_matview) {
+  is_matview_ = is_matview;
   return *this;
 }
 
@@ -266,6 +273,10 @@ Status YBTableCreator::Create() {
 
   if (!tablespace_id_.empty()) {
     req.set_tablespace_id(tablespace_id_);
+  }
+
+  if (is_matview_) {
+    req.set_is_matview(*is_matview_);
   }
 
   if (!matview_pg_table_id_.empty()) {

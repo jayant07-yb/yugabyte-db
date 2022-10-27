@@ -26,6 +26,8 @@
 #include "yb/util/path_util.h"
 #include "yb/util/result.h"
 
+using std::string;
+
 DEFINE_bool(use_node_to_node_encryption, false, "Use node to node encryption.");
 
 DEFINE_bool(node_to_node_encryption_use_client_certificates, false,
@@ -80,6 +82,14 @@ string CertsDir(const std::string& root_dir, SecureContextType type) {
 
 } // namespace
 
+bool IsNodeToNodeEncryptionEnabled() {
+  return FLAGS_use_node_to_node_encryption;
+}
+
+bool IsClientToServerEncryptionEnabled() {
+  return FLAGS_use_client_to_server_encryption;
+}
+
 string DefaultCertsDir(const FsManager& fs_manager) {
   return fs_manager.GetCertsDir(fs_manager.GetDefaultRootDir());
 }
@@ -98,6 +108,21 @@ Result<std::unique_ptr<rpc::SecureContext>> SetupSecureContext(
     const std::string& root_dir, const std::string& name,
     SecureContextType type, rpc::MessengerBuilder* builder) {
   return SetupSecureContext(std::string(), root_dir, name, type, builder);
+}
+
+Result<std::unique_ptr<rpc::SecureContext>> SetupInternalSecureContext(
+    const string& local_hosts, const FsManager& fs_manager,
+    rpc::MessengerBuilder* messenger_builder) {
+  if (!FLAGS_cert_node_filename.empty()) {
+    return VERIFY_RESULT(server::SetupSecureContext(
+        fs_manager.GetDefaultRootDir(),
+        FLAGS_cert_node_filename,
+        server::SecureContextType::kInternal,
+        messenger_builder));
+  }
+
+  return VERIFY_RESULT(server::SetupSecureContext(
+      local_hosts, fs_manager, server::SecureContextType::kInternal, messenger_builder));
 }
 
 void ApplyCompressedStream(

@@ -210,10 +210,13 @@ class ReplicaState {
 
   // Sets the given configuration as pending commit. Does not persist into the peers
   // metadata. In order to be persisted, SetCommittedConfigUnlocked() must be called.
-  Status SetPendingConfigUnlocked(const RaftConfigPB& new_config);
+  Status SetPendingConfigUnlocked(const RaftConfigPB& new_config, const OpId& config_op_id);
+  Status SetPendingConfigOpIdUnlocked(const OpId& config_op_id);
 
   // Clears the pending config.
   Status ClearPendingConfigUnlocked();
+
+  OpId GetPendingConfigOpIdUnlocked() { return cmeta_->pending_config_op_id(); }
 
   // Return the pending configuration, or crash if one is not set.
   const RaftConfigPB& GetPendingConfigUnlocked() const;
@@ -423,6 +426,11 @@ class ReplicaState {
   void NotifyReplicationFinishedUnlocked(
       const ConsensusRoundPtr& round, const Status& status, int64_t leader_term,
       OpIds* applied_op_ids);
+
+  const RetryableRequests& retryable_requests() const {
+    DCHECK(IsLocked());
+    return retryable_requests_;
+  }
 
  private:
   typedef std::deque<ConsensusRoundPtr> PendingOperations;

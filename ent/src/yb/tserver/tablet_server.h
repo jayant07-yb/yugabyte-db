@@ -15,10 +15,12 @@
 
 #include "../../../../src/yb/tserver/tablet_server.h"
 
+#include "yb/cdc/cdc_fwd.h"
 #include "yb/encryption/encryption_fwd.h"
-  #include "yb/rpc/rpc_fwd.h"
+#include "yb/rpc/rpc_fwd.h"
 
 namespace yb {
+
 namespace tserver {
 namespace enterprise {
 
@@ -45,8 +47,12 @@ class TabletServer : public yb::tserver::TabletServer {
   CDCConsumer* GetCDCConsumer();
 
   Status ReloadKeysAndCertificates() override;
+  std::string GetCertificateDetails() override;
 
   void RegisterCertificateReloader(CertificateReloader reloader) override;
+
+  // Mark the CDC service as enabled via heartbeat.
+  Status SetCDCServiceEnabled();
 
  protected:
   Status RegisterServices() override;
@@ -62,6 +68,9 @@ class TabletServer : public yb::tserver::TabletServer {
   // CDC consumer.
   mutable std::mutex cdc_consumer_mutex_;
   std::unique_ptr<CDCConsumer> cdc_consumer_ GUARDED_BY(cdc_consumer_mutex_);
+
+  // CDC service.
+  std::shared_ptr<cdc::CDCServiceImpl> cdc_service_;
 };
 
 } // namespace enterprise

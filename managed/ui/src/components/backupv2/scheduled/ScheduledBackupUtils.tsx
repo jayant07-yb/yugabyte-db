@@ -11,13 +11,8 @@ import { capitalize, lowerCase } from 'lodash';
 import moment from 'moment';
 import pluralize from 'pluralize';
 import { isDefinedNotNull } from '../../../utils/ObjectUtils';
-import {
-  BACKUP_API_TYPES,
-  Backup_Options_Type,
-  IStorageConfig,
-  TableType,
-  TABLE_TYPE_MAP
-} from '../common/IBackup';
+import { Backup_Options_Type, IStorageConfig } from '../common/IBackup';
+import { TableType } from '../../../redesign/helpers/dtos';
 import { IBackupSchedule } from '../common/IBackupSchedule';
 
 export const MILLISECONDS_IN = {
@@ -82,9 +77,7 @@ export const convertScheduleToFormValues = (
     formValues['db_to_backup'] = {
       value: null,
       label: `All ${
-        TABLE_TYPE_MAP[schedule.backupInfo?.backupType] === BACKUP_API_TYPES.YSQL
-          ? 'Databases'
-          : 'Keyspaces'
+        schedule.backupInfo?.backupType === TableType.PGSQL_TABLE_TYPE ? 'Databases' : 'Keyspaces'
       }`
     };
   } else {
@@ -94,7 +87,8 @@ export const convertScheduleToFormValues = (
 
     if (schedule.backupInfo.backupType === TableType.YQL_TABLE_TYPE) {
       formValues['backup_tables'] =
-        schedule.backupInfo?.keyspaceList.length > 0
+        schedule.backupInfo?.keyspaceList.length > 0 &&
+        schedule.backupInfo?.keyspaceList[0].tablesList.length > 0
           ? Backup_Options_Type.CUSTOM
           : Backup_Options_Type.ALL;
 
@@ -104,7 +98,8 @@ export const convertScheduleToFormValues = (
             formValues['selected_ycql_tables'].push({
               tableUUID: k.tableUUIDList[index],
               tableName: table,
-              keySpace: k.keyspace
+              keySpace: k.keyspace,
+              isIndexTable: k.isIndexTable
             });
           });
         });
@@ -117,6 +112,18 @@ export const convertScheduleToFormValues = (
       schedule.frequency / MILLISECONDS_IN[schedule.frequencyTimeUnit];
     const interval_type = capitalize(lowerCase(schedule.frequencyTimeUnit));
     formValues['policy_interval_type'] = { value: interval_type, label: interval_type };
+  }
+
+  if (schedule.incrementalBackupFrequency > 0) {
+    formValues['is_incremental_backup_enabled'] = true;
+    formValues['incremental_backup_frequency'] =
+      schedule.incrementalBackupFrequency /
+      MILLISECONDS_IN[schedule.incrementalBackupFrequencyTimeUnit];
+    const interval_type = capitalize(lowerCase(schedule.incrementalBackupFrequencyTimeUnit));
+    formValues['incremental_backup_frequency_type'] = {
+      value: interval_type,
+      label: interval_type
+    };
   }
 
   const s_config = storage_configs.find(

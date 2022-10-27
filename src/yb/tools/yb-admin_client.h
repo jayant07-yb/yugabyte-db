@@ -39,6 +39,7 @@
 
 #include "yb/client/yb_table_name.h"
 
+#include "yb/master/master_admin.pb.h"
 #include "yb/rpc/rpc_controller.h"
 
 #include "yb/util/status_fwd.h"
@@ -78,14 +79,16 @@ struct TypedNamespaceName {
 
 class TableNameResolver {
  public:
-  TableNameResolver(std::vector<client::YBTableName> tables,
-                    std::vector<master::NamespaceIdentifierPB> namespaces);
+  using Values = std::vector<client::YBTableName>;
+  TableNameResolver(
+      Values* values,
+      std::vector<client::YBTableName>&& tables,
+      std::vector<master::NamespaceIdentifierPB>&& namespaces);
   TableNameResolver(TableNameResolver&&);
   ~TableNameResolver();
 
   Result<bool> Feed(const std::string& value);
-  std::vector<client::YBTableName>& values();
-  master::NamespaceIdentifierPB last_namespace();
+  const master::NamespaceIdentifierPB* last_namespace() const;
 
  private:
   class Impl;
@@ -275,13 +278,15 @@ class ClusterAdminClient {
 
   Status SplitTablet(const std::string& tablet_id);
 
-  Status DisableTabletSplitting(int64_t disable_duration_ms);
+  Status DisableTabletSplitting(int64_t disable_duration_ms, const std::string& feature_name);
 
-  Status IsTabletSplittingComplete();
+  Status IsTabletSplittingComplete(bool wait_for_parent_deletion);
 
   Status CreateTransactionsStatusTable(const std::string& table_name);
 
-  Result<TableNameResolver> BuildTableNameResolver();
+  Status AddTransactionStatusTablet(const TableId& table_id);
+
+  Result<TableNameResolver> BuildTableNameResolver(TableNameResolver::Values* tables);
 
   Result<std::string> GetMasterLeaderUuid();
 
@@ -292,7 +297,7 @@ class ClusterAdminClient {
   // Upgrade YSQL cluster (all databases) to the latest version, applying necessary migrations.
   // Note: Works with a tserver but is placed here (and not in yb-ts-cli) because it doesn't
   //       look like this workflow is a good fit there.
-  Status UpgradeYsql();
+  Status UpgradeYsql(bool use_single_connection);
 
   // Set WAL retention time in secs for a table name.
   Status SetWalRetentionSecs(
@@ -340,10 +345,12 @@ class ClusterAdminClient {
   Status WaitUntilMasterLeaderReady();
 
   template <class Resp, class F>
-  Status RequestMasterLeader(Resp* resp, const F& f) {
-    auto deadline = CoarseMonoClock::now() + timeout_;
+  Status RequestMasterLeader(Resp* resp, const F& f, const MonoDelta& timeout = MonoDelta::kZero) {
+    const MonoDelta local_timeout = (timeout == MonoDelta::kZero ? timeout_ : timeout);
+
+    auto deadline = CoarseMonoClock::now() + local_timeout;
     rpc::RpcController rpc;
-    rpc.set_timeout(timeout_);
+    rpc.set_timeout(local_timeout);
     for (;;) {
       resp->Clear();
       RETURN_NOT_OK(f(&rpc));
@@ -370,6 +377,12 @@ class ClusterAdminClient {
   }
 
   void ResetMasterProxy(const HostPort& leader_addr = HostPort());
+
+  Result<master::DisableTabletSplittingResponsePB> DisableTabletSplitsInternal(
+      int64_t disable_duration_ms, const std::string& feature_name);
+
+  Result<master::IsTabletSplittingCompleteResponsePB> IsTabletSplittingCompleteInternal(
+      bool wait_for_parent_deletion);
 
   std::string master_addr_list_;
   HostPort init_master_addr_;
@@ -400,7 +413,6 @@ class ClusterAdminClient {
 
   Result<int> GetReadReplicaConfigFromPlacementUuid(
       master::ReplicationInfoPB* replication_info, const std::string& placement_uuid);
-
 
   Result<master::GetMasterClusterConfigResponsePB> GetMasterClusterConfig();
 

@@ -86,6 +86,7 @@
 #include "yb/tserver/tserver_admin.proxy.h"
 #include "yb/tserver/tserver_service.proxy.h"
 
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/oid_generator.h"
 #include "yb/util/opid.pb.h"
 #include "yb/util/scope_exit.h"
@@ -121,6 +122,7 @@ using std::unordered_map;
 using std::unordered_set;
 using std::vector;
 using std::shared_ptr;
+using std::string;
 
 using client::YBSession;
 using client::YBTable;
@@ -475,7 +477,7 @@ class RaftConsensusITest : public TabletServerIntegrationTestBase {
                                       string* fell_behind_uuid);
 
   void TestAddRemoveServer(PeerMemberType member_type);
-  void TestRemoveTserverFailsWhenServerInTransition(PeerMemberType member_type);
+  void TestRemoveTserverSucceedsWhenServerInTransition(PeerMemberType member_type);
   void TestRemoveTserverInTransitionSucceeds(PeerMemberType member_type);
 
   std::vector<scoped_refptr<yb::Thread> > threads_;
@@ -778,7 +780,7 @@ TEST_F(RaftConsensusITest, TestCatchupAfterOpsEvicted) {
 Result<int64_t> RaftConsensusITest::GetNumLogCacheOpsReadFromDisk() {
   TServerDetails* leader = nullptr;
   RETURN_NOT_OK(GetLeaderReplicaWithRetries(tablet_id_, &leader));
-  return cluster_->tablet_server_by_uuid(leader->uuid())->GetInt64Metric(
+  return cluster_->tablet_server_by_uuid(leader->uuid())->GetMetric<int64>(
       &METRIC_ENTITY_tablet,
       nullptr,
       &METRIC_log_cache_disk_reads,
@@ -957,7 +959,7 @@ TEST_F(RaftConsensusITest, TestLaggingFollowerLogCacheEviction) {
     }
 
     log_cache_num_ops += ASSERT_RESULT(
-        cluster_->tablet_server_by_uuid(tablet_replica.second->uuid())->GetInt64Metric(
+        cluster_->tablet_server_by_uuid(tablet_replica.second->uuid())->GetMetric<int64>(
             &METRIC_ENTITY_tablet,
             nullptr,
             &METRIC_log_cache_num_ops,
@@ -1267,7 +1269,8 @@ void RaftConsensusITest::TestAddRemoveServer(PeerMemberType member_type) {
   }
 }
 
-void RaftConsensusITest::TestRemoveTserverFailsWhenServerInTransition(PeerMemberType member_type) {
+void RaftConsensusITest::TestRemoveTserverSucceedsWhenServerInTransition(
+    PeerMemberType member_type) {
   ASSERT_TRUE(member_type == PeerMemberType::PRE_VOTER ||
               member_type == PeerMemberType::PRE_OBSERVER);
 
@@ -1322,17 +1325,14 @@ void RaftConsensusITest::TestRemoveTserverFailsWhenServerInTransition(PeerMember
   ASSERT_OK(WaitForServersToAgree(MonoDelta::FromSeconds(60),
                                   active_tablet_servers, tablet_id_, ++cur_log_index));
 
-  // Now try to remove server 1 from the configuration. This should fail.
+  // Now try to remove server 1 from the configuration. This should pass.
   LOG(INFO) << "Removing tserver with uuid " << tservers[1]->uuid();
   auto status = RemoveServer(initial_leader, tablet_id_, tservers[1], boost::none,
                              MonoDelta::FromSeconds(10), NULL, false /* retry */);
-  ASSERT_TRUE(status.IsIllegalState());
-  ASSERT_STR_CONTAINS(status.ToString(), "Leader is not ready for Config Change");
+  ASSERT_OK(status);
 }
 
-// In TestRemoveTserverFailsWhenServerInTransition we are testing that a REMOVE_SERVER request
-// operation fails whenever the committed config contains a server in PRE_VOTER or PRE_OBSERVER
-// mode. In this test we are testing that a REMOVE_SERVER operation succeeds whenever the committed
+// In this test we are testing that a REMOVE_SERVER operation succeeds whenever the committed
 // config contains a PRE_VOTER or PRE_OBSERVER mode and it's the same server we are trying to
 // remove.
 void RaftConsensusITest::TestRemoveTserverInTransitionSucceeds(PeerMemberType member_type) {
@@ -1449,7 +1449,9 @@ int RaftConsensusITest::RestartAnyCrashedTabletServers() {
     if (!cluster_->tablet_server(i)->IsProcessAlive()) {
       LOG(INFO) << "TS " << i << " appears to have crashed. Restarting.";
       cluster_->tablet_server(i)->Shutdown();
-      CHECK_OK(cluster_->tablet_server(i)->Restart());
+      CHECK_OK(WaitFor([&]() {
+        return cluster_->tablet_server(i)->Restart().ok();
+      }, 20s * kTimeMultiplier, "restarting tablet server"));
       restarted++;
     }
   }
@@ -1854,7 +1856,7 @@ TEST_F(RaftConsensusITest, TestReplicaBehaviorViaRPC) {
   // Check that the 'term' metric is correctly exposed.
   {
     int64_t term_from_metric = ASSERT_RESULT(
-        cluster_->tablet_server_by_uuid(replica_ts->uuid())->GetInt64Metric(
+        cluster_->tablet_server_by_uuid(replica_ts->uuid())->GetMetric<int64>(
             &METRIC_ENTITY_tablet,
             nullptr,
             &METRIC_raft_term,
@@ -2617,7 +2619,7 @@ TEST_F(RaftConsensusITest, TestConfigChangeUnderLoad) {
       InsertOrDie(&active_tablet_servers, tserver_to_add->uuid(), tserver_to_add);
       ASSERT_OK(WaitUntilCommittedConfigNumVotersIs(active_tablet_servers.size(),
           leader_tserver, tablet_id_,
-          MonoDelta::FromSeconds(10)));
+          15s * kTimeMultiplier));
     }
   }
 
@@ -2851,7 +2853,7 @@ TEST_F(RaftConsensusITest, TestMemoryRemainsConstantDespiteTwoDeadFollowers) {
   MonoTime deadline = MonoTime::Now();
   deadline.AddDelta(kMaxWaitTime);
   while (true) {
-    int64_t num_rejections = ASSERT_RESULT(cluster_->tablet_server(leader_ts_idx)->GetInt64Metric(
+    int64_t num_rejections = ASSERT_RESULT(cluster_->tablet_server(leader_ts_idx)->GetMetric<int64>(
         &METRIC_ENTITY_tablet,
         nullptr,
         &METRIC_not_leader_rejections,
@@ -3210,12 +3212,12 @@ TEST_F(RaftConsensusITest, TestUpdateConsensusErrorNonePrepared) {
   ASSERT_STR_CONTAINS(resp.ShortDebugString(), "Could not prepare a single operation");
 }
 
-TEST_F(RaftConsensusITest, TestRemoveTserverFailsWhenVoterInTransition) {
-  TestRemoveTserverFailsWhenServerInTransition(PeerMemberType::PRE_VOTER);
+TEST_F(RaftConsensusITest, TestRemoveTserverSucceedsWhenVoterInTransition) {
+  TestRemoveTserverSucceedsWhenServerInTransition(PeerMemberType::PRE_VOTER);
 }
 
-TEST_F(RaftConsensusITest, TestRemoveTserverFailsWhenObserverInTransition) {
-  TestRemoveTserverFailsWhenServerInTransition(PeerMemberType::PRE_OBSERVER);
+TEST_F(RaftConsensusITest, TestRemoveTserverSucceedsWhenObserverInTransition) {
+  TestRemoveTserverSucceedsWhenServerInTransition(PeerMemberType::PRE_OBSERVER);
 }
 
 TEST_F(RaftConsensusITest, TestRemovePreObserverServerSucceeds) {
@@ -3532,6 +3534,47 @@ TEST_F(RaftConsensusITest, SplitOpId) {
   ASSERT_GT(split_op_ids[0].index, split_op_id_first_try.index);
 
   split_latch.Wait();
+}
+
+TEST_F(RaftConsensusITest, CatchupAfterLeaderRestarted) {
+  constexpr auto kEntriesPerLogIndexChunk = 1000;
+  // We need enough ops to have more than one log index chunk.
+  constexpr auto kNumOps = kEntriesPerLogIndexChunk + 100;
+  constexpr auto kLogEntryOnDiskSizeBytesLowerBound = 10;
+
+  std::vector<string> extra_flags;
+  // Reduce number of entries per log index chunk to have more than one log index chunk quickly.
+  extra_flags.push_back(Format("--TEST_entries_per_log_index_chuck=$0", kEntriesPerLogIndexChunk));
+  // Reduce log segment size to have more than one log segment.
+  extra_flags.push_back(
+      Format("--log_segment_size_bytes=$0", kNumOps * kLogEntryOnDiskSizeBytesLowerBound));
+  // Reduce retryable_request_timeout_secs to avoid replaying already flushed entries:
+  extra_flags.push_back("--retryable_request_timeout_secs=0");
+  ASSERT_NO_FATALS(BuildAndStart(extra_flags));
+
+  const auto paused_ts_idx = 0;
+  auto* paused_ts = cluster_->tablet_server(paused_ts_idx);
+
+  // Pause a ts.
+  ASSERT_OK(paused_ts->Pause());
+  LOG(INFO)<< "Paused one of the replicas, starting to write...";
+
+  ASSERT_NO_FATALS(WriteOpsToLeader(kNumOps, 1));
+
+  LOG(INFO)<< "Written data. Flush tablet and restart the rest of the replicas";
+  for (size_t ts_idx = 0; ts_idx < cluster_->num_tablet_servers(); ++ts_idx) {
+    if (ts_idx != paused_ts_idx) {
+      ASSERT_OK(cluster_->FlushTabletsOnSingleTServer(
+          cluster_->tablet_server(ts_idx), {tablet_id_}, /* is_compaction = */ false));
+      cluster_->tablet_server(ts_idx)->Shutdown();
+      ASSERT_OK(cluster_->tablet_server(ts_idx)->Restart());
+    }
+  }
+
+  // Now unpause the replica, the lagging replica should eventually catch back up.
+  ASSERT_OK(paused_ts->Resume());
+
+  ASSERT_OK(WaitForServersToAgree(60s, tablet_servers_, tablet_id_, kNumOps));
 }
 
 }  // namespace tserver

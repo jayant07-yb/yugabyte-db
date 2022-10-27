@@ -5,14 +5,12 @@ linkTitle: Build the source
 description: Build YugabyteDB from source code on CentOS.
 image: /images/section_icons/index/quick_start.png
 headcontent: Build the source code.
-type: page
 menu:
   preview:
     identifier: build-from-src-2-centos
     parent: core-database
     weight: 2912
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -74,7 +72,7 @@ We also use [Linuxbrew](https://github.com/linuxbrew/brew) to provide some of th
 Linuxbrew allows us to create a portable package that contains its own copy of glibc and can be installed on most Linux distributions.
 However, we are transitioning away from using Linuxbrew and towards native toolchains on various platforms.
 
-Our build scripts may automatically install Linuxbrew in a directory such as `/opt/yb-build/brew/linuxbrew-<version>` or `~/.linuxbrew-yb-build/linuxbrew-<version>`.
+Our build scripts may automatically install Linuxbrew in a directory such as `/opt/yb-build/brew/linuxbrew-<version>`.
 There is no need to add any of those directories to PATH.
 
 {{< /note >}}

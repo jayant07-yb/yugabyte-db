@@ -63,6 +63,7 @@ METRIC_DECLARE_entity(tablet);
 
 using std::shared_ptr;
 using std::string;
+using std::vector;
 
 namespace yb {
 namespace consensus {
@@ -241,6 +242,7 @@ class RaftConsensusTest : public YBTest {
                        0, // schema_version
                        nullptr, // table_metric_entity
                        nullptr, // tablet_metric_entity
+                       log_thread_pool_.get(),
                        log_thread_pool_.get(),
                        log_thread_pool_.get(),
                        std::numeric_limits<int64_t>::max(), // cdc_min_replicated_index

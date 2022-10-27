@@ -1,0 +1,79 @@
+ApiError:
+  description: API Error
+  content:
+    application/json:
+      schema:
+        $ref: '../schemas/_index.yaml#/ApiError'
+LiveQueryResponse:
+  description: Live Queries of a Cluster
+  content:
+    application/json:
+      schema:
+        $ref: '../schemas/_index.yaml#/LiveQueryResponseSchema'
+SlowQueryResponse:
+  description: Slow Queries of a Cluster
+  content:
+    application/json:
+      schema:
+        $ref: '../schemas/_index.yaml#/SlowQueryResponseSchema'
+ClusterNodeListResponse:
+  description: Cluster nodes response
+  content:
+    application/json:
+      schema:
+        title: Cluster Nodes Response
+        type: object
+        properties:
+          data:
+            type: array
+            uniqueItems: true
+            items:
+              $ref: '../schemas/_index.yaml#/NodeData'
+        required:
+          - data
+MetricResponse:
+  description: Metric response
+  content:
+    application/json:
+      schema:
+        title: Metric Response
+        type: object
+        properties:
+          data:
+            type: array
+            items:
+              $ref: '../schemas/_index.yaml#/MetricData'
+          start_timestamp:
+            description: Start of range of results
+            type: integer
+            format: int64
+          end_timestamp:
+            description: End of range of results
+            type: integer
+            format: int64
+        required:
+          - data
+          - start_timestamp
+          - end_timestamp
+ClusterTableListResponse:
+  description: List of cluster tables
+  content:
+    application/json:
+      schema:
+        title: Cluster table list response
+        type: object
+        properties:
+          data:
+            $ref: '../schemas/_index.yaml#/ClusterTableData'
+        required:
+          - data
+ClusterResponse:
+  description: Cluster response
+  content:
+    application/json:
+      schema:
+        title: Cluster Response
+        type: object
+        properties:
+          data:
+            $ref: '../schemas/_index.yaml#/ClusterData'

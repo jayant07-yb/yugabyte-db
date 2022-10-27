@@ -126,12 +126,11 @@ DEFINE_test_flag(bool, simulate_fs_without_fallocate, false,
 DEFINE_test_flag(int64, simulate_free_space_bytes, -1,
     "If a non-negative value, GetFreeSpaceBytes will return the specified value.");
 
-DECLARE_bool(never_fsync);
-
 using namespace std::placeholders;
 using base::subtle::Atomic64;
 using base::subtle::Barrier_AtomicIncrement;
 using std::vector;
+using std::string;
 using strings::Substitute;
 
 static __thread uint64_t thread_local_id;
@@ -157,7 +156,12 @@ int fallocate(int fd, int mode, off_t offset, off_t len) {
     // The offset field seems to have no effect; the file is always allocated
     // with space from 0 to the size. This is probably because OS X does not
     // support sparse files.
-    fstore_t store = {F_ALLOCATECONTIG, F_PEOFPOSMODE, 0, size};
+    auto store = fstore_t{
+        .fst_flags = F_ALLOCATECONTIG,
+        .fst_posmode = F_PEOFPOSMODE,
+        .fst_offset = 0,
+        .fst_length = size,
+        .fst_bytesalloc = 0};
     if (fcntl(fd, F_PREALLOCATE, &store) < 0) {
       LOG(INFO) << "Unable to allocate contiguous disk space, attempting non-contiguous allocation";
       store.fst_flags = F_ALLOCATEALL;
@@ -440,7 +444,7 @@ class PosixWritableFile : public WritableFile {
     bool sync_on_close_;
     uint64_t filesize_;
     uint64_t pre_allocated_size_;
-    bool pending_sync_;
+    std::atomic<bool> pending_sync_;
 
  private:
   Status DoWritev(const Slice* slices, size_t n) {

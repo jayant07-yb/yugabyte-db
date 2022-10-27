@@ -17,6 +17,7 @@
 #define YB_UTIL_METRIC_ENTITY_H
 
 #include <functional>
+#include <map>
 #include <unordered_map>
 
 #include "yb/gutil/callback_forward.h"
@@ -45,44 +46,49 @@ enum class MetricLevel {
   kWarn = 2
 };
 
-struct MetricJsonOptions {
-  MetricJsonOptions() :
-    include_raw_histograms(false),
-    include_schema_info(false),
-    level(MetricLevel::kDebug) {
-  }
+enum class AggregationMetricLevel {
+  kServer,
+  kTable,
+  kStream
+};
 
+struct MetricOptions {
+  // Determine whether system reset histogram or not
+  // Default: false
+  bool reset_histograms = true;
+
+  // Include the metrics at a level and above.
+  // Default: debug
+  MetricLevel level = MetricLevel::kDebug;
+};
+
+struct MetricJsonOptions : public MetricOptions {
   // Include the raw histogram values and counts in the JSON output.
   // This allows consumers to do cross-server aggregation or window
   // data over time.
   // Default: false
-  bool include_raw_histograms;
+  bool include_raw_histograms = false;
 
   // Include the metrics "schema" information (i.e description, label,
   // unit, etc).
   // Default: false
-  bool include_schema_info;
-
-  // Include the metrics at a level and above.
-  // Default: debug
-  MetricLevel level;
+  bool include_schema_info = false;
 };
 
-struct MetricPrometheusOptions {
-  MetricPrometheusOptions() :
-    level(MetricLevel::kDebug) {
-  }
-
-  // Include the metrics at a level and above.
-  // Default: debug
-  MetricLevel level;
-
+struct MetricPrometheusOptions : public MetricOptions {
   // Number of tables to include metrics for.
   uint32_t max_tables_metrics_breakdowns;
+};
+
+struct MetricEntityOptions {
+  std::vector<std::string> metrics;
+  std::vector<std::string> exclude_metrics;
 
   // Regex for metrics that should always be included for all tables.
   std::string priority_regex;
 };
+
+using MeticEntitiesOptions = std::map<AggregationMetricLevel, MetricEntityOptions>;
 
 class MetricEntityPrototype {
  public:
@@ -148,12 +154,12 @@ class MetricEntity : public RefCountedThreadSafe<MetricEntity> {
 
   // See MetricRegistry::WriteAsJson()
   Status WriteAsJson(JsonWriter* writer,
-                     const std::vector<std::string>& requested_metrics,
+                     const MetricEntityOptions& entity_options,
                      const MetricJsonOptions& opts) const;
 
   Status WriteForPrometheus(PrometheusWriter* writer,
-                     const std::vector<std::string>& requested_metrics,
-                     const MetricPrometheusOptions& opts) const;
+                            const MetricEntityOptions& entity_options,
+                            const MetricPrometheusOptions& opts) const;
 
   const MetricMap& UnsafeMetricsMapForTests() const { return metric_map_; }
 

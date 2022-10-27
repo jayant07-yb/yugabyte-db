@@ -219,10 +219,14 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
 
   void TEST_UpdateMajorityReplicated(
       const OpId& majority_replicated, OpId* committed_index, OpId* last_committed_op_id) {
-    UpdateMajorityReplicated({ majority_replicated,
-                               CoarseTimePoint::min(),
-                               HybridTime::kMin.GetPhysicalValueMicros() },
-                             committed_index, last_committed_op_id);
+    UpdateMajorityReplicated(
+        MajorityReplicatedData{
+            .op_id = majority_replicated,
+            .leader_lease_expiration = CoarseTimePoint::min(),
+            .ht_lease_expiration = HybridTime::kMin.GetPhysicalValueMicros(),
+            .num_sst_files = 0,
+            .peer_got_all_ops = {}},
+        committed_index, last_committed_op_id);
   }
 
   yb::OpId GetLastReceivedOpId() override;
@@ -260,7 +264,8 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
     TEST_delay_update_.store(duration, std::memory_order_release);
   }
 
-  Result<ReadOpsResult> ReadReplicatedMessagesForCDC(const yb::OpId& from,
+  Result<ReadOpsResult> ReadReplicatedMessagesForCDC(
+    const yb::OpId& from,
     int64_t* last_replicated_opid_index,
     const CoarseTimePoint deadline = CoarseTimePoint::max()) override;
 
@@ -286,6 +291,8 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
   // The 'client_cb' will be invoked at the end of this execution.
   virtual void NonTrackedRoundReplicationFinished(
       ConsensusRound* round, const StdStatusCallback& client_cb, const Status& status);
+
+  Result<RetryableRequests> GetRetryableRequests() const;
 
  protected:
   // As a leader, append a new ConsensusRound to the queue.
@@ -609,7 +616,7 @@ class RaftConsensus : public std::enable_shared_from_this<RaftConsensus>,
 
   // Helper API to check if the pending/committed configuration has a PRE_VOTER. Non-null return
   // string implies there are servers in transit.
-  string ServersInTransitionMessage();
+  std::string ServersInTransitionMessage();
 
   // Prevent starting new election for some time, after we stepped down.
   // protege_uuid - in case of step down we remember our protege.

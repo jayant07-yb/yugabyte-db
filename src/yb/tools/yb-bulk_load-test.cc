@@ -57,6 +57,9 @@
 
 #include "yb/yql/cql/ql/util/statement_result.h"
 
+using std::string;
+using std::vector;
+
 DECLARE_uint64(initial_seqno);
 DECLARE_uint64(bulk_load_num_files_per_tablet);
 DECLARE_bool(enable_load_balancing);
@@ -584,7 +587,8 @@ TEST_F_EX(YBBulkLoadTest, TestCLITool, YBBulkLoadTestWithoutRebalancing) {
       "-initial_seqno", "0",
       "-row_batch_size", std::to_string(kNumIterations/kNumTablets/10),
       "-bulk_load_num_files_per_tablet", std::to_string(kNumFilesPerTablet),
-      "-flush_batch_for_tests"
+      "-flush_batch_for_tests",
+      "-never_fsync", "true"
   };
 
   std::unique_ptr<Subprocess> bulk_load_process;

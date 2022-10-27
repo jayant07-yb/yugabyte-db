@@ -43,6 +43,7 @@
 #include "yb/tserver/tserver_service.pb.h"
 
 #include "yb/util/async_util.h"
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/random_util.h"
 #include "yb/util/scope_exit.h"
 #include "yb/util/size_literals.h"
@@ -483,7 +484,7 @@ TEST_F(QLTransactionTest, PreserveLogs) {
   auto peers = ListTabletPeers(cluster_.get(), ListPeersFilter::kAll);
   uint64_t max_active_segment_sequence_number = 0;
   for (const auto& peer : peers) {
-    if (peer->table_type() != TableType::TRANSACTION_STATUS_TABLE_TYPE) {
+    if (peer->TEST_table_type() != TableType::TRANSACTION_STATUS_TABLE_TYPE) {
       continue;
     }
     auto current_active_segment_sequence_number = peer->log()->active_segment_sequence_number();
@@ -1211,7 +1212,13 @@ TEST_F(QLTransactionTest, StatusEvolution) {
         int idx = narrow_cast<int>(states.size());
         ASSERT_OK(WriteRow(session, idx, idx));
       }
-      states.push_back({ txn, txn->GetMetadata(TransactionRpcDeadline()) });
+      states.push_back(TransactionState{
+          .transaction = txn,
+          .metadata_future = txn->GetMetadata(TransactionRpcDeadline()),
+          .commit_future = {},
+          .status_future = {},
+          .metadata = {}
+      });
       ++active_transactions;
       --transactions_to_create;
     }

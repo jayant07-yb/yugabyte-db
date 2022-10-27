@@ -65,7 +65,7 @@ void LWExprResultWriter::SetNull() {
   yb::SetNull(&NewValue());
 }
 
-bfql::TSOpcode QLExprExecutor::GetTSWriteInstruction(const QLExpressionPB& ql_expr) const {
+bfql::TSOpcode GetTSWriteInstruction(const QLExpressionPB& ql_expr) {
   // "kSubDocInsert" instructs the tablet server to insert a new value or replace an existing value.
   if (ql_expr.has_tscall()) {
     return static_cast<bfql::TSOpcode>(ql_expr.tscall().opcode());
@@ -87,6 +87,19 @@ Status QLExprExecutor::EvalExpr(const QLExpressionPB& ql_expr,
     case QLExpressionPB::ExprCase::kColumnId:
       RETURN_NOT_OK(table_row.ReadColumn(ql_expr.column_id(), result_writer));
       break;
+
+    case QLExpressionPB::ExprCase::kTuple: {
+      QLValuePB* value = &result_writer.NewValue();
+      auto tuple_value = value->mutable_tuple_value();
+      for (auto const& elems : ql_expr.tuple().elems()) {
+        QLExprResult temp;
+        DCHECK(elems.has_column_id());
+        RETURN_NOT_OK(table_row.ReadColumn(elems.column_id(), temp.Writer()));
+        temp.MoveTo(tuple_value->add_elems());
+      }
+      result_writer.SetExisting(value);
+      break;
+    }
 
     case QLExpressionPB::ExprCase::kJsonColumn: {
       QLExprResult temp;
@@ -229,13 +242,35 @@ Result<bool> In(
     QLExprExecutor* executor, const Operands& operands, const QLTableRow& table_row, Res* lhs) {
   Res rhs(lhs);
   RETURN_NOT_OK(EvalOperands(executor, operands, table_row, lhs->Writer(), rhs.Writer()));
-
-  for (const auto& elem : rhs.Value().list_value().elems()) {
-    if (!Comparable(elem, lhs->Value())) {
-       return STATUS(RuntimeError, "values not comparable");
-    }
-    if (elem == lhs->Value()) {
-      return true;
+  for (const auto& rhs_elem : rhs.Value().list_value().elems()) {
+    if (rhs_elem.has_tuple_value() && lhs->Value().has_tuple_value()) {
+      const auto& rhs_elem_tuple = rhs_elem.tuple_value().elems();
+      const auto& lhs_tuple = lhs->Value().tuple_value().elems();
+      if (rhs_elem_tuple.size() != lhs_tuple.size()) {
+        return STATUS(RuntimeError, "Tuples of different size cannot be compared");
+      }
+      bool matched = true;
+      auto r_itr = rhs_elem_tuple.begin();
+      auto l_itr = lhs_tuple.begin();
+      for (size_t i = 0; i < static_cast<size_t>(rhs_elem_tuple.size()); i++, ++r_itr, ++l_itr) {
+        if (!Comparable(*r_itr, *r_itr)) {
+          return STATUS(RuntimeError, "values not comparable");
+        }
+        if (*r_itr != *l_itr) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        return true;
+      }
+    } else {
+      if (!Comparable(rhs_elem, lhs->Value())) {
+        return STATUS(RuntimeError, "values not comparable");
+      }
+      if (rhs_elem == lhs->Value()) {
+        return true;
+      }
     }
   }
 
@@ -402,7 +437,7 @@ Status QLExprExecutor::EvalCondition(const QLConditionPB& condition,
 
 //--------------------------------------------------------------------------------------------------
 
-bfpg::TSOpcode QLExprExecutor::GetTSWriteInstruction(const PgsqlExpressionPB& ql_expr) const {
+bfpg::TSOpcode GetTSWriteInstruction(const PgsqlExpressionPB& ql_expr) {
   // "kSubDocInsert" instructs the tablet server to insert a new value or replace an existing value.
   if (ql_expr.has_tscall()) {
     return static_cast<bfpg::TSOpcode>(ql_expr.tscall().opcode());
@@ -450,6 +485,7 @@ Status QLExprExecutor::DoEvalExpr(const PB& ql_expr,
 
     case PgsqlExpressionPB::ExprCase::kBocall: FALLTHROUGH_INTENDED;
     case PgsqlExpressionPB::ExprCase::kBindId: FALLTHROUGH_INTENDED;
+    case PgsqlExpressionPB::ExprCase::kTuple: FALLTHROUGH_INTENDED;
     case PgsqlExpressionPB::ExprCase::kAliasId: FALLTHROUGH_INTENDED;
     case PgsqlExpressionPB::ExprCase::EXPR_NOT_SET:
       result_writer.SetNull();
@@ -674,7 +710,7 @@ void QLTableRow::Clear() {
     return;
   }
 
-  memset(assigned_.data(), 0, assigned_.size());
+  memset(assigned_.data(), 0x0, assigned_.size());
   num_assigned_ = 0;
 }
 

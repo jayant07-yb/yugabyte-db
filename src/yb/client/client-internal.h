@@ -201,23 +201,23 @@ class YBClient::Data {
   // Take one of table id or name.
   Status IsAlterTableInProgress(YBClient* client,
                                         const YBTableName& table_name,
-                                        string table_id,
+                                        std::string table_id,
                                         CoarseTimePoint deadline,
                                         bool *alter_in_progress);
 
   Status WaitForAlterTableToFinish(YBClient* client,
                                            const YBTableName& alter_name,
-                                           string table_id,
+                                           std::string table_id,
                                            CoarseTimePoint deadline);
 
   Status FlushTables(YBClient* client,
-                             const vector<YBTableName>& table_names,
+                             const std::vector<YBTableName>& table_names,
                              bool add_indexes,
                              const CoarseTimePoint deadline,
                              const bool is_compaction);
 
   Status FlushTables(YBClient* client,
-                             const vector<TableId>& table_ids,
+                             const std::vector<TableId>& table_ids,
                              bool add_indexes,
                              const CoarseTimePoint deadline,
                              const bool is_compaction);
@@ -240,11 +240,16 @@ class YBClient::Data {
                                 CoarseTimePoint deadline,
                                 YBTableInfo* info,
                                 master::GetTableSchemaResponsePB* resp = nullptr);
+  Status GetTableSchema(YBClient* client,
+                        const YBTableName& table_name,
+                        CoarseTimePoint deadline,
+                        std::shared_ptr<YBTableInfo> info,
+                        StatusCallback callback);
   Status GetTableSchemaById(YBClient* client,
-                                    const TableId& table_id,
-                                    CoarseTimePoint deadline,
-                                    std::shared_ptr<YBTableInfo> info,
-                                    StatusCallback callback);
+                            const TableId& table_id,
+                            CoarseTimePoint deadline,
+                            std::shared_ptr<YBTableInfo> info,
+                            StatusCallback callback);
   Status GetTablegroupSchemaById(YBClient* client,
                                          const TablegroupId& tablegroup_id,
                                          CoarseTimePoint deadline,
@@ -295,7 +300,7 @@ class YBClient::Data {
 
   void GetCDCDBStreamInfo(YBClient *client,
     const std::string &db_stream_id,
-    std::shared_ptr<std::vector<pair<std::string, std::string>>> db_stream_info,
+    std::shared_ptr<std::vector<std::pair<std::string, std::string>>> db_stream_info,
     CoarseTimePoint deadline,
     StdStatusCallback callback);
 
@@ -394,6 +399,12 @@ class YBClient::Data {
   // Validate replication info as satisfiable for the cluster data.
   Status ValidateReplicationInfo(
         const master::ReplicationInfoPB& replication_info, CoarseTimePoint deadline);
+
+  // Get disk size of table, calculated as WAL + SST file size.
+  // It does not take replication factor into account
+  Result<TableSizeInfo> GetTableDiskSize(const TableId& table_id, CoarseTimePoint deadline);
+
+  Result<bool> CheckIfPitrActive(CoarseTimePoint deadline);
 
   template <class ProxyClass, class ReqClass, class RespClass>
   using SyncLeaderMasterFunc = void (ProxyClass::*)(
@@ -517,12 +528,6 @@ class YBClient::Data {
 
   std::array<std::atomic<int>, 2> tserver_count_cached_;
 
-  // The proxy for the node local tablet server.
-  std::shared_ptr<tserver::TabletServerForwardServiceProxy> node_local_forward_proxy_;
-
-  // The host port of the node local tserver.
-  HostPort node_local_tserver_host_port_;
-
  private:
   Status FlushTablesHelper(YBClient* client,
                                    const CoarseTimePoint deadline,
@@ -530,19 +535,6 @@ class YBClient::Data {
 
   DISALLOW_COPY_AND_ASSIGN(Data);
 };
-
-// Retry helper, takes a function like:
-//     Status funcName(const MonoTime& deadline, bool *retry, ...)
-// The function should set the retry flag (default true) if the function should
-// be retried again. On retry == false the return status of the function will be
-// returned to the caller, otherwise a Status::Timeout() will be returned.
-// If the deadline is already expired, no attempt will be made.
-Status RetryFunc(
-    CoarseTimePoint deadline,
-    const std::string& retry_msg,
-    const std::string& timeout_msg,
-    const std::function<Status(CoarseTimePoint, bool*)>& func,
-    const CoarseDuration max_wait = std::chrono::seconds(2));
 
 } // namespace client
 } // namespace yb

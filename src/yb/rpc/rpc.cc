@@ -75,15 +75,13 @@ TAG_FLAG(max_backoff_ms_exponent, advanced);
 namespace yb {
 
 using std::shared_ptr;
+using std::string;
 using strings::Substitute;
 using strings::SubstituteAndAppend;
 
 namespace rpc {
 
-RpcCommand::RpcCommand() : trace_(new Trace) {
-  if (Trace::CurrentTrace()) {
-    Trace::CurrentTrace()->AddChildTrace(trace_.get());
-  }
+RpcCommand::RpcCommand() : trace_(Trace::NewTraceForParent(Trace::CurrentTrace())) {
 }
 
 RpcCommand::~RpcCommand() {}
@@ -367,6 +365,13 @@ bool Rpcs::RegisterAndStart(RpcCommandPtr call, Handle* handle) {
   VTRACE_TO(1, (***handle).trace(), "Sending Rpc");
   (***handle).SendRpc();
   return true;
+}
+
+Status Rpcs::RegisterAndStartStatus(RpcCommandPtr call, Handle* handle) {
+  if (RegisterAndStart(call, handle)) {
+    return Status::OK();
+  }
+  return STATUS(InternalError, "Failed to send RPC");
 }
 
 RpcCommandPtr Rpcs::Unregister(Handle* handle) {

@@ -37,6 +37,7 @@
 #include "yb/util/monotime.h"
 
 #include "yb/yql/pggate/pg_gate_fwd.h"
+#include "yb/yql/pggate/ybc_pg_typedefs.h"
 
 namespace yb {
 namespace pggate {
@@ -97,9 +98,11 @@ class PgClient {
 
   Status SetActiveSubTransaction(
       SubTransactionId id, tserver::PgPerformOptionsPB* options);
-  Status RollbackSubTransaction(SubTransactionId id);
+  Status RollbackToSubTransaction(SubTransactionId id, tserver::PgPerformOptionsPB* options);
 
   Status ValidatePlacement(const tserver::PgValidatePlacementRequestPB* req);
+
+  Result<client::TableSizeInfo> GetTableDiskSize(const PgObjectId& table_oid);
 
   Status InsertSequenceTuple(int64_t db_oid,
                                      int64_t seq_oid,
@@ -127,6 +130,10 @@ class PgClient {
       tserver::PgPerformOptionsPB* options,
       PgsqlOps* operations,
       const PerformCallback& callback);
+
+  Result<bool> CheckIfPitrActive();
+
+  Result<tserver::PgGetTserverCatalogVersionInfoResponsePB> GetTserverCatalogVersionInfo();
 
 #define YB_PG_CLIENT_SIMPLE_METHOD_DECLARE(r, data, method) \
   Status method(                             \

@@ -36,6 +36,7 @@
 #include <vector>
 #include <unordered_map>
 
+#include "yb/common/pg_types.h"
 #include "yb/common/ql_protocol.pb.h"
 
 #include "yb/consensus/consensus_fwd.h"
@@ -75,6 +76,12 @@ class MasterOptions;
 // Forward declaration from internal header file.
 class VisitorBase;
 class SysCatalogWriter;
+
+struct PgTypeInfo {
+  char typtype;
+  uint32_t typbasetype;
+  PgTypeInfo(char typtype_, uint32_t typbasetype_) : typtype(typtype_), typbasetype(typbasetype_) {}
+};
 
 // SysCatalogTable is a YB table that keeps track of table and
 // tablet metadata.
@@ -131,6 +138,7 @@ class SysCatalogTable {
   ThreadPool* raft_pool() const { return raft_pool_.get(); }
   ThreadPool* tablet_prepare_pool() const { return tablet_prepare_pool_.get(); }
   ThreadPool* append_pool() const { return append_pool_.get(); }
+  ThreadPool* log_sync_pool() const { return log_sync_pool_.get(); }
 
   std::shared_ptr<tablet::TabletPeer> tablet_peer() const {
     return std::atomic_load(&tablet_peer_);
@@ -153,10 +161,20 @@ class SysCatalogTable {
 
   Status Visit(VisitorBase* visitor);
 
-  // Read the ysql catalog version info from the pg_yb_catalog_version catalog table.
+  // Read the global ysql catalog version info from the pg_yb_catalog_version catalog table.
   Status ReadYsqlCatalogVersion(TableId ysql_catalog_table_id,
-                                        uint64_t* catalog_version,
-                                        uint64_t* last_breaking_version);
+                                uint64_t* catalog_version,
+                                uint64_t* last_breaking_version);
+  // Read the per-db ysql catalog version info from the pg_yb_catalog_version catalog table.
+  Status ReadYsqlDBCatalogVersion(TableId ysql_catalog_table_id,
+                                  uint32_t db_oid,
+                                  uint64_t* catalog_version,
+                                  uint64_t* last_breaking_version);
+  // Read the ysql catalog version info for all databases from the pg_yb_catalog_version
+  // catalog table.
+  Status ReadYsqlAllDBCatalogVersions(
+      TableId ysql_catalog_table_id,
+      DbOidToCatalogVersionMap* versions);
 
   // Read the pg_class catalog table. There is a separate pg_class table in each
   // YSQL database, read the information in the pg_class table for the database
@@ -171,16 +189,35 @@ class SysCatalogTable {
     TableToTablespaceIdMap *table_tablespace_map);
 
   // Read relnamespace OID from the pg_class catalog table.
-  Result<uint32_t> ReadPgClassRelnamespace(const uint32_t database_oid,
-                                           const uint32_t table_oid);
+  Result<uint32_t> ReadPgClassColumnWithOidValue(const uint32_t database_oid,
+                                                 const uint32_t table_oid,
+                                                 const std::string& column_name);
 
   // Read nspname string from the pg_namespace catalog table.
   Result<std::string> ReadPgNamespaceNspname(const uint32_t database_oid,
                                              const uint32_t relnamespace_oid);
 
+  // Read attname and atttypid from pg_attribute catalog table.
+  Result<std::unordered_map<std::string, uint32_t>> ReadPgAttNameTypidMap(
+      uint32_t database_oid, uint32_t table_oid);
+
+  // Read enumtypid and enumlabel from pg_enum catalog table.
+  Result<std::unordered_map<uint32_t, std::string>> ReadPgEnum(
+      uint32_t database_oid, uint32_t type_oid = kPgInvalidOid);
+
+  // Read oid, typtype and typbasetype from pg_type catalog table.
+  Result<std::unordered_map<uint32_t, PgTypeInfo>> ReadPgTypeInfo(
+      uint32_t database_oid, std::vector<uint32_t>* type_oids);
+
   // Read the pg_tablespace catalog table and return a map with all the tablespaces and their
   // respective placement information.
   Result<std::shared_ptr<TablespaceIdToReplicationInfoMap>> ReadPgTablespaceInfo();
+
+  Result<RelIdToAttributesMap> ReadPgAttributeInfo(
+      uint32_t database_oid, std::vector<uint32_t> table_oids);
+
+  Result<RelTypeOIDMap> ReadCompositeTypeFromPgClass(
+      uint32_t database_oid, uint32_t type_oid = kPgInvalidOid);
 
   // Copy the content of co-located tables in sys catalog as a batch.
   Status CopyPgsqlTables(const std::vector<TableId>& source_table_ids,
@@ -188,7 +225,7 @@ class SysCatalogTable {
                                  int64_t leader_term);
 
   // Drop YSQL table by removing the table metadata in sys-catalog.
-  Status DeleteYsqlSystemTable(const string& table_id);
+  Status DeleteYsqlSystemTable(const std::string& table_id);
 
   const Schema& schema();
 
@@ -197,6 +234,12 @@ class SysCatalogTable {
   const scoped_refptr<MetricEntity>& GetMetricEntity() const { return metric_entity_; }
 
   Status FetchDdlLog(google::protobuf::RepeatedPtrField<DdlLogEntryPB>* entries);
+
+  Status GetTableSchema(
+      const TableId& table_id,
+      const ReadHybridTime read_hybrid_time,
+      Schema* schema,
+      uint32_t* schema_version);
 
  private:
   friend class CatalogManager;
@@ -246,6 +289,18 @@ class SysCatalogTable {
   // Crashes due to an invariant check if the rpc server is not running.
   void InitLocalRaftPeerPB();
 
+  // Read from pg_yb_catalog_version catalog table. If 'catalog_version/last_breaking_version'
+  // are set, we only read the global catalog version if db_oid is 0 (kInvalidOid), or read the
+  // per-db catalog version if db_oid is valid (not kInvalidOid). If 'versions' is set we read
+  // all rows in the table and db_oid is ignored.
+  // Either 'catalog_version/last_breaking_version' or 'versions' should be set but not both.
+  Status ReadYsqlDBCatalogVersionImpl(
+      TableId ysql_catalog_table_id,
+      uint32_t db_oid,
+      uint64_t* catalog_version,
+      uint64_t* last_breaking_version,
+      DbOidToCatalogVersionMap* versions);
+
   // Table schema, with IDs, used for the YQL write path.
   std::unique_ptr<docdb::DocReadContext> doc_read_context_;
 
@@ -263,6 +318,8 @@ class SysCatalogTable {
 
   // Thread pool for appender tasks
   std::unique_ptr<ThreadPool> append_pool_;
+
+  std::unique_ptr<ThreadPool> log_sync_pool_;
 
   std::unique_ptr<ThreadPool> allocation_pool_;
 

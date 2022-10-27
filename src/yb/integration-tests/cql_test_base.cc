@@ -27,6 +27,9 @@
 
 #include "yb/util/status_log.h"
 
+using std::string;
+using std::vector;
+
 namespace yb {
 
 template <class MiniClusterType>
@@ -125,6 +128,13 @@ template <>
 Status CqlTestBase<MiniCluster>::StartCluster() {
   RETURN_NOT_OK(cluster_->StartSync());
   return StartCQLServer();
+}
+
+template <>
+Status CqlTestBase<MiniCluster>::RunBackupCommand(const vector<string>& args) {
+  return tools::RunBackupCommand(
+      HostPort(), // Not used YSQL host/port.
+      cluster_->GetMasterAddresses(), cluster_->GetTserverHTTPAddresses(), *tmp_dir_, args);
 }
 
 } // namespace yb

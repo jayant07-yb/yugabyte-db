@@ -21,6 +21,8 @@
 #include "yb/util/subprocess.h"
 #include "yb/util/test_util.h"
 
+using std::string;
+
 DEFINE_bool(verbose_yb_backup, false, "Add --verbose flag to yb_backup.py.");
 
 namespace yb {
@@ -37,13 +39,20 @@ Status RunBackupCommand(
       "--remote_yb_admin_binary", GetToolPath("yb-admin"),
       "--remote_ysql_dump_binary", GetPgToolPath("ysql_dump"),
       "--remote_ysql_shell_binary", GetPgToolPath("ysqlsh"),
-      "--ysql_host", pg_hp.host(),
-      "--ysql_port", AsString(pg_hp.port()),
       "--storage_type", "nfs",
       "--nfs_storage_path", tmp_dir,
       "--no_ssh",
       "--no_auto_name",
+      "--TEST_never_fsync",
   };
+
+  if (!pg_hp.host().empty()) {
+    args.push_back("--ysql_host");
+    args.push_back(pg_hp.host());
+    args.push_back("--ysql_port");
+    args.push_back(AsString(pg_hp.port()));
+  }
+
 #if defined(__APPLE__)
   args.push_back("--mac");
 #endif // defined(__APPLE__)

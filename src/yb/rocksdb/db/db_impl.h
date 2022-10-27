@@ -73,6 +73,7 @@ class WriteCallback;
 class FileNumbersProvider;
 struct JobContext;
 struct ExternalSstFileInfo;
+struct RocksDBPriorityThreadPoolMetrics;
 
 class DBImpl : public DB {
  public:
@@ -210,7 +211,7 @@ class DBImpl : public DB {
   virtual Status GetSortedWalFiles(VectorLogPtr* files) override;
 
   virtual Status GetUpdatesSince(
-      SequenceNumber seq_number, unique_ptr<TransactionLogIterator>* iter,
+      SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,
       const TransactionLogIterator::ReadOptions&
           read_options = TransactionLogIterator::ReadOptions()) override;
   virtual Status DeleteFile(std::string name) override;
@@ -486,6 +487,9 @@ class DBImpl : public DB {
 
   Result<std::string> GetMiddleKey() override;
 
+  // Returns a table reader for the largest SST file.
+  Result<TableReader*> TEST_GetLargestSstTableReader() override;
+
   // Used in testing to make the old memtable immutable and start writing to a new one.
   void TEST_SwitchMemtable() override;
 
@@ -493,7 +497,7 @@ class DBImpl : public DB {
   Env* const env_;
   Env* const checkpoint_env_;
   const std::string dbname_;
-  unique_ptr<VersionSet> versions_;
+  std::unique_ptr<VersionSet> versions_;
   const DBOptions db_options_;
   std::shared_ptr<Statistics> stats_;
   InternalIterator* NewInternalIterator(const ReadOptions&,
@@ -720,7 +724,7 @@ class DBImpl : public DB {
   bool log_empty_;
   ColumnFamilyHandleImpl* default_cf_handle_;
   InternalStats* default_cf_internal_stats_;
-  unique_ptr<ColumnFamilyMemTablesImpl> column_family_memtables_;
+  std::unique_ptr<ColumnFamilyMemTablesImpl> column_family_memtables_;
   struct LogFileNumberSize {
     explicit LogFileNumberSize(uint64_t _number)
         : number(_number) {}
@@ -901,6 +905,10 @@ class DBImpl : public DB {
 
   // stores the number of flushes are currently running
   int num_running_flushes_;
+
+  // Tracks state changes for priority thread pool tasks.
+  // Metrics are updated within the PriorityThreadPoolTask.
+  std::shared_ptr<RocksDBPriorityThreadPoolMetrics> priority_thread_pool_metrics_;
 
   // Information for a manual compaction
   struct ManualCompaction {

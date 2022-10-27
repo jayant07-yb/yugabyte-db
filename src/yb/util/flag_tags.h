@@ -98,6 +98,14 @@
 // - "sensitive_info":
 //         These flags contain sensitive information. Avoid displaying their values anywhere.
 //
+// - "auto":
+//         These are AutoFlags. Do not explicitly set this tag. Use DEFINE_RUNTIME_AUTO_type or
+//         DEFINE_NON_RUNTIME_AUTO_type instead.
+//
+// - "pg":
+//         These are gFlag wrappers over postgres guc variables. Only define these using the
+//         DEFINE_pg_flag macro. The name and type of the flag should exactly match the guc
+//         variable.
 //
 // A given flag may have zero or more tags associated with it. The system does
 // not make any attempt to check integrity of the tags - for example, it allows
@@ -129,42 +137,55 @@
 #include <boost/preprocessor/cat.hpp>
 
 #include "yb/gutil/macros.h"
+#include "yb/util/enums.h"
 
 namespace yb {
 
-struct FlagTags {
-  enum {
-    stable,
-    evolving,
-    experimental,
-    hidden,
-    advanced,
-    unsafe,
-    runtime,
-    sensitive_info
-  };
-};
+YB_DEFINE_ENUM(
+    FlagTag,
+    (kStable)
+    (kEvolving)
+    (kExperimental)
+    (kHidden)
+    (kAdvanced)
+    (kUnsafe)
+    (kRuntime)
+    (kSensitive_info)
+    (kAuto)
+    (kPg));
+
+#define FLAG_TAG_stable ::yb::FlagTag::kStable
+#define FLAG_TAG_evolving ::yb::FlagTag::kEvolving
+#define FLAG_TAG_experimental ::yb::FlagTag::kExperimental
+#define FLAG_TAG_hidden ::yb::FlagTag::kHidden
+#define FLAG_TAG_advanced ::yb::FlagTag::kAdvanced
+#define FLAG_TAG_unsafe ::yb::FlagTag::kUnsafe
+#define FLAG_TAG_runtime ::yb::FlagTag::kRuntime
+#define FLAG_TAG_sensitive_info ::yb::FlagTag::kSensitive_info
+#define FLAG_TAG_auto ::yb::FlagTag::kAuto
+#define FLAG_TAG_pg ::yb::FlagTag::kPg
 
 // Tag the flag 'flag_name' with the given tag 'tag'.
 //
 // This verifies that 'flag_name' is a valid gflag, which must be defined
 // or declared above the use of the TAG_FLAG macro.
 //
-// This also validates that 'tag' is a valid flag as defined in the FlagTags
+// This also validates that 'tag' is a valid flag as defined in the FlagTag
 // enum above.
 #define TAG_FLAG(flag_name, tag) \
-  COMPILE_ASSERT(sizeof(FLAGS_##flag_name), flag_does_not_exist); \
-  COMPILE_ASSERT(sizeof(::yb::FlagTags::tag), invalid_tag);   \
-  namespace {                                                     \
-    ::yb::flag_tags_internal::FlagTagger t_##flag_name##_##tag( \
-        AS_STRING(flag_name), AS_STRING(tag));                    \
+  COMPILE_ASSERT(sizeof(BOOST_PP_CAT(FLAGS_, flag_name)), flag_does_not_exist); \
+  COMPILE_ASSERT(sizeof(BOOST_PP_CAT(FLAG_TAG_, tag)), invalid_tag); \
+  namespace { \
+  ::yb::flag_tags_internal::FlagTagger BOOST_PP_CAT( \
+      t_, BOOST_PP_CAT(flag_name, BOOST_PP_CAT(_, tag)))( \
+      AS_STRING(flag_name), BOOST_PP_CAT(FLAG_TAG_, tag)); \
   }
 
 // Fetch the list of flags associated with the given flag.
 //
 // If the flag is invalid or has no tags, sets 'tags' to be empty.
 void GetFlagTags(const std::string& flag_name,
-                 std::unordered_set<std::string>* tags);
+                 std::unordered_set<FlagTag>* tags);
 
 // ------------------------------------------------------------
 // Internal implementation details
@@ -173,7 +194,7 @@ namespace flag_tags_internal {
 
 class FlagTagger {
  public:
-  FlagTagger(const char* name, const char* tag);
+  FlagTagger(const char* name, const FlagTag& tag);
   ~FlagTagger();
 
  private:
@@ -188,5 +209,49 @@ class FlagTagger {
     BOOST_PP_CAT(DEFINE_, type)(TEST_##name, default_value, description " (For testing only!)"); \
     TAG_FLAG(TEST_##name, unsafe); \
     TAG_FLAG(TEST_##name, hidden);
+
+// Runtime flags.
+#define DEFINE_RUNTIME_bool(name, default_value, description) \
+  DEFINE_bool(name, default_value, description); \
+  TAG_FLAG(name, runtime);
+
+#define DEFINE_RUNTIME_int32(name, default_value, description) \
+  DEFINE_int32(name, default_value, description); \
+  TAG_FLAG(name, runtime);
+
+#define DEFINE_RUNTIME_int64(name, default_value, description) \
+  DEFINE_int64(name, default_value, description); \
+  TAG_FLAG(name, runtime);
+
+#define DEFINE_RUNTIME_uint64(name, default_value, description) \
+  DEFINE_uint64(name, default_value, description); \
+  TAG_FLAG(name, runtime);
+
+#define DEFINE_RUNTIME_double(name, default_value, description) \
+  DEFINE_double(name, default_value, description); \
+  TAG_FLAG(name, runtime);
+
+#define DEFINE_RUNTIME_string(name, default_value, description) \
+  DEFINE_string(name, default_value, description); \
+  TAG_FLAG(name, runtime);
+
+// Non Runtime flags.
+#define DEFINE_NON_RUNTIME_bool(name, default_value, description) \
+  DEFINE_bool(name, default_value, description);
+
+#define DEFINE_NON_RUNTIME_int32(name, default_value, description) \
+  DEFINE_int32(name, default_value, description);
+
+#define DEFINE_NON_RUNTIME_int64(name, default_value, description) \
+  DEFINE_int64(name, default_value, description);
+
+#define DEFINE_NON_RUNTIME_uint64(name, default_value, description) \
+  DEFINE_uint64(name, default_value, description);
+
+#define DEFINE_NON_RUNTIME_double(name, default_value, description) \
+  DEFINE_double(name, default_value, description);
+
+#define DEFINE_NON_RUNTIME_string(name, default_value, description) \
+  DEFINE_string(name, default_value, description);
 
 #endif /* YB_UTIL_FLAG_TAGS_H */

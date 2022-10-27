@@ -66,6 +66,7 @@
 
 #include "yb/tablet/tablet_fwd.h"
 #include "yb/tablet/mvcc.h"
+#include "yb/tablet/operations/change_auto_flags_config_operation.h"
 #include "yb/tablet/operations/change_metadata_operation.h"
 #include "yb/tablet/operations/history_cutoff_operation.h"
 #include "yb/tablet/operations/snapshot_operation.h"
@@ -138,12 +139,17 @@ DEFINE_test_flag(bool, dump_docdb_after_tablet_bootstrap, false,
                  "Dump the contents of DocDB after tablet bootstrap. Should only be used when "
                  "data is small.")
 
+DEFINE_test_flag(bool, play_pending_uncommitted_entries, false,
+                 "Play all the pending entries present in the log even if they are uncommitted.");
+
 namespace yb {
 namespace tablet {
 
 using namespace std::literals; // NOLINT
 using namespace std::placeholders;
 using std::shared_ptr;
+using std::string;
+using std::vector;
 
 using log::Log;
 using log::LogEntryPB;
@@ -411,21 +417,11 @@ ReplayDecision ShouldReplayOperation(
     const int64_t intents_flushed_index,
     TransactionStatus txn_status,
     bool write_op_has_transaction) {
-  // In most cases we assume that intents_flushed_index <= regular_flushed_index but here we are
-  // trying to be resilient to violations of that assumption.
-  if (index <= std::min(regular_flushed_index, intents_flushed_index)) {
-    // Never replay anyting that is flushed to both regular and intents RocksDBs in a transactional
-    // table.
-    VLOG_WITH_FUNC(3) << "index: " << index << " "
-                      << "regular_flushed_index: " << regular_flushed_index
-                      << " intents_flushed_index: " << intents_flushed_index;
-    return {false};
-  }
-
   if (op_type == consensus::UPDATE_TRANSACTION_OP) {
-    if (txn_status == TransactionStatus::APPLYING &&
-        intents_flushed_index < index && index <= regular_flushed_index) {
-      // Intents were applied/flushed to regular RocksDB, but not flushed into the intents RocksDB.
+    if (txn_status == TransactionStatus::APPLYING && index <= regular_flushed_index) {
+      // TODO: Replaying even transactions that are flushed to both regular and intents RocksDB is a
+      // temporary change. The long term change is to track write and apply operations separately
+      // instead of a tracking a single "intents_flushed_index".
       VLOG_WITH_FUNC(3) << "index: " << index << " "
                         << "regular_flushed_index: " << regular_flushed_index
                         << " intents_flushed_index: " << intents_flushed_index;
@@ -436,6 +432,17 @@ ReplayDecision ShouldReplayOperation(
     VLOG_WITH_FUNC(3) << "index: " << index << " > "
                       << "regular_flushed_index: " << regular_flushed_index;
     return {index > regular_flushed_index};
+  }
+
+  // In most cases we assume that intents_flushed_index <= regular_flushed_index but here we are
+  // trying to be resilient to violations of that assumption.
+  if (index <= std::min(regular_flushed_index, intents_flushed_index)) {
+    // Never replay anyting that is flushed to both regular and intents RocksDBs in a transactional
+    // table.
+    VLOG_WITH_FUNC(3) << "index: " << index << " "
+                      << "regular_flushed_index: " << regular_flushed_index
+                      << " intents_flushed_index: " << intents_flushed_index;
+    return {false};
   }
 
   if (op_type == consensus::WRITE_OP && write_op_has_transaction) {
@@ -494,7 +501,8 @@ class TabletBootstrap {
         listener_(data.listener),
         append_pool_(data.append_pool),
         allocation_pool_(data.allocation_pool),
-      skip_wal_rewrite_(FLAGS_skip_wal_rewrite) ,
+        log_sync_pool_(data.log_sync_pool),
+        skip_wal_rewrite_(GetAtomicFlag(&FLAGS_skip_wal_rewrite)),
         test_hooks_(data.test_hooks) {
   }
 
@@ -545,7 +553,7 @@ class TabletBootstrap {
     // This is a new tablet, nothing left to do.
     if (!has_blocks && !needs_recovery) {
       LOG_WITH_PREFIX(INFO) << "No blocks or log segments found. Creating new log.";
-      RETURN_NOT_OK_PREPEND(OpenNewLog(CreateNewSegment::kTrue), "Failed to open new log");
+      RETURN_NOT_OK_PREPEND(OpenLog(CreateNewSegment::kTrue), "Failed to open new log");
       RETURN_NOT_OK(FinishBootstrap("No bootstrap required, opened a new log",
                                     rebuilt_log,
                                     rebuilt_tablet));
@@ -786,8 +794,9 @@ class TabletBootstrap {
     return Status::OK();
   }
 
-  // Opens a new log in the tablet's log directory.  The directory is expected to be clean.
-  Status OpenNewLog(log::CreateNewSegment create_new_segment) {
+  // Opens log in the tablet's log directory, create_new_segment flag is used to decide
+  // whether to create new log or open existing.
+  Status OpenLog(log::CreateNewSegment create_new_segment) {
     auto log_options = LogOptions();
     const auto& metadata = *tablet_->metadata();
     log_options.retention_secs = metadata.wal_retention_secs();
@@ -809,6 +818,7 @@ class TabletBootstrap {
         tablet_->GetTabletMetricsEntity(),
         append_pool_,
         allocation_pool_,
+        log_sync_pool_,
         metadata.cdc_min_replicated_index(),
         &log_,
         create_new_segment));
@@ -908,6 +918,12 @@ class TabletBootstrap {
     // bootstrap.
     replay_state_->UpdateCommittedOpId(OpId::FromPB(replicate.committed_op_id()));
 
+    // Test only flag to replay pending uncommitted entries.
+    if (FLAGS_TEST_play_pending_uncommitted_entries) {
+      LOG(INFO) << "Playing pending uncommitted entires for test only scenario";
+      replay_state_->UpdateCommittedOpId(op_id);
+    }
+
     return ApplyCommittedPendingReplicates();
   }
 
@@ -946,6 +962,9 @@ class TabletBootstrap {
       case consensus::SPLIT_OP:
         return PlaySplitOpRequest(replicate);
 
+      case consensus::CHANGE_AUTO_FLAGS_CONFIG_OP:
+        return PlayChangeAutoFlagsConfigRequest(replicate);
+
       // Unexpected cases:
       case consensus::UNKNOWN_OP:
         return STATUS(IllegalState, Substitute("Unsupported operation type: $0", op_type));
@@ -959,16 +978,16 @@ class TabletBootstrap {
   Status PlayTabletSnapshotRequest(ReplicateMsg* replicate_msg) {
     TabletSnapshotOpRequestPB* const snapshot = replicate_msg->mutable_snapshot_request();
 
-    SnapshotOperation operation(tablet_.get(), snapshot);
+    SnapshotOperation operation(tablet_, snapshot);
     operation.set_hybrid_time(HybridTime(replicate_msg->hybrid_time()));
     operation.set_op_id(OpId::FromPB(replicate_msg->id()));
 
-    return operation.Replicated(/* leader_term= */ yb::OpId::kUnknownTerm);
+    return operation.Replicated(/* leader_term= */ OpId::kUnknownTerm,
+                                WasPending::kFalse);
   }
 
   Status PlayHistoryCutoffRequest(ReplicateMsg* replicate_msg) {
-    HistoryCutoffOperation operation(
-        tablet_.get(), replicate_msg->mutable_history_cutoff());
+    HistoryCutoffOperation operation(tablet_, replicate_msg->mutable_history_cutoff());
 
     return operation.Apply(/* leader_term= */ yb::OpId::kUnknownTerm);
   }
@@ -988,7 +1007,7 @@ class TabletBootstrap {
       return Status::OK();
     }
 
-    SplitOperation operation(tablet_.get(), data_.tablet_init_data.tablet_splitter, split_request);
+    SplitOperation operation(tablet_, data_.tablet_init_data.tablet_splitter, split_request);
     operation.set_op_id(OpId::FromPB(replicate_msg->id()));
     operation.set_hybrid_time(HybridTime(replicate_msg->hybrid_time()));
     return data_.tablet_init_data.tablet_splitter->ApplyTabletSplit(
@@ -1003,12 +1022,27 @@ class TabletBootstrap {
     // - tablet bootstrap of new after-split tablet replaying split operation.
   }
 
+  Status PlayChangeAutoFlagsConfigRequest(ReplicateMsg* replicate_msg) {
+    if (!tablet_->is_sys_catalog()) {
+      // This should never happen. We use WAL to propagate AutoFlags config only to other masters.
+      // For tablet servers we use heartbeats.
+      LOG_WITH_PREFIX_AND_FUNC(DFATAL)
+          << "AutoFlags config request ignored on non-sys_catalog tablet";
+      return Status::OK();
+    }
+
+    ChangeAutoFlagsConfigOperation operation(
+        tablet_, replicate_msg->mutable_auto_flags_config());
+
+    return operation.Apply();
+  }
+
   void HandleRetryableRequest(
       const ReplicateMsg& replicate, RestartSafeCoarseTimePoint entry_time) {
     if (!replicate.has_write())
       return;
 
-    if (data_.retryable_requests) {
+    if (data_.bootstrap_retryable_requests && data_.retryable_requests) {
       data_.retryable_requests->Bootstrap(replicate, entry_time);
     }
 
@@ -1121,7 +1155,7 @@ class TabletBootstrap {
   //
   // This functionality was originally introduced in
   // https://github.com/yugabyte/yugabyte-db/commit/41ef3f75e3c68686595c7613f53b649823b84fed
-  SegmentSequence::iterator SkipFlushedEntries(SegmentSequence* segments_ptr) {
+  SegmentSequence::const_iterator SkipFlushedEntries(SegmentSequence* segments_ptr) {
     static const char* kBootstrapOptimizerLogPrefix =
         "Bootstrap optimizer (skip_flushed_entries): ";
 
@@ -1137,8 +1171,9 @@ class TabletBootstrap {
     // Time point of the first entry of the last WAL segment, and how far back in time from it we
     // should retain other entries.
     boost::optional<RestartSafeCoarseTimePoint> replay_from_this_or_earlier_time;
-    const RestartSafeCoarseDuration min_seconds_to_retain_logs =
-        std::chrono::seconds(GetAtomicFlag(&FLAGS_retryable_request_timeout_secs));
+    const RestartSafeCoarseDuration min_seconds_to_retain_logs = data_.bootstrap_retryable_requests
+        ? std::chrono::seconds(GetAtomicFlag(&FLAGS_retryable_request_timeout_secs))
+        : 0s;
 
     auto iter = segments.end();
     while (iter != segments.begin()) {
@@ -1188,7 +1223,7 @@ class TabletBootstrap {
       if (is_first_op_id_low_enough && is_first_op_time_early_enough) {
         LOG_WITH_PREFIX(INFO)
             << kBootstrapOptimizerLogPrefix
-            << "found first mandatory segment op id: " << op_id
+            << "found first mandatory segment op id: " << op_id << ", "
             << common_details_str() << ", "
             << "number of segments to be skipped: " << (iter - segments.begin());
         return iter;
@@ -1261,13 +1296,24 @@ class TabletBootstrap {
     // If skip_wal_rewrite is false, create a new segment and append each replayed entry to this
     // new log.
     RETURN_NOT_OK_PREPEND(
-        OpenNewLog(log::CreateNewSegment(!FLAGS_skip_wal_rewrite)), "Failed to open new log");
+        OpenLog(log::CreateNewSegment(!GetAtomicFlag(&FLAGS_skip_wal_rewrite))),
+          "Failed to open new log");
 
     log::SegmentSequence segments;
     RETURN_NOT_OK(log_->GetSegmentsSnapshot(&segments));
 
+    // If any cdc stream is active for this tablet, we do not want to skip flushed entries.
+    bool should_skip_flushed_entries = FLAGS_skip_flushed_entries;
+    if (should_skip_flushed_entries && tablet_->transaction_participant()) {
+      if (tablet_->transaction_participant()->GetRetainOpId() != OpId::Invalid()) {
+        should_skip_flushed_entries = false;
+        LOG_WITH_PREFIX(WARNING) << "Ignoring skip_flushed_entries even though it is set, because "
+                                 << "we need to scan all segments when any cdc stream is active "
+                                 << "for this tablet.";
+      }
+    }
     // Find the earliest log segment we need to read, so the rest can be ignored.
-    auto iter = FLAGS_skip_flushed_entries ? SkipFlushedEntries(&segments) : segments.begin();
+    auto iter = should_skip_flushed_entries ? SkipFlushedEntries(&segments) : segments.begin();
 
     yb::OpId last_committed_op_id;
     yb::OpId last_read_entry_op_id;
@@ -1396,7 +1442,7 @@ class TabletBootstrap {
 
     SCHECK(write->has_write_batch(), Corruption, "A write request must have a write batch");
 
-    WriteOperation operation(tablet_.get(), write);
+    WriteOperation operation(tablet_, write);
     operation.set_op_id(OpId::FromPB(replicate_msg->id()));
     HybridTime hybrid_time(replicate_msg->hybrid_time());
     operation.set_hybrid_time(hybrid_time);
@@ -1495,7 +1541,7 @@ class TabletBootstrap {
   Status PlayTruncateRequest(ReplicateMsg* replicate_msg) {
     auto* req = replicate_msg->mutable_truncate();
 
-    TruncateOperation operation(tablet_.get(), req);
+    TruncateOperation operation(tablet_, req);
 
     Status s = tablet_->Truncate(&operation);
 
@@ -1642,6 +1688,9 @@ class TabletBootstrap {
   ThreadPool* append_pool_;
 
   ThreadPool* allocation_pool_;
+
+  // Thread pool for executing log fsync tasks.
+  ThreadPool* log_sync_pool_;
 
   // Statistics on the replay of entries in the log.
   struct Stats {

@@ -19,13 +19,14 @@
 
 #include "yb/docdb/cql_operation.h"
 #include "yb/docdb/doc_read_context.h"
-#include "yb/docdb/packed_row.h"
 #include "yb/docdb/pgsql_operation.h"
 
 #include "yb/tablet/read_result.h"
 #include "yb/tablet/tablet_metadata.h"
 
 #include "yb/util/trace.h"
+
+using std::vector;
 
 namespace yb {
 namespace tablet {

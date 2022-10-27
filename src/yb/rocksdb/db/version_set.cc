@@ -75,6 +75,10 @@
 #include "yb/rocksdb/util/stop_watch.h"
 #include "yb/rocksdb/util/sync_point.h"
 
+#include "yb/util/test_kill.h"
+
+using std::unique_ptr;
+
 namespace rocksdb {
 
 namespace {
@@ -758,6 +762,7 @@ void Version::GetColumnFamilyMetaData(ColumnFamilyMetaData* cf_meta) {
               file->raw_key_size + file->raw_value_size,
           ConvertBoundaryValues(file->smallest),
           ConvertBoundaryValues(file->largest),
+          file->imported,
           file->being_compacted);
       level_size += file->fd.GetTotalFileSize();
     }
@@ -1399,13 +1404,9 @@ void VersionStorageInfo::SetFinalized() {
     assert(MaxBytesForLevel(level) >= max_bytes_prev_level);
     max_bytes_prev_level = MaxBytesForLevel(level);
   }
-  int num_empty_non_l0_level = 0;
   for (int level = 0; level < num_levels(); level++) {
     assert(LevelFiles(level).size() == 0 ||
            LevelFiles(level).size() == LevelFilesBrief(level).num_files);
-    if (level > 0 && NumLevelBytes(level) > 0) {
-      num_empty_non_l0_level++;
-    }
     if (LevelFiles(level).size() > 0) {
       assert(level < num_non_empty_levels());
     }
@@ -2066,7 +2067,7 @@ std::string Version::DebugString(bool hex) const {
   return r;
 }
 
-Result<std::string> Version::GetMiddleKey() {
+Result<TableCache::TableReaderWithHandle> Version::GetLargestSstTableReader() {
   // Largest files are at lowest level.
   const auto level = storage_info_.num_levels_ - 1;
   const FileMetaData* largest_sst_meta = nullptr;
@@ -2080,11 +2081,20 @@ Result<std::string> Version::GetMiddleKey() {
     return STATUS(Incomplete, "No SST files.");
   }
 
-  const auto trwh = VERIFY_RESULT(table_cache_->GetTableReader(
+  return table_cache_->GetTableReader(
       vset_->env_options_, cfd_->internal_comparator(), largest_sst_meta->fd, kDefaultQueryId,
-      /* no_io =*/ false, cfd_->internal_stats()->GetFileReadHist(level),
-      IsFilterSkipped(level, /* is_file_last_in_level =*/ true)));
+      /* no_io = */ false, cfd_->internal_stats()->GetFileReadHist(level),
+      IsFilterSkipped(level, /* is_file_last_in_level = */ true));
+}
+
+Result<std::string> Version::GetMiddleKey() {
+  const auto trwh = VERIFY_RESULT(GetLargestSstTableReader());
   return trwh.table_reader->GetMiddleKey();
+}
+
+Result<TableReader*> Version::TEST_GetLargestSstTableReader() {
+  const auto trwh = VERIFY_RESULT(GetLargestSstTableReader());
+  return trwh.table_reader;
 }
 
 // this is used to batch writes to the manifest file
@@ -2319,7 +2329,7 @@ Status VersionSet::LogAndApply(ColumnFamilyData* column_family_data,
           break;
         }
         TEST_KILL_RANDOM("VersionSet::LogAndApply:BeforeAddRecord",
-                         rocksdb_kill_odds * REDUCE_ODDS2);
+                         test_kill_odds * REDUCE_ODDS2);
         s = descriptor_log_->AddRecord(record);
         if (!s.ok()) {
           break;
@@ -2754,7 +2764,7 @@ Status VersionSet::Recover(
             &flushed_frontier, edit.flushed_frontier_, UpdateUserValueType::kLargest);
         VLOG(1) << "Updating flushed frontier with that from edit: "
                 << edit.flushed_frontier_->ToString()
-                << ", new flushed froniter: " << flushed_frontier->ToString();
+                << ", new flushed frontier: " << flushed_frontier->ToString();
       } else {
         VLOG(1) << "No flushed frontier found in edit";
       }
@@ -3132,7 +3142,7 @@ Status VersionSet::DumpManifest(const Options& options, const std::string& dscna
   uint64_t last_sequence = 0;
   uint64_t previous_log_number = 0;
   UserFrontier* flushed_frontier = nullptr;
-  int count = 0;
+  int count __attribute__((unused)) = 0;
   std::unordered_map<uint32_t, std::string> comparators;
   std::unordered_map<uint32_t, BaseReferencedVersionBuilder*> builders;
 
@@ -3692,27 +3702,18 @@ void VersionSet::GetLiveFilesMetaData(std::vector<LiveFileMetaData>* metadata) {
     for (int level = 0; level < cfd->NumberLevels(); level++) {
       for (const auto& file :
            cfd->current()->storage_info()->LevelFiles(level)) {
-        LiveFileMetaData filemetadata;
-        filemetadata.column_family_name = cfd->GetName();
-        uint32_t path_id = file->fd.GetPathId();
-        if (path_id < db_options_->db_paths.size()) {
-          filemetadata.db_path = db_options_->db_paths[path_id].path;
-        } else {
-          assert(!db_options_->db_paths.empty());
-          filemetadata.db_path = db_options_->db_paths.back().path;
-        }
-        filemetadata.name_id = file->fd.GetNumber();
-        filemetadata.level = level;
-        filemetadata.total_size = file->fd.GetTotalFileSize();
-        filemetadata.base_size = file->fd.GetBaseFileSize();
-        // TODO: replace base_size with an accurate metadata size for
-        // uncompressed data. Look into: BlockBasedTableBuilder
-        filemetadata.uncompressed_size = filemetadata.base_size +
-            file->raw_key_size + file->raw_value_size;
-        filemetadata.smallest = ConvertBoundaryValues(file->smallest);
-        filemetadata.largest = ConvertBoundaryValues(file->largest);
-        filemetadata.imported = file->imported;
-        metadata->push_back(filemetadata);
+        const auto path_id = file->fd.GetPathId();
+        const auto& db_path = path_id < db_options_->db_paths.size()
+                                  ? db_options_->db_paths[path_id].path
+                                  : db_options_->db_paths.back().path;
+        // TODO: replace base_size with an accurate metadata size for uncompressed data.
+        // Look into: BlockBasedTableBuilder
+        const auto uncompressed_size =
+            file->fd.GetBaseFileSize() + file->raw_key_size + file->raw_value_size;
+        metadata->emplace_back(
+            cfd->GetName(), level, file->fd.GetNumber(), db_path, file->fd.GetTotalFileSize(),
+            file->fd.GetBaseFileSize(), uncompressed_size, ConvertBoundaryValues(file->smallest),
+            ConvertBoundaryValues(file->largest), file->imported, file->being_compacted);
       }
     }
   }

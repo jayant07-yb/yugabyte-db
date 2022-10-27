@@ -30,6 +30,8 @@
 #include "yb/yql/cql/ql/ptree/ptree_fwd.h"
 #include "yb/yql/cql/ql/ptree/tree_node.h"
 
+#include "yb/yql/cql/ql/ptree/column_arg.h"
+
 namespace yb {
 namespace ql {
 
@@ -82,8 +84,22 @@ class ColumnOpCounter {
   int partial_col_in_count_ = 0;
 };
 
+class AnalyzeStepState {
+ public:
+  explicit AnalyzeStepState(MCList<PartitionKeyOp> *partition_key_ops)
+      : partition_key_ops_(partition_key_ops) {}
+
+  virtual ~AnalyzeStepState() = default;
+
+  virtual Status AnalyzePartitionKeyOp(SemContext *sem_context,
+                                       const PTRelationExpr *expr,
+                                       PTExprPtr value);
+ private:
+  MCList<PartitionKeyOp> *partition_key_ops_;
+};
+
 // State variables for where clause.
-class WhereExprState {
+class WhereExprState : public AnalyzeStepState {
  public:
   WhereExprState(MCList<ColumnOp> *ops,
                  MCVector<ColumnOp> *key_ops,
@@ -93,16 +109,18 @@ class WhereExprState {
                  MCVector<ColumnOpCounter> *op_counters,
                  ColumnOpCounter *partition_key_counter,
                  TreeNodeOpcode statement_type,
-                 MCList<FuncOp> *func_ops)
-    : ops_(ops),
+                 MCList<FuncOp> *func_ops,
+                 MCList<MultiColumnOp> *multi_col_ops)
+    : AnalyzeStepState(partition_key_ops),
+      ops_(ops),
       key_ops_(key_ops),
       subscripted_col_ops_(subscripted_col_ops),
       json_col_ops_(json_col_ops),
-      partition_key_ops_(partition_key_ops),
       op_counters_(op_counters),
       partition_key_counter_(partition_key_counter),
       statement_type_(statement_type),
-      func_ops_(func_ops) {
+      func_ops_(func_ops),
+      multi_colum_ops_(multi_col_ops) {
   }
 
   Status AnalyzeColumnOp(SemContext *sem_context,
@@ -111,14 +129,19 @@ class WhereExprState {
                                  PTExprPtr value,
                                  PTExprListNodePtr args = nullptr);
 
+  Status AnalyzeMultiColumnOp(SemContext *sem_context,
+                                      const PTRelationExpr *expr,
+                                      const std::vector<const ColumnDesc *> col_desc,
+                                      PTExprPtr value);
+
   Status AnalyzeColumnFunction(SemContext *sem_context,
                                        const PTRelationExpr *expr,
                                        PTExprPtr value,
                                        PTBcallPtr call);
 
   Status AnalyzePartitionKeyOp(SemContext *sem_context,
-                                       const PTRelationExpr *expr,
-                                       PTExprPtr value);
+                               const PTRelationExpr *expr,
+                               PTExprPtr value) override;
 
   MCList<FuncOp> *func_ops() {
     return func_ops_;
@@ -136,8 +159,6 @@ class WhereExprState {
   // Operators on json columns (e.g. c1->'a'->'b'->>'c')
   MCList<JsonColumnOp> *json_col_ops_;
 
-  MCList<PartitionKeyOp> *partition_key_ops_;
-
   // Counters of '=', '<', and '>' operators for each column in the where expression.
   MCVector<ColumnOpCounter> *op_counters_;
 
@@ -148,6 +169,8 @@ class WhereExprState {
   TreeNodeOpcode statement_type_;
 
   MCList<FuncOp> *func_ops_;
+
+  MCList<MultiColumnOp> *multi_colum_ops_;
 };
 
 //--------------------------------------------------------------------------------------------------
@@ -254,6 +277,10 @@ class PTDmlStmt : public PTCollection {
     return where_ops_;
   }
 
+  const MCList<MultiColumnOp> &multi_col_where_ops() const {
+    return multi_col_where_ops_;
+  }
+
   const MCList<SubscriptedColumnOp>& subscripted_col_where_ops() const {
     return subscripted_col_where_ops_;
   }
@@ -301,6 +328,16 @@ class PTDmlStmt : public PTCollection {
     return bind_variables_;
   }
 
+  // Compare 2 bind variables for their hash column ids.
+  struct HashColCmp {
+    bool operator()(const PTBindVar* v1, const PTBindVar* v2) const;
+  };
+  typedef MCSet<PTBindVar*, HashColCmp> PTBindVarSet;
+
+  const PTBindVarSet& TEST_hash_col_bindvars() const {
+    return hash_col_bindvars_;
+  }
+
   virtual std::vector<int64_t> hash_col_indices() const;
 
   // Access for column_args.
@@ -344,7 +381,7 @@ class PTDmlStmt : public PTCollection {
   }
 
   // Access for selected result.
-  const std::shared_ptr<vector<ColumnSchema>>& selected_schemas() const {
+  const std::shared_ptr<std::vector<ColumnSchema>>& selected_schemas() const {
     return selected_schemas_;
   }
 
@@ -455,19 +492,15 @@ class PTDmlStmt : public PTCollection {
   MCList<FuncOp> func_ops_;
   MCVector<ColumnOp> key_where_ops_;
   MCList<ColumnOp> where_ops_;
+  MCList<MultiColumnOp> multi_col_where_ops_;
   MCList<SubscriptedColumnOp> subscripted_col_where_ops_;
   MCList<JsonColumnOp> json_col_where_ops_;
 
   // restrictions involving all hash/partition columns -- i.e. read requests using Token builtin
   MCList<PartitionKeyOp> partition_key_ops_;
 
-  // Compare 2 bind variables for their hash column ids.
-  struct HashColCmp {
-    bool operator()(const PTBindVar* v1, const PTBindVar* v2) const;
-  };
-
   // List of bind variables associated with hash columns ordered by their column ids.
-  MCSet<PTBindVar*, HashColCmp> hash_col_bindvars_;
+  PTBindVarSet hash_col_bindvars_;
 
   MCSharedPtr<MCVector<ColumnArg>> column_args_;
   MCSharedPtr<MCVector<SubscriptedColumnArg>> subscripted_col_args_;
@@ -490,7 +523,7 @@ class PTDmlStmt : public PTCollection {
   // Selected schema - a vector pair<name, datatype> - is used when describing the result set.
   // NOTE: Only SELECT and DML with RETURN clause statements have outputs.
   //       We prepare this vector once at compile time and use it at execution times.
-  std::shared_ptr<vector<ColumnSchema>> selected_schemas_;
+  std::shared_ptr<std::vector<ColumnSchema>> selected_schemas_;
 
   // The set of indexes that index primary key columns of the indexed table only and the set of
   // indexes that do not.

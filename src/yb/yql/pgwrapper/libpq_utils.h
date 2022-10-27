@@ -88,28 +88,12 @@ class PGConn {
   PGConn(PGConn&& rhs);
   PGConn& operator=(PGConn&& rhs);
 
-  static Result<PGConn> Connect(
-      const HostPort& host_port,
-      bool simple_query_protocol = false) {
-    return Connect(host_port, "" /* db_name */, simple_query_protocol);
-  }
-  static Result<PGConn> Connect(
-      const HostPort& host_port,
-      const std::string& db_name,
-      bool simple_query_protocol = false) {
-    return Connect(host_port, db_name, "postgres" /* user */, simple_query_protocol);
-  }
-  static Result<PGConn> Connect(
-      const HostPort& host_port,
-      const std::string& db_name,
-      const std::string& user,
-      bool simple_query_protocol = false);
   // Pass in an optional conn_str_for_log for logging purposes. This is used in case
   // conn_str contains sensitive information (e.g. password).
   static Result<PGConn> Connect(
       const std::string& conn_str,
-      bool simple_query_protocol = false,
-      const boost::optional<std::string>& conn_str_for_log = boost::none) {
+      bool simple_query_protocol,
+      const std::string& conn_str_for_log) {
     return Connect(conn_str,
                    CoarseMonoClock::Now() + MonoDelta::FromSeconds(60) /* deadline */,
                    simple_query_protocol,
@@ -118,8 +102,8 @@ class PGConn {
   static Result<PGConn> Connect(
       const std::string& conn_str,
       CoarseTimePoint deadline,
-      bool simple_query_protocol = false,
-      const boost::optional<std::string>& conn_str_for_log = boost::none);
+      bool simple_query_protocol,
+      const std::string& conn_str_for_log);
 
   Status Execute(const std::string& command, bool show_query_in_error = true);
 
@@ -155,6 +139,7 @@ class PGConn {
 
   // Would this query use an index [only] scan?
   Result<bool> HasIndexScan(const std::string& query);
+  Result<bool> HasScanType(const std::string& query, const std::string expected_scan_type);
 
   Status CopyBegin(const std::string& command);
   Result<PGResultPtr> CopyEnd();
@@ -185,6 +170,29 @@ class PGConn {
   PGConnPtr impl_;
   bool simple_query_protocol_;
   std::unique_ptr<CopyData> copy_data_;
+};
+
+// Settings to pass to PGConnBuilder.
+struct PGConnSettings {
+  constexpr static const char* kDefaultUser = "postgres";
+
+  const std::string& host;
+  uint16_t port;
+  const std::string& dbname = std::string();
+  const std::string& user = kDefaultUser;
+  const std::string& password = std::string();
+  size_t connect_timeout = 0;
+};
+
+class PGConnBuilder {
+ public:
+  explicit PGConnBuilder(const PGConnSettings& settings);
+  Result<PGConn> Connect(bool simple_query_protocol = false) const;
+
+ private:
+  const std::string conn_str_;
+  const std::string conn_str_for_log_;
+  const size_t connect_timeout_;
 };
 
 bool HasTryAgain(const Status& status);

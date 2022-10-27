@@ -1,17 +1,17 @@
 ---
-title: Manage clusters
+title: How to manage clusters
 headerTitle: Manage clusters
 linkTitle: Manage clusters
-description: Manage your YugabyteDB Managed clusters.
+description: Get an overview of how to scale your database clusters, configure backups and maintenance windows, and pause or delete clusters in YugabyteDB Managed.
 image: /images/section_icons/architecture/core_functions/universe.png
 headcontent: Scale clusters, configure backups and maintenance windows, and pause or delete clusters.
-section: YUGABYTEDB MANAGED
 menu:
-  preview:
+  preview_yugabyte-cloud:
+    parent: yugabytedb-managed
     identifier: cloud-clusters
     weight: 150
+type: indexpage
 ---
-
 YugabyteDB Managed provides the following tools to manage clusters:
 
 - [Scaling](configure-clusters/) - To ensure the cluster configuration matches its performance requirements, scale the cluster vertically or horizontally as your requirements change.
@@ -23,11 +23,11 @@ YugabyteDB Managed provides the following tools to manage clusters:
 
 To reduce costs on unused clusters, you can pause or delete them.
 
-Access **Pause/Resume Cluster** and **Terminate Cluster** via the cluster **More Links** menu, or click the three dots icon for the cluster on the **Clusters** page.
+Access **Pause/Resume Cluster** and **Terminate Cluster** via the cluster **Actions** menu, or click the three dots icon for the cluster on the **Clusters** page.
 
 Deleting a cluster deletes all of its data, including backups.
 
-Paused clusters are not billed for instance vCPU capacity. Disk and backup storage are charged at the standard rate (refer to [Cluster costs](../cloud-admin/cloud-billing-costs/#paused-cluster-costs)). You can't change the configuration, or read and write data to a paused cluster. Alerts and backups are also stopped. Existing backups remain until they expire. You can't pause a free cluster. Yugabyte notifies you when a cluster is paused for 30 days.
+Paused clusters are not billed for instance vCPU capacity. Disk and backup storage are charged at the standard rate (refer to [Cluster costs](../cloud-admin/cloud-billing-costs/#paused-cluster-costs)). You can't change the configuration, or read and write data to a paused cluster. Alerts and backups are also stopped. Existing backups remain until they expire. You can't pause a Sandbox cluster. Yugabyte notifies you when a cluster is paused for 30 days.
 
 <div class="row">
 

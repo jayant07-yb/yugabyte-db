@@ -34,7 +34,7 @@
 
 using namespace std::literals;
 
-DEFINE_int32(retryable_request_timeout_secs, 120,
+DEFINE_int32(retryable_request_timeout_secs, 660,
              "Amount of time to keep write request in index, to prevent duplicate writes.");
 TAG_FLAG(retryable_request_timeout_secs, runtime);
 
@@ -211,6 +211,10 @@ class RetryableRequests::Impl {
  public:
   explicit Impl(std::string log_prefix) : log_prefix_(std::move(log_prefix)) {
     VLOG_WITH_PREFIX(1) << "Start";
+  }
+
+  void set_log_prefix(const std::string& log_prefix) {
+    log_prefix_ = log_prefix;
   }
 
   Result<bool> Register(const ConsensusRoundPtr& round, RestartSafeCoarseTimePoint entry_time) {
@@ -536,7 +540,7 @@ class RetryableRequests::Impl {
     return log_prefix_;
   }
 
-  const std::string log_prefix_;
+  std::string log_prefix_;
   std::unordered_map<ClientId, ClientRetryableRequests, ClientIdHash> clients_;
   RestartSafeCoarseMonoClock clock_;
   scoped_refptr<AtomicGauge<int64_t>> running_requests_gauge_;
@@ -548,6 +552,10 @@ RetryableRequests::RetryableRequests(std::string log_prefix)
 }
 
 RetryableRequests::~RetryableRequests() {
+}
+
+RetryableRequests::RetryableRequests(const RetryableRequests& rhs)
+    : impl_(new Impl(*rhs.impl_)) {
 }
 
 RetryableRequests::RetryableRequests(RetryableRequests&& rhs) : impl_(std::move(rhs.impl_)) {}
@@ -590,6 +598,10 @@ Result<RetryableRequestId> RetryableRequests::MinRunningRequestId(
 
 void RetryableRequests::SetMetricEntity(const scoped_refptr<MetricEntity>& metric_entity) {
   impl_->SetMetricEntity(metric_entity);
+}
+
+void RetryableRequests::set_log_prefix(const std::string& log_prefix) {
+  impl_->set_log_prefix(log_prefix);
 }
 
 } // namespace consensus

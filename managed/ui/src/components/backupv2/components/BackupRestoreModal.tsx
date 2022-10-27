@@ -17,7 +17,17 @@
 
 import React, { FC, useState } from 'react';
 import { Alert, Col, Row } from 'react-bootstrap';
-import { getKMSConfigs, IBackup, IUniverse, Keyspace_Table, restoreEntireBackup } from '..';
+import {
+  getKMSConfigs,
+  IBackup,
+  ITable,
+  IUniverse,
+  Keyspace_Table,
+  restoreEntireBackup,
+  fetchIncrementalBackup,
+  Backup_States,
+  ICommonBackupInfo
+} from '..';
 import { YBModalForm } from '../../common/forms';
 import {
   FormatUnixTimeStampTimeToTimezone,
@@ -41,12 +51,16 @@ import { toast } from 'react-toastify';
 import { components } from 'react-select';
 import { Badge_Types, StatusBadge } from '../../common/badge/StatusBadge';
 import { YBSearchInput } from '../../common/forms/fields/YBSearchInput';
-import { isFunction } from 'lodash';
-import { BACKUP_API_TYPES, TableType } from '../common/IBackup';
+import { find, isFunction, omit } from 'lodash';
+import { BACKUP_API_TYPES } from '../common/IBackup';
+import { TableType } from '../../../redesign/helpers/dtos';
+import clsx from 'clsx';
+import { isYbcEnabledUniverse } from '../../../utils/UniverseUtils';
+import { isDefinedNotNull } from '../../../utils/ObjectUtils';
 import './BackupRestoreModal.scss';
 
 interface RestoreModalProps {
-  backup_details: IBackup | null;
+  backup_details: IBackup;
   onHide: Function;
   visible: boolean;
 }
@@ -75,9 +89,21 @@ const STEPS = [
   }
 ];
 
+const isYBCEnabledInUniverse = (universeList: IUniverse[], currentUniverseUUID: string) => {
+  const universe = find(universeList, { universeUUID: currentUniverseUUID });
+  return isYbcEnabledUniverse(universe?.universeDetails);
+};
+
 export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHide, visible }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [isFetchingTables, setIsFetchingTables] = useState(false);
+  const { data: incrementalBackups, isLoading: isIncBackupLoading, isError } = useQuery(
+    ['incremental_backups', backup_details.commonBackupInfo.baseBackupUUID],
+    () => fetchIncrementalBackup(backup_details.commonBackupInfo.baseBackupUUID),
+    {
+      enabled: backup_details?.hasIncrementalBackups
+    }
+  );
 
   const [overrideSubmitLabel, setOverrideSubmitLabel] = useState(TEXT_RESTORE);
 
@@ -95,8 +121,19 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
     : [];
 
   const restore = useMutation(
-    ({ backup_details, values }: { backup_details: IBackup; values: Record<string, any> }) =>
-      restoreEntireBackup(backup_details, values),
+    ({ backup_details, values }: { backup_details: IBackup; values: Record<string, any> }) => {
+      if (isYBCEnabledInUniverse(universeList!, values['targetUniverseUUID'].value)) {
+        values = omit(values, 'parallelThreads');
+      }
+      if (backup_details?.hasIncrementalBackups && incrementalBackups && !isError) {
+        //Backend is already sending reponse in sorted order
+        const recentBackup = incrementalBackups.data.filter(
+          (e: ICommonBackupInfo) => e.state === Backup_States.COMPLETED
+        )[0];
+        return restoreEntireBackup({ ...backup_details, commonBackupInfo: recentBackup }, values);
+      }
+      return restoreEntireBackup(backup_details, values);
+    },
     {
       onSuccess: (resp) => {
         setCurrentStep(0);
@@ -119,9 +156,15 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
     }
   );
 
-  const footerActions = [() => {}, () => setCurrentStep(currentStep - 1)];
+  const footerActions = [
+    () => {},
+    () => {
+      setCurrentStep(currentStep - 1);
+      setOverrideSubmitLabel(TEXT_RENAME_DATABASE);
+    }
+  ];
 
-  if (isUniverseListLoading) {
+  if (isUniverseListLoading && isIncBackupLoading) {
     return <YBLoading />;
   }
 
@@ -129,7 +172,7 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
     targetUniverseUUID: undefined,
     parallelThreads: 1,
     backup: backup_details,
-    keyspaces: Array(backup_details?.responseList.length).fill(''),
+    keyspaces: Array(backup_details?.commonBackupInfo.responseList.length).fill(''),
     kmsConfigUUID: null,
     should_rename_keyspace: false,
     disable_keyspace_rename: false
@@ -152,14 +195,36 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
       }
       return;
     }
+
+    // find if the duplicate values is present in rename values
+    const duplicatesInRenameValues: boolean[] = values.keyspaces
+      .filter(Boolean)
+      .map((item: string, index: number) => values.keyspaces.indexOf(item) === index);
+
+    if (!duplicatesInRenameValues.every((val) => val)) {
+      duplicatesInRenameValues.forEach(
+        (val, index) =>
+          !val &&
+          options.setFieldError &&
+          options.setFieldError(`keyspaces[${index}]`, 'Duplicate name')
+      );
+      return;
+    }
+
     setIsFetchingTables(true);
     options.setFieldValue('should_rename_keyspace', true, false);
     options.setFieldValue('disable_keyspace_rename', true, false);
 
-    const fetchKeyspace = await fetchTablesInUniverse(values['targetUniverseUUID'].value);
+    let fetchKeyspace: { data: ITable[] } = { data: [] };
+    try {
+      fetchKeyspace = await fetchTablesInUniverse(values['targetUniverseUUID'].value);
+    } catch (ex) {
+      setIsFetchingTables(false);
+      toast.error(`unable to fetch database for "${values['targetUniverseUUID'].label}"`);
+    }
     setIsFetchingTables(false);
 
-    const keyspaceInForm = backup_details!.responseList.map(
+    const keyspaceInForm = backup_details!.commonBackupInfo.responseList.map(
       (k, i) => values['keyspaces'][i] || k.keyspace
     );
 
@@ -170,8 +235,9 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
       isFunction(options.setSubmitting) && options.setSubmitting(true);
       return;
     }
-
-    const keyspaceInTargetUniverse = fetchKeyspace.data.map((k: any) => k.keySpace);
+    const keyspaceInTargetUniverse = fetchKeyspace.data
+      .filter((k) => k.tableType === values['backup']['backupType'])
+      .map((k) => k.keySpace);
     let hasErrors = false;
 
     keyspaceInForm.forEach((k: string, index: number) => {
@@ -185,7 +251,11 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
     options.setFieldValue('should_rename_keyspace', hasErrors, false);
     options.setFieldValue('disable_keyspace_rename', hasErrors, false);
 
-    setOverrideSubmitLabel(hasErrors ? TEXT_RENAME_DATABASE : TEXT_RESTORE);
+    if (hasErrors) {
+      options.setFieldValue('searchText', '', false);
+    }
+
+    setOverrideSubmitLabel(hasErrors && currentStep === 0 ? TEXT_RENAME_DATABASE : TEXT_RESTORE);
 
     isFunction(options.setSubmitting) && options.setSubmitting(false);
 
@@ -242,6 +312,14 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
       }}
       initialValues={initialValues}
       submitLabel={overrideSubmitLabel}
+      headerClassName={clsx({
+        'show-back-button': currentStep > 0
+      })}
+      showBackButton={currentStep > 0}
+      backBtnCallbackFn={() => {
+        setCurrentStep(currentStep - 1);
+        setOverrideSubmitLabel(TEXT_RENAME_DATABASE);
+      }}
       onHide={() => {
         setCurrentStep(0);
         onHide();
@@ -252,7 +330,7 @@ export const BackupRestoreModal: FC<RestoreModalProps> = ({ backup_details, onHi
         <>
           {isFetchingTables && (
             <Row>
-              <Col lg={12} className="keyspace-loading">
+              <Col lg={12} className="keyspace-loading no-padding">
                 <Alert bsStyle="info">{SPINNER_ICON} Please wait. Doing pre-flight check</Alert>
               </Col>
             </Row>
@@ -308,6 +386,15 @@ function RestoreChooseUniverseForm({
     );
   }
 
+  let isYbcEnabledinCurrentUniverse = false;
+
+  if (isDefinedNotNull(values['targetUniverseUUID']?.value)) {
+    isYbcEnabledinCurrentUniverse = isYBCEnabledInUniverse(
+      universeList,
+      values['targetUniverseUUID']?.value
+    );
+  }
+
   return (
     <div className="restore-choose-universe">
       <Row className="backup-info">
@@ -317,16 +404,18 @@ function RestoreChooseUniverseForm({
         </Col>
         <Col lg={6} className="no-padding align-right">
           <div className="title">Created at</div>
-          <FormatUnixTimeStampTimeToTimezone timestamp={backup_details.createTime} />
+          <FormatUnixTimeStampTimeToTimezone
+            timestamp={backup_details.commonBackupInfo.createTime}
+          />
         </Col>
       </Row>
       <Row>
-        <Col lg={12}>
+        <Col lg={12} className="no-padding">
           <h5>Restore to</h5>
         </Col>
       </Row>
       <Row>
-        <Col lg={8}>
+        <Col lg={8} className="no-padding">
           <Field
             name="targetUniverseUUID"
             component={YBFormSelect}
@@ -370,6 +459,15 @@ function RestoreChooseUniverseForm({
             onChange={(_: any, val: any) => {
               setFieldValue('targetUniverseUUID', val ?? undefined);
               if (!val) return;
+              const targetUniverse = sourceUniverseNameAtFirst.find(
+                (u) => u.universeUUID === val.value
+              );
+              if (targetUniverse) {
+                const primaryCluster = find(targetUniverse.universeDetails?.clusters, {
+                  clusterType: 'PRIMARY'
+                });
+                setFieldValue('parallelThreads', primaryCluster?.userIntent?.numNodes);
+              }
               setSubmitting(true);
               validateTablesAndRestore(
                 {
@@ -386,12 +484,13 @@ function RestoreChooseUniverseForm({
         </Col>
       </Row>
       <Row>
-        <Col lg={8}>
+        <Col lg={8} className="no-padding">
           <Field
             name="kmsConfigUUID"
             component={YBFormSelect}
             label={'KMS Configuration (Optional)'}
             options={kmsConfigList}
+            isClearable
           />
         </Col>
       </Row>
@@ -424,21 +523,23 @@ function RestoreChooseUniverseForm({
           </Col>
         </Row>
       )}
-      <Row>
-        <Col lg={8}>
-          <Field
-            name="parallelThreads"
-            component={YBControlledNumericInputWithLabel}
-            label="Parallel threads (Optional)"
-            onInputChanged={(val: string) => setFieldValue('parallelThreads', parseInt(val))}
-            val={values['parallelThreads']}
-            minVal={1}
-          />
-          {errors['parallelThreads'] && (
-            <span className="err-msg">{errors['parallelThreads']}</span>
-          )}
-        </Col>
-      </Row>
+      {!isYbcEnabledinCurrentUniverse && (
+        <Row>
+          <Col lg={8} className="no-padding">
+            <Field
+              name="parallelThreads"
+              component={YBControlledNumericInputWithLabel}
+              label="Parallel threads (Optional)"
+              onInputChanged={(val: string) => setFieldValue('parallelThreads', parseInt(val))}
+              val={values['parallelThreads']}
+              minVal={1}
+            />
+            {errors['parallelThreads'] && (
+              <span className="err-msg">{errors['parallelThreads']}</span>
+            )}
+          </Col>
+        </Row>
+      )}
     </div>
   );
 }
@@ -447,14 +548,18 @@ export function RenameKeyspace({
   values,
   setFieldValue
 }: {
-  values: Record<string, any>;
+  values: {
+    backup: IBackup;
+    [key: string]: any;
+  };
   setFieldValue: Function;
 }) {
   return (
     <div className="rename-keyspace-step">
       <Row>
-        <Col lg={6}>
+        <Col lg={12} className="no-padding">
           <YBSearchInput
+            val={values['searchText']}
             placeHolder="Search keyspace"
             onValueChanged={(e: React.ChangeEvent<HTMLInputElement>) => {
               setFieldValue('searchText', e.target.value);
@@ -463,42 +568,48 @@ export function RenameKeyspace({
         </Col>
       </Row>
       <Row className="help-text">
-        <Col lg={12}>Rename keyspace/database in this backup (Optional)</Col>
+        <Col lg={12} className="no-padding">
+          Databases in this backup
+        </Col>
       </Row>
-
       <FieldArray
         name="keyspaces"
         render={({ form: { errors } }) =>
-          values.backup.responseList.map((keyspace: Keyspace_Table, index: number) =>
-            values['searchText'] &&
-            keyspace.keyspace &&
-            keyspace.keyspace.indexOf(values['searchText']) === -1 ? null : (
-              <Row key={index}>
-                <Col lg={6} className="keyspaces-input">
-                  <Field
-                    name={`keyspaces[${index}]`}
-                    component={YBInputField}
-                    input={{
-                      disabled: true,
-                      value: keyspace.keyspace
-                    }}
-                  />
-                  {errors['keyspaces']?.[index] && !values['keyspaces']?.[index] && (
-                    <span className="err-msg">Name already exists. Rename to proceed</span>
-                  )}
-                </Col>
-                <Col lg={6}>
-                  <Field
-                    name={`keyspaces[${index}]`}
-                    component={YBInputField}
-                    onValueChanged={(val: any) => setFieldValue(`keyspaces[${index}]`, val)}
-                  />
-                  {errors['keyspaces']?.[index] && values['keyspaces']?.[index] && (
-                    <span className="err-msg">{errors['keyspaces'][index]}</span>
-                  )}
-                </Col>
-              </Row>
-            )
+          values.backup.commonBackupInfo.responseList.map(
+            (keyspace: Keyspace_Table, index: number) =>
+              values['searchText'] &&
+              keyspace.keyspace &&
+              keyspace.keyspace.indexOf(values['searchText']) === -1 ? null : (
+                <Row key={index}>
+                  <Col lg={6} className="keyspaces-input no-padding">
+                    <Field
+                      name={`keyspaces[${index}]`}
+                      component={YBInputField}
+                      input={{
+                        disabled: true,
+                        value: keyspace.keyspace
+                      }}
+                    />
+                    {errors['keyspaces']?.[index] && !values['keyspaces']?.[index] && (
+                      <span className="err-msg">Name already exists. Rename to proceed</span>
+                    )}
+                  </Col>
+                  <Col lg={6}>
+                    <Field
+                      name={`keyspaces[${index}]`}
+                      component={YBInputField}
+                      input={{
+                        value: values['keyspaces'][`${index}`]
+                      }}
+                      onValueChanged={(val: any) => setFieldValue(`keyspaces[${index}]`, val)}
+                      placeHolder="Add new name"
+                    />
+                    {errors['keyspaces']?.[index] && values['keyspaces']?.[index] && (
+                      <span className="err-msg">{errors['keyspaces'][index]}</span>
+                    )}
+                  </Col>
+                </Row>
+              )
           )
         }
       />

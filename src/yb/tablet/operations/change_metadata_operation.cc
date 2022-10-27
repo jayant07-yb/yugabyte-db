@@ -51,6 +51,8 @@
 #include "yb/util/status_format.h"
 #include "yb/util/trace.h"
 
+using std::string;
+
 namespace yb {
 namespace tablet {
 
@@ -70,8 +72,8 @@ ChangeMetadataRequestPB* RequestTraits<ChangeMetadataRequestPB>::MutableRequest(
 }
 
 ChangeMetadataOperation::ChangeMetadataOperation(
-    Tablet* tablet, log::Log* log, const ChangeMetadataRequestPB* request)
-    : ExclusiveSchemaOperation(tablet, request), log_(log) {
+    TabletPtr tablet, log::Log* log, const ChangeMetadataRequestPB* request)
+    : ExclusiveSchemaOperation(std::move(tablet), request), log_(log) {
 }
 
 ChangeMetadataOperation::ChangeMetadataOperation(const ChangeMetadataRequestPB* request)
@@ -103,7 +105,7 @@ Status ChangeMetadataOperation::Prepare() {
     }
   }
 
-  Tablet* tablet = this->tablet();
+  TabletPtr tablet = VERIFY_RESULT(tablet_safe());
   RETURN_NOT_OK(tablet->CreatePreparedChangeMetadata(this, schema_holder_.get()));
 
   SetIndexes(request()->indexes());
@@ -115,7 +117,7 @@ Status ChangeMetadataOperation::Prepare() {
 Status ChangeMetadataOperation::DoReplicated(int64_t leader_term, Status* complete_status) {
   TRACE("APPLY CHANGE-METADATA: Starting");
 
-  Tablet* tablet = this->tablet();
+  TabletPtr tablet = VERIFY_RESULT(tablet_safe());
   log::Log* log = mutable_log();
   size_t num_operations = 0;
 
@@ -137,6 +139,7 @@ Status ChangeMetadataOperation::DoReplicated(int64_t leader_term, Status* comple
     ADD_TABLE,
     REMOVE_TABLE,
     BACKFILL_DONE,
+    ADD_MULTIPLE_TABLES,
   };
 
   MetadataChange metadata_change = MetadataChange::NONE;
@@ -167,6 +170,13 @@ Status ChangeMetadataOperation::DoReplicated(int64_t leader_term, Status* comple
     metadata_change = MetadataChange::NONE;
     if (++num_operations == 1) {
       metadata_change = MetadataChange::BACKFILL_DONE;
+    }
+  }
+
+  if (request()->add_multiple_tables_size()) {
+    metadata_change = MetadataChange::NONE;
+    if (++num_operations == 1) {
+      metadata_change = MetadataChange::ADD_MULTIPLE_TABLES;
     }
   }
 
@@ -202,6 +212,11 @@ Status ChangeMetadataOperation::DoReplicated(int64_t leader_term, Status* comple
                                    << num_operations;
       RETURN_NOT_OK(tablet->MarkBackfillDone(request()->backfill_done_table_id()));
       break;
+    case MetadataChange::ADD_MULTIPLE_TABLES:
+      DCHECK_EQ(1, num_operations) << "Invalid number of change metadata operations: "
+                                   << num_operations;
+      RETURN_NOT_OK(tablet->AddMultipleTables(request()->add_multiple_tables()));
+      break;
   }
 
   // Now that all of the changes have been applied and the commit is durable
@@ -220,7 +235,7 @@ Status SyncReplicateChangeMetadataOperation(
     TabletPeer* tablet_peer,
     int64_t term) {
   auto operation = std::make_unique<ChangeMetadataOperation>(
-      tablet_peer->tablet(), tablet_peer->log(), req);
+      VERIFY_RESULT(tablet_peer->shared_tablet_safe()), tablet_peer->log(), req);
 
   Synchronizer synchronizer;
 

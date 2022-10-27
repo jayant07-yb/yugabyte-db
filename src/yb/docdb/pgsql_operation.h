@@ -35,10 +35,10 @@ class PgsqlWriteOperation :
     public DocExprExecutor {
  public:
   PgsqlWriteOperation(std::reference_wrapper<const PgsqlWriteRequestPB> request,
-                      const DocReadContext& doc_read_context,
+                      DocReadContextPtr doc_read_context,
                       const TransactionOperationContext& txn_op_context)
       : DocOperationBase(request),
-        doc_read_context_(doc_read_context),
+        doc_read_context_(std::move(doc_read_context)),
         txn_op_context_(txn_op_context) {
   }
 
@@ -89,22 +89,32 @@ class PgsqlWriteOperation :
   Status ApplyTruncateColocated(const DocOperationApplyData& data);
 
   Status DeleteRow(const DocPath& row_path, DocWriteBatch* doc_write_batch,
-                           const ReadHybridTime& read_ht, CoarseTimePoint deadline);
+                   const ReadHybridTime& read_ht, CoarseTimePoint deadline);
 
   // Reading current row before operating on it.
-  Status ReadColumns(const DocOperationApplyData& data,
-                             QLTableRow* table_row);
+  Status ReadColumns(const DocOperationApplyData& data, QLTableRow* table_row);
 
   Status PopulateResultSet(const QLTableRow& table_row);
 
   // Reading path to operate on.
   Status GetDocPaths(GetDocPathsMode mode,
-                             DocPathsToLock *paths,
-                             IsolationLevel *level) const override;
+                     DocPathsToLock *paths,
+                     IsolationLevel *level) const override;
+
+  class RowPackContext;
+
+  Status InsertColumn(
+      const DocOperationApplyData& data, const QLTableRow& table_row,
+      const PgsqlColumnValuePB& column_value, RowPackContext* pack_context);
+
+  Status UpdateColumn(
+      const DocOperationApplyData& data, const QLTableRow& table_row,
+      const PgsqlColumnValuePB& column_value, QLTableRow* returning_table_row,
+      QLExprResult* result, RowPackContext* pack_context);
 
   //------------------------------------------------------------------------------------------------
   // Context.
-  const DocReadContext& doc_read_context_;
+  DocReadContextPtr doc_read_context_;
   const TransactionOperationContext txn_op_context_;
 
   // Input arguments.

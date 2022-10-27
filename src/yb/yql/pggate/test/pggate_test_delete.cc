@@ -21,6 +21,8 @@
 #include "yb/yql/pggate/test/pggate_test.h"
 #include "yb/yql/pggate/ybc_pggate.h"
 
+using std::string;
+
 namespace yb {
 namespace pggate {
 
@@ -45,6 +47,7 @@ TEST_F(PggateTestDelete, TestDelete) {
                                        kInvalidOid /* tablegroup_id */,
                                        kColocationIdNotSet /* colocation_id */,
                                        kInvalidOid /* tablespace_id */,
+                                       false /* is_matview */,
                                        kInvalidOid /* matview_pg_table_id */,
                                        &pg_stmt));
   CHECK_YBC_STATUS(YBCTestCreateTableAddColumn(pg_stmt, "hash_key", ++col_count,

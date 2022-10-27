@@ -35,7 +35,7 @@ class WriteQuery {
   WriteQuery(int64_t term,
              CoarseTimePoint deadline,
              WriteQueryContext* context,
-             Tablet* tablet,
+             TabletPtr tablet,
              tserver::WriteResponsePB *response = nullptr,
              docdb::OperationKind kind = docdb::OperationKind::kWrite);
 
@@ -168,7 +168,8 @@ class WriteQuery {
 
   void CompleteQLWriteBatch(const Status& status);
 
-  void SchemaVersionMismatch(int num_mismatches, int batch_size);
+  template <class Code, class Resp>
+  void SchemaVersionMismatch(Code code, int size, Resp* resp);
 
   bool CqlCheckSchemaVersion();
   bool PgsqlCheckSchemaVersion();

@@ -61,7 +61,6 @@ class WriteBatch;
 class Env;
 class EventListener;
 
-using std::unique_ptr;
 
 extern const char kDefaultColumnFamilyName[];
 
@@ -780,7 +779,7 @@ class DB {
   // cleared aggressively and the iterator might keep getting invalid before
   // an update is read.
   virtual Status GetUpdatesSince(
-      SequenceNumber seq_number, unique_ptr<TransactionLogIterator>* iter,
+      SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,
       const TransactionLogIterator::ReadOptions&
           read_options = TransactionLogIterator::ReadOptions()) = 0;
 
@@ -917,6 +916,11 @@ class DB {
 
   // Returns approximate middle key (see Version::GetMiddleKey).
   virtual yb::Result<std::string> GetMiddleKey() = 0;
+
+  // Returns a table reader for the largest SST file.
+  virtual yb::Result<TableReader*> TEST_GetLargestSstTableReader() {
+    return STATUS(NotSupported, "");
+  }
 
   // Used in testing to make the old memtable immutable and start writing to a new one.
   virtual void TEST_SwitchMemtable() {}

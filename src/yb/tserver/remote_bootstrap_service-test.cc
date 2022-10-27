@@ -57,6 +57,9 @@
 #include "yb/util/stopwatch.h"
 #include "yb/util/test_util.h"
 
+using std::string;
+using std::vector;
+
 #define ASSERT_REMOTE_ERROR(status, err, code, str) \
     ASSERT_NO_FATALS(AssertRemoteError(status, err, code, str))
 
@@ -129,7 +132,8 @@ class RemoteBootstrapServiceTest : public RemoteBootstrapTest {
     CheckRemoteBootstrapSessionActiveRequestPB req;
     req.set_session_id(session_id);
     return UnwindRemoteError(
-        remote_bootstrap_proxy_->CheckSessionActive(req, resp, controller), controller);
+        remote_bootstrap_proxy_->CheckRemoteBootstrapSessionActive(req, resp, controller),
+        controller);
   }
 
   Status DoFetchData(const string& session_id, const DataIdPB& data_id,
@@ -365,7 +369,7 @@ TEST_F(RemoteBootstrapServiceTest, TestFetchLog) {
   ASSERT_EQ(segment_seqno, first_seg_seqno)
       << "Expected equal sequence numbers: " << segment_seqno
       << " and " << first_seg_seqno;
-  const scoped_refptr<ReadableLogSegment>& segment = local_segments[0];
+  const scoped_refptr<ReadableLogSegment>& segment = ASSERT_RESULT(local_segments.front());
   faststring scratch;
   int64_t size = ASSERT_RESULT(segment->readable_file_checkpoint()->Size());
   scratch.resize(size);

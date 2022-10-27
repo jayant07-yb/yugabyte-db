@@ -71,6 +71,28 @@
 #include "yb/util/version_info.h"
 #include "yb/util/version_info.pb.h"
 
+using yb::consensus::GetConsensusRole;
+using yb::consensus::CONSENSUS_CONFIG_COMMITTED;
+using yb::consensus::ConsensusStatePB;
+using yb::consensus::RaftPeerPB;
+using yb::consensus::OperationStatusPB;
+using yb::tablet::MaintenanceManagerStatusPB;
+using yb::tablet::MaintenanceManagerStatusPB_CompletedOpPB;
+using yb::tablet::MaintenanceManagerStatusPB_MaintenanceOpPB;
+using yb::tablet::Tablet;
+using yb::tablet::TabletDataState;
+using yb::tablet::TabletPeer;
+using yb::tablet::TabletStatusPB;
+using yb::tablet::Operation;
+
+using std::endl;
+using std::shared_ptr;
+using std::vector;
+using std::string;
+using strings::Substitute;
+
+using namespace std::placeholders;  // NOLINT(build/namespaces)
+
 namespace {
 
 // A struct representing some information about a tablet peer.
@@ -145,26 +167,6 @@ struct less<TableIdentifier> {
 namespace yb {
 namespace tserver {
 
-using yb::consensus::GetConsensusRole;
-using yb::consensus::CONSENSUS_CONFIG_COMMITTED;
-using yb::consensus::ConsensusStatePB;
-using yb::consensus::RaftPeerPB;
-using yb::consensus::OperationStatusPB;
-using yb::tablet::MaintenanceManagerStatusPB;
-using yb::tablet::MaintenanceManagerStatusPB_CompletedOpPB;
-using yb::tablet::MaintenanceManagerStatusPB_MaintenanceOpPB;
-using yb::tablet::Tablet;
-using yb::tablet::TabletDataState;
-using yb::tablet::TabletPeer;
-using yb::tablet::TabletStatusPB;
-using yb::tablet::Operation;
-using std::endl;
-using std::shared_ptr;
-using std::vector;
-using strings::Substitute;
-
-using namespace std::placeholders;  // NOLINT(build/namespaces)
-
 namespace {
 
 bool GetTabletID(const Webserver::WebRequest& req, string* id, std::stringstream *out) {
@@ -176,14 +178,13 @@ bool GetTabletID(const Webserver::WebRequest& req, string* id, std::stringstream
   return true;
 }
 
-bool GetTabletPeer(TabletServer* tserver, const Webserver::WebRequest& req,
-                   std::shared_ptr<TabletPeer>* peer, const string& tablet_id,
-                   std::stringstream *out) {
-  if (!tserver->tablet_manager()->LookupTablet(tablet_id, peer)) {
+tablet::TabletPeerPtr GetTabletPeer(TabletServer* tserver, const Webserver::WebRequest& req,
+                                    const TabletId& tablet_id, std::stringstream *out) {
+  auto result = tserver->tablet_manager()->LookupTablet(tablet_id);
+  if (!result) {
     (*out) << "Tablet " << EscapeForHtmlToString(tablet_id) << " not found";
-    return false;
   }
-  return true;
+  return result;
 }
 
 bool TabletReady(const std::shared_ptr<TabletPeer>& peer, const string& tablet_id,
@@ -201,14 +202,16 @@ bool TabletReady(const std::shared_ptr<TabletPeer>& peer, const string& tablet_i
 
 // Returns true if the tablet_id was properly specified, the
 // tablet is found, and is in a non-bootstrapping state.
-bool LoadTablet(TabletServer* tserver,
-                const Webserver::WebRequest& req,
-                string* tablet_id, std::shared_ptr<TabletPeer>* peer,
-                std::stringstream* out) {
-  if (!GetTabletID(req, tablet_id, out)) return false;
-  if (!GetTabletPeer(tserver, req, peer, *tablet_id, out)) return false;
-  if (!TabletReady(*peer, *tablet_id, out)) return false;
-  return true;
+tablet::TabletPeerPtr LoadTablet(TabletServer* tserver,
+                                 const Webserver::WebRequest& req,
+                                 string* tablet_id,
+                                 std::stringstream* out) {
+  if (!GetTabletID(req, tablet_id, out)) return nullptr;
+  auto result = GetTabletPeer(tserver, req, *tablet_id, out);
+  if (!result || !TabletReady(result, *tablet_id, out)) {
+    return nullptr;
+  }
+  return result;
 }
 
 void HandleTabletPage(
@@ -369,7 +372,12 @@ void HandleRocksDBPage(
   std::stringstream *output = &resp->output;
   *output << "<h1>RocksDB for Tablet " << EscapeForHtmlToString(tablet_id) << "</h1>" << std::endl;
 
-  auto doc_db = peer->tablet()->doc_db();
+  auto tablet_result = peer->shared_tablet_safe();
+  if (!tablet_result.ok()) {
+    *output << tablet_result.status();
+    return;
+  }
+  auto doc_db = (*tablet_result)->doc_db();
   DumpRocksDB("Regular", doc_db.regular, output);
   DumpRocksDB("Intents", doc_db.intents, output);
 }
@@ -380,8 +388,8 @@ void RegisterTabletPathHandler(
   auto handler = [tserver, f](const Webserver::WebRequest& req, Webserver::WebResponse* resp) {
     std::stringstream *output = &resp->output;
     string tablet_id;
-    tablet::TabletPeerPtr peer;
-    if (!LoadTablet(tserver, req, &tablet_id, &peer, output)) return;
+    tablet::TabletPeerPtr peer = LoadTablet(tserver, req, &tablet_id, output);
+    if (!peer) return;
 
     f(tablet_id, peer, req, resp);
   };
@@ -463,7 +471,8 @@ void TabletServerPathHandlers::HandleOperationsPage(const Webserver::WebRequest&
   for (const std::shared_ptr<TabletPeer>& peer : peers) {
     vector<OperationStatusPB> inflight;
 
-    if (peer->tablet() == nullptr) {
+    auto tablet = peer->shared_tablet();
+    if (tablet == nullptr) {
       continue;
     }
 
@@ -662,7 +671,8 @@ void TabletServerPathHandlers::HandleTabletsPage(const Webserver::WebRequest& re
     string table_name = status.table_name();
     string table_id = status.table_id();
     string tablet_id_or_link;
-    if (peer->tablet() != nullptr) {
+    auto tablet = peer->shared_tablet();
+    if (tablet != nullptr) {
       tablet_id_or_link = TabletLink(id);
     } else {
       tablet_id_or_link = EscapeForHtmlToString(id);
@@ -671,11 +681,11 @@ void TabletServerPathHandlers::HandleTabletsPage(const Webserver::WebRequest& re
         yb::tablet::TabletOnDiskSizeInfo::FromPB(status)
     );
 
-    string partition = peer->tablet_metadata()->partition_schema()
+    auto tablet_metadata = peer->tablet_metadata();
+    string partition = tablet_metadata->partition_schema()
                             ->PartitionDebugString(*peer->status_listener()->partition(),
-                                                   *peer->tablet_metadata()->schema());
+                                                   *tablet_metadata->schema());
 
-    auto tablet = peer->shared_tablet();
     uint64_t num_sst_files = (tablet) ? tablet->GetCurrentVersionNumSSTFiles() : 0;
 
     // TODO: would be nice to include some other stuff like memory usage

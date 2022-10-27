@@ -25,6 +25,8 @@
 #include "yb/yql/pggate/test/pggate_test.h"
 #include "yb/yql/pggate/ybc_pggate.h"
 
+using std::string;
+
 using namespace std::chrono_literals;
 
 namespace yb {
@@ -51,6 +53,7 @@ TEST_F(PggateTestCatalog, TestDml) {
                                        kInvalidOid /* tablegroup_id */,
                                        kColocationIdNotSet /* colocation_id */,
                                        kInvalidOid /* tablespace_id */,
+                                       false /* is_matview */,
                                        kInvalidOid /* matview_pg_table_id */,
                                        &pg_stmt));
   CHECK_YBC_STATUS(YBCTestCreateTableAddColumn(pg_stmt, "company_id", ++col_count,
@@ -402,6 +405,7 @@ TEST_F(PggateTestCatalog, TestCopydb) {
                                        kInvalidOid /* tablegroup_id */,
                                        kColocationIdNotSet /* colocation_id */,
                                        kInvalidOid /* tablespace_id */,
+                                       false /* is_matview */,
                                        kInvalidOid /* matview_pg_table_id */,
                                        &pg_stmt));
   CHECK_YBC_STATUS(YBCTestCreateTableAddColumn(pg_stmt, "key", 1, DataType::INT32, false, true));

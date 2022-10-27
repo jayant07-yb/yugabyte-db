@@ -31,6 +31,10 @@
 #include "yb/util/status_format.h"
 #include "yb/util/stol_utils.h"
 
+using std::string;
+using std::numeric_limits;
+using std::vector;
+
 DEFINE_bool(emulate_redis_responses,
     true,
     "If emulate_redis_responses is false, we hope to get slightly better performance by just "
@@ -207,6 +211,7 @@ Result<RedisDataType> GetRedisValueType(
     case ValueEntryType::kRedisList:
       return REDIS_TYPE_LIST;
     case ValueEntryType::kNullLow: FALLTHROUGH_INTENDED; // This value is a set member.
+    case ValueEntryType::kCollString:
     case ValueEntryType::kString:
       return REDIS_TYPE_STRING;
     default:
@@ -249,11 +254,11 @@ Result<RedisValue> GetRedisValue(
   RETURN_NOT_OK(GetRedisSubDocument(
       iterator, data, /* projection */ nullptr, SeekFwdSuffices::kFalse));
   if (!doc_found) {
-    return RedisValue{REDIS_TYPE_NONE};
+    return RedisValue{.type = REDIS_TYPE_NONE, .value = "", .exp = {}};
   }
 
   if (HasExpiredTTL(data.exp.write_ht, data.exp.ttl, iterator->read_time().read)) {
-    return RedisValue{REDIS_TYPE_NONE};
+    return RedisValue{.type = REDIS_TYPE_NONE, .value = "", .exp = {}};
   }
 
   if (exp)
@@ -262,22 +267,22 @@ Result<RedisValue> GetRedisValue(
   if (!doc.IsPrimitive()) {
     switch (doc.value_type()) {
       case ValueEntryType::kObject:
-        return RedisValue{REDIS_TYPE_HASH};
+        return RedisValue{.type = REDIS_TYPE_HASH, .value = "", .exp = {}};
       case ValueEntryType::kRedisTS:
-        return RedisValue{REDIS_TYPE_TIMESERIES};
+        return RedisValue{.type = REDIS_TYPE_TIMESERIES, .value = "", .exp = {}};
       case ValueEntryType::kRedisSortedSet:
-        return RedisValue{REDIS_TYPE_SORTEDSET};
+        return RedisValue{.type = REDIS_TYPE_SORTEDSET, .value = "", .exp = {}};
       case ValueEntryType::kRedisSet:
-        return RedisValue{REDIS_TYPE_SET};
+        return RedisValue{.type = REDIS_TYPE_SET, .value = "", .exp = {}};
       case ValueEntryType::kRedisList:
-        return RedisValue{REDIS_TYPE_LIST};
+        return RedisValue{.type = REDIS_TYPE_LIST, .value = "", .exp = {}};
       default:
         return STATUS_SUBSTITUTE(IllegalState, "Invalid value type: $0",
                                  static_cast<int>(doc.value_type()));
     }
   }
 
-  auto val = RedisValue{REDIS_TYPE_STRING, doc.GetString(), data.exp};
+  auto val = RedisValue{.type = REDIS_TYPE_STRING, .value = doc.GetString(), .exp = data.exp};
   return val;
 }
 
@@ -322,6 +327,7 @@ bool VerifyTypeAndSetCode(
 Status AddPrimitiveValueToResponseArray(const PrimitiveValue& value,
                                                 RedisArrayPB* redis_array) {
   switch (value.value_type()) {
+    case ValueEntryType::kCollString:
     case ValueEntryType::kString:
       redis_array->add_elements(value.GetString());
       return Status::OK();
@@ -637,7 +643,7 @@ Status RedisWriteOperation::ApplySet(const DocOperationApplyData& data) {
           // Need to insert the document instead of extending it.
           RETURN_NOT_OK(data.doc_write_batch->InsertSubDocument(
               doc_path, value_ref, data.read_time,
-              data.deadline, redis_query_id(), ttl, ValueControlFields::kInvalidUserTimestamp,
+              data.deadline, redis_query_id(), ttl, ValueControlFields::kInvalidTimestamp,
               false /* init_marker_ttl */));
         } else {
           RETURN_NOT_OK(data.doc_write_batch->ExtendSubDocument(

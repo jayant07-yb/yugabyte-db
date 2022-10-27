@@ -147,6 +147,7 @@ class PgCreateTable : public PgDdl {
                 const PgObjectId& tablegroup_oid,
                 const ColocationId colocation_id,
                 const PgObjectId& tablespace_oid,
+                bool is_matview,
                 const PgObjectId& matview_pg_table_oid);
 
   void SetupIndex(
@@ -253,6 +254,8 @@ class PgAlterTable : public PgDdl {
   Status DropColumn(const char *name);
 
   Status RenameTable(const char *db_name, const char *newname);
+
+  Status IncrementSchemaVersion();
 
   Status Exec();
 

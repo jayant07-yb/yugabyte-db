@@ -9,9 +9,7 @@ menu:
     name: Open Source
     identifier: k8s-oss-1
     weight: 621
-type: page
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -31,12 +29,6 @@ showAsideToc: true
     <a href="{{< relref "./operator-hub.md" >}}" class="nav-link">
       <i class="fas fa-cubes" aria-hidden="true"></i>
       Operator Hub
-    </a>
-  </li>
-  <li>
-    <a href="{{< relref "./rook-operator.md" >}}" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
-      Rook operator
     </a>
   </li>
 </ul>
@@ -247,7 +239,7 @@ $ kubectl exec -n yb-demo -it yb-tserver-0 -- ycqlsh yb-tserver-0.yb-tservers.yb
 
 ## Connect using external clients
 
-To connect an external program, get the load balancer `EXTERNAL-IP` IP address of the `yb-tserver-service` service and connect to the 5433 / 9042 ports for YSQL / YCQL services respectively.
+To connect an external program, get the load balancer `EXTERNAL-IP` address of the `yb-tserver-service` service and connect using port 5433 for YSQL or port 9042 for YCQL, as follows:
 
 ```sh
 $ kubectl get services --namespace yb-demo

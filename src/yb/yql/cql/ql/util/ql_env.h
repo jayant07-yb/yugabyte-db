@@ -67,8 +67,8 @@ class QLEnv {
   virtual Status DeleteIndexTable(const client::YBTableName& name,
                                           client::YBTableName* indexed_table_name);
 
-  virtual Status GetUpToDateTableSchemaVersion(const client::YBTableName& table_name,
-                                                       uint32_t* ver);
+  virtual Result<SchemaVersion> GetUpToDateTableSchemaVersion(
+      const client::YBTableName& table_name);
 
   virtual std::shared_ptr<client::YBTable> GetTableDesc(const client::YBTableName& table_name,
                                                         bool* cache_used);
@@ -148,7 +148,7 @@ class QLEnv {
   // canonical resource.
   // keyspace and table are only used to generate the error message.
   // If the permission is not found, the client will refresh the cache from the master once.
-  virtual Status HasResourcePermission(const string& canonical_name,
+  virtual Status HasResourcePermission(const std::string& canonical_name,
                                                const ql::ObjectType& object_type,
                                                const PermissionType permission,
                                                const NamespaceName& keyspace = "",

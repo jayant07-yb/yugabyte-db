@@ -34,6 +34,8 @@
 #include "yb/yql/redis/redisserver/redis_encoding.h"
 #include "yb/yql/redis/redisserver/redis_parser.h"
 
+using std::string;
+
 using namespace std::literals;
 using namespace std::placeholders;
 using namespace yb::size_literals;
@@ -292,7 +294,9 @@ void RedisInboundCall::LogTrace() const {
     rpc::RpcCallInProgressPB call_in_progress_pb;
     GetCallDetails(&call_in_progress_pb);
     LOG(WARNING) << call_in_progress_pb.DebugString() << "Trace: ";
-    trace_->Dump(&LOG(WARNING), /* include_time_deltas */ true);
+    if (trace_) {
+      trace_->Dump(&LOG(WARNING), /* include_time_deltas */ true);
+    }
   }
 }
 

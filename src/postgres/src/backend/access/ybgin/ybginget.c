@@ -34,6 +34,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_type.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "utils/builtins.h"
 #include "utils/elog.h"
@@ -322,14 +323,18 @@ ybginSetupBindsForPrefix(TupleDesc tupdesc, YbginScanOpaque ybso,
 		HandleYBStatus(YBCPgDmlBindColumnCondBetween(ybso->handle,
 													 1 /* attr_num */,
 													 expr_start,
-													 expr_end));
+													 true,
+													 expr_end,
+													 false));
 		pfree(greaterstr);
 	}
 	else
 		HandleYBStatus(YBCPgDmlBindColumnCondBetween(ybso->handle,
 													 1 /* attr_num */,
 													 expr_start,
-													 NULL /* attr_value_end */));
+													 true,
+													 NULL /* attr_value_end */,
+													 true));
 }
 
 static void
@@ -562,8 +567,13 @@ ybginDoFirstExec(IndexScanDesc scan, ScanDirection dir)
 	ybginSetupTargets(scan);
 
 	/* syscatalog version */
-	HandleYBStatus(YBCPgSetCatalogCacheVersion(ybso->handle,
-											   yb_catalog_cache_version));
+	if (YBIsDBCatalogVersionMode())
+		HandleYBStatus(YBCPgSetDBCatalogCacheVersion(ybso->handle,
+													 MyDatabaseId,
+													 yb_catalog_cache_version));
+	else
+		HandleYBStatus(YBCPgSetCatalogCacheVersion(ybso->handle,
+												   yb_catalog_cache_version));
 
 	/* execute select */
 	ybginExecSelect(scan, dir);

@@ -145,8 +145,10 @@ class SubDocument : public PrimitiveValue {
   // Set the child subdocument of an object to the given value.
   void SetChild(const KeyEntryValue& key, SubDocument&& value);
 
+  SubDocument& AllocateChild(const KeyEntryValue& key);
+
   void SetChildPrimitive(const KeyEntryValue& key, PrimitiveValue&& value) {
-    SetChild(key, SubDocument(value));
+    SetChild(key, SubDocument(std::move(value)));
   }
 
   void SetChildPrimitive(const KeyEntryValue& key, const PrimitiveValue& value) {
@@ -191,12 +193,12 @@ class SubDocument : public PrimitiveValue {
 
   bool has_valid_array_container() const;
 
-  friend void SubDocumentToStreamInternal(ostream& out, const SubDocument& subdoc, int indent);
-  friend void SubDocCollectionToStreamInternal(ostream& out,
+  friend void SubDocumentToStreamInternal(std::ostream& out, const SubDocument& subdoc, int indent);
+  friend void SubDocCollectionToStreamInternal(std::ostream& out,
                                         const SubDocument& subdoc,
                                         const int indent,
-                                        const string& begin,
-                                        const string& end);
+                                        const std::string& begin,
+                                        const std::string& end);
 
   // We use a SubDocument as the top-level map from encoded document keys to documents (also
   // represented as SubDocuments) in InMemDocDbState, and we need access to object_container()
@@ -204,7 +206,7 @@ class SubDocument : public PrimitiveValue {
   friend class InMemDocDbState;
 };
 
-std::ostream& operator <<(ostream& out, const SubDocument& subdoc);
+std::ostream& operator <<(std::ostream& out, const SubDocument& subdoc);
 
 static_assert(sizeof(SubDocument) == sizeof(PrimitiveValue),
               "It is important that we can cast a PrimitiveValue to a SubDocument.");

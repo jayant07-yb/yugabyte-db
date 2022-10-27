@@ -15,6 +15,7 @@
 
 #include "yb/common/row_mark.h"
 #include "yb/common/transaction.h"
+#include "yb/common/pg_types.h"
 
 #include "yb/gutil/bind.h"
 
@@ -66,6 +67,13 @@ DEFINE_bool(ysql_follower_reads_avoid_waiting_for_safe_time, true,
 TAG_FLAG(ysql_follower_reads_avoid_waiting_for_safe_time, advanced);
 TAG_FLAG(ysql_follower_reads_avoid_waiting_for_safe_time, runtime);
 
+METRIC_DEFINE_coarse_histogram(server, read_time_wait,
+                               "Read Time Wait",
+                               yb::MetricUnit::kMicroseconds,
+                               "Number of microseconds read queries spend waiting for safe time");
+
+DECLARE_bool(TEST_enable_db_catalog_version_mode);
+
 namespace yb {
 namespace tserver {
 
@@ -88,7 +96,12 @@ class ReadQuery : public std::enable_shared_from_this<ReadQuery>, public rpc::Th
       TabletServerIf* server, ReadTabletProvider* read_tablet_provider, const ReadRequestPB* req,
       ReadResponsePB* resp, rpc::RpcContext context)
       : server_(*server), read_tablet_provider_(*read_tablet_provider), req_(req), resp_(resp),
-        context_(std::move(context)) {}
+        context_(std::move(context)) {
+    auto metric_entity = server->MetricEnt();
+    if (metric_entity) {
+      read_time_wait_ = METRIC_read_time_wait.Instantiate(metric_entity);
+    }
+  }
 
   void Perform() {
     RespondIfFailed(DoPerform());
@@ -166,6 +179,8 @@ class ReadQuery : public std::enable_shared_from_this<ReadQuery>, public rpc::Th
   bool reading_from_non_leader_ = false;
   RequestScope request_scope_;
   std::shared_ptr<ReadQuery> retained_self_;
+
+  scoped_refptr<Histogram> read_time_wait_;
 };
 
 bool ReadQuery::transactional() const {
@@ -207,6 +222,10 @@ bool ReadQuery::IsForBackfill() const {
 }
 
 Status ReadQuery::DoPerform() {
+  if (req_->include_trace()) {
+    context_.EnsureTraceCreated();
+  }
+  ADOPT_TRACE(context_.trace());
   TRACE("Start Read");
   TRACE_EVENT1("tserver", "TabletServiceImpl::Read", "tablet_id", req_->tablet_id());
   VLOG(2) << "Received Read RPC: " << req_->DebugString();
@@ -251,19 +270,42 @@ Status ReadQuery::DoPerform() {
   RowMarkType batch_row_mark = RowMarkType::ROW_MARK_ABSENT;
   if (!req_->pgsql_batch().empty()) {
     uint64_t last_breaking_catalog_version = 0; // unset.
+    uint32_t last_db_oid = kPgInvalidOid; // unset.
     for (const auto& pg_req : req_->pgsql_batch()) {
+      bool invalidated = false;
       // For postgres requests check that the syscatalog version matches.
       if (pg_req.has_ysql_catalog_version()) {
+        // For now we use either ysql_catalog_version or ysql_db_catalog_version but not both.
+        CHECK(!pg_req.has_ysql_db_catalog_version());
+        // Note that in initdb/bootstrap mode, even if FLAGS_enable_db_catalog_version_mode is
+        // on it will be ignored and we'll use ysql_catalog_version not ysql_db_catalog_version.
         if (last_breaking_catalog_version == 0) {
           // Initialize last breaking version if not yet set.
           server_.get_ysql_catalog_version(
               nullptr /* current_version */, &last_breaking_catalog_version);
         }
         if (pg_req.ysql_catalog_version() < last_breaking_catalog_version) {
-          return STATUS(
-              QLError, "The catalog snapshot used for this transaction has been invalidated",
-              TabletServerError(TabletServerErrorPB::MISMATCHED_SCHEMA));
+          invalidated = true;
         }
+      } else if (pg_req.has_ysql_db_catalog_version()) {
+        CHECK(FLAGS_TEST_enable_db_catalog_version_mode);
+        CHECK_NE(pg_req.ysql_db_oid(), kPgInvalidOid);
+        if (last_db_oid == kPgInvalidOid) {
+          last_db_oid = pg_req.ysql_db_oid();
+          server_.get_ysql_db_catalog_version(
+            pg_req.ysql_db_oid(), nullptr /* current_version */, &last_breaking_catalog_version);
+        } else {
+          // There should be only one db oid in a request.
+          CHECK_EQ(last_db_oid, pg_req.ysql_db_oid());
+        }
+        if (pg_req.ysql_db_catalog_version() < last_breaking_catalog_version) {
+          invalidated = true;
+        }
+      }
+      if (invalidated) {
+        return STATUS(
+            QLError, "The catalog snapshot used for this transaction has been invalidated",
+            TabletServerError(TabletServerErrorPB::MISMATCHED_SCHEMA));
       }
       RowMarkType current_row_mark = GetRowMarkTypeFromPB(pg_req);
       if (IsValidRowMarkType(current_row_mark)) {
@@ -279,6 +321,7 @@ Status ReadQuery::DoPerform() {
   const bool has_row_mark = IsValidRowMarkType(batch_row_mark);
 
   LeaderTabletPeer leader_peer;
+  auto tablet_peer = peer_tablet.tablet_peer;
 
   if (serializable_isolation || has_row_mark) {
     // At this point we expect that we don't have pure read serializable transactions, and
@@ -288,7 +331,7 @@ Status ReadQuery::DoPerform() {
     // Serializable read adds intents, i.e. writes data.
     // We should check for memory pressure in this case.
     RETURN_NOT_OK(CheckWriteThrottling(req_->rejection_score(), leader_peer.peer.get()));
-    abstract_tablet_ = leader_peer.peer->shared_tablet();
+    abstract_tablet_ = VERIFY_RESULT(leader_peer.peer->shared_tablet_safe());
   } else {
     abstract_tablet_ = VERIFY_RESULT(read_tablet_provider_.GetTabletForRead(
         req_->tablet_id(), std::move(peer_tablet.tablet_peer),
@@ -302,16 +345,16 @@ Status ReadQuery::DoPerform() {
     }
   }
 
-  tablet::TabletPeerPtr tablet_peer;
-  auto tablet_peer_status =
-      server_.tablet_peer_lookup()->GetTabletPeer(req_->tablet_id(), &tablet_peer);
   // For virtual tables held at master the tablet peer may not be found.
-  reading_from_non_leader_ = tablet_peer_status.ok() && !CheckPeerIsLeader(*tablet_peer).ok();
+  if (!tablet_peer) {
+    tablet_peer = ResultToValue(
+        server_.tablet_peer_lookup()->GetServingTablet(req_->tablet_id()), {});
+  }
+  reading_from_non_leader_ = tablet_peer && !CheckPeerIsLeader(*tablet_peer).ok();
   if (PREDICT_FALSE(FLAGS_TEST_assert_reads_served_by_follower)) {
     CHECK_NE(req_->consistency_level(), YBConsistencyLevel::STRONG)
         << "--TEST_assert_reads_served_by_follower is true but consistency level is "
            "invalid: YBConsistencyLevel::STRONG";
-    RETURN_NOT_OK(tablet_peer_status);
     CHECK(reading_from_non_leader_)
         << "--TEST_assert_reads_served_by_follower is true but read is being served by "
         << " peer " << tablet_peer->permanent_uuid() << " which is the leader for tablet "
@@ -319,7 +362,9 @@ Status ReadQuery::DoPerform() {
   }
 
   if (!abstract_tablet_->system() && tablet()->metadata()->hidden()) {
-    return STATUS(NotFound, "Tablet not found", req_->tablet_id());
+    return STATUS(
+        NotFound, "Tablet not found", req_->tablet_id(),
+        TabletServerError(TabletServerErrorPB::TABLET_NOT_FOUND));
   }
 
   if (FLAGS_TEST_simulate_time_out_failures_msecs > 0 && RandomUniformInt(0, 10) < 2) {
@@ -351,7 +396,7 @@ Status ReadQuery::DoPerform() {
   if (transactional) {
     // Serial number is used to check whether this operation was initiated before
     // transaction status request. So we should initialize it as soon as possible.
-    request_scope_ = RequestScope(tablet()->transaction_participant());
+    request_scope_ = VERIFY_RESULT(RequestScope::Create(tablet()->transaction_participant()));
     read_time_.serial_no = request_scope_.request_id();
   }
 
@@ -362,8 +407,11 @@ Status ReadQuery::DoPerform() {
   if (serializable_isolation || has_row_mark) {
     auto deadline = context_.GetClientDeadline();
     auto query = std::make_unique<tablet::WriteQuery>(
-        leader_peer.leader_term, deadline, leader_peer.peer.get(),
-        leader_peer.peer->tablet(), nullptr /* response */,
+        leader_peer.leader_term,
+        deadline,
+        leader_peer.peer.get(),
+        leader_peer.tablet,
+        nullptr /* response */,
         docdb::OperationKind::kRead);
 
     auto& write = *query->operation().AllocateRequest();
@@ -376,9 +424,13 @@ Status ReadQuery::DoPerform() {
     write.set_unused_tablet_id(""); // For backward compatibility.
     write_batch.set_deprecated_may_have_metadata(true);
     write.set_batch_idx(req_->batch_idx());
+    if (req_->has_subtransaction() && req_->subtransaction().has_subtransaction_id()) {
+      write_batch.mutable_subtransaction()->set_subtransaction_id(
+          req_->subtransaction().subtransaction_id());
+    }
     // TODO(dtxn) write request id
 
-    RETURN_NOT_OK(leader_peer.peer->tablet()->CreateReadIntents(
+    RETURN_NOT_OK(leader_peer.tablet->CreateReadIntents(
         req_->transaction(), req_->subtransaction(), req_->ql_batch(), req_->pgsql_batch(),
         &write_batch));
 
@@ -400,6 +452,10 @@ Status ReadQuery::DoPerform() {
 }
 
 Status ReadQuery::DoPickReadTime(server::Clock* clock) {
+  MonoTime start_time;
+  if (read_time_wait_) {
+    start_time = MonoTime::Now();
+  }
   if (!read_time_) {
     safe_ht_to_read_ = VERIFY_RESULT(abstract_tablet_->SafeTime(require_lease_));
     // If the read time is not specified, then it is a single-shard read.
@@ -431,6 +487,10 @@ Status ReadQuery::DoPickReadTime(server::Clock* clock) {
              ? current_safe_time
              : VERIFY_RESULT(abstract_tablet_->SafeTime(
                    require_lease_, read_time_.read, context_.GetClientDeadline())));
+  }
+  if (read_time_wait_) {
+    auto safe_time_wait = MonoTime::Now() - start_time;
+    read_time_wait_->Increment(safe_time_wait.ToMicroseconds());
   }
   return Status::OK();
 }

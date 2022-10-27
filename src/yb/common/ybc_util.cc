@@ -56,6 +56,8 @@ int ysql_session_max_batch_size = 0;
 
 int ysql_max_in_flight_ops = 0;
 
+int yb_xcluster_consistency_level = XCLUSTER_CONSISTENCY_DATABASE;
+
 namespace yb {
 
 namespace {
@@ -200,10 +202,6 @@ YBPgErrorCode FetchErrorCode(YBCStatus s) {
 } // anonymous namespace
 
 extern "C" {
-
-bool YBCStatusIsOK(YBCStatus s) {
-  return StatusWrapper(s)->IsOk();
-}
 
 bool YBCStatusIsNotFound(YBCStatus s) {
   return StatusWrapper(s)->IsNotFound();
