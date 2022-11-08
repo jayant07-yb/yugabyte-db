@@ -72,6 +72,8 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include<sys/shm.h>  
+
 #include <fcntl.h>
 #include <sys/param.h>
 #include <netdb.h>
@@ -2629,6 +2631,13 @@ reset_shared(int port)
 	 * objects if the postmaster crashes and is restarted.
 	 */
 	CreateSharedMemoryAndSemaphores(port);
+
+	/*
+	 * Create the shared memory for the session parameter 
+	 */
+	int shmid;  
+	shmid=shmget((key_t)2345, 1024, 0666|IPC_CREAT);   
+
 }
 
 

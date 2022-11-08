@@ -87,6 +87,8 @@
 #include "pg_yb_utils.h"
 #include "libpq/yb_pqcomm_extensions.h"
 #include "utils/rel.h"
+#include<sys/shm.h>  
+
 
 /* ----------------
  *		global variables
@@ -5212,6 +5214,41 @@ PostgresMain(int argc, char *argv[],
 		{
 			case 'Q':			/* simple query */
 			{
+
+				{
+					/* 
+					 * Experimental Code for sharing the data between
+					 * the postgres processes via the Shared memory 
+					 */
+					ereport(WARNING,
+						(errcode_for_file_access(),
+						 errmsg("Entered the code")));
+					/* We need to share a string across multiple processes */	
+					int shmid;  
+					shmid=shmget((key_t)2345, 1024, 0666);
+
+					   // Attach to the segment to get a pointer to it.
+   					int *shmp;
+					shmp = shmat(shmid, NULL, 0);
+   					if (shmp == (void *) -1) {
+					ereport(WARNING,
+						(errcode_for_file_access(),
+						 errmsg("Failed the application")));
+					}
+
+					ereport(WARNING,
+						(errcode_for_file_access(),
+						 errmsg("Set the value to %d", *shmp)));
+
+
+					*shmp = (*shmp + 1) ; 
+
+					ereport(WARNING,
+						(errcode_for_file_access(),
+						 errmsg("Set the value to %d", *shmp)));
+
+				}
+
 				const char *query_string;
 
 				/* Set statement_timestamp() */
@@ -5907,6 +5944,10 @@ disable_statement_timeout(void)
 
 		stmt_timeout_active = false;
 	}
+}
+
+void YBForceCacheRefresh() {
+	yb_need_cache_refresh = true;
 }
 
 /*
