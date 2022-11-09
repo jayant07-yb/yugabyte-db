@@ -405,6 +405,8 @@ extern ArrayType *GUCArrayAdd(ArrayType *array, const char *name, const char *va
 extern ArrayType *GUCArrayDelete(ArrayType *array, const char *name);
 extern ArrayType *GUCArrayReset(ArrayType *array);
 
+extern void YbUpdateSharedMemory();
+extern void YbCleanChangedSessionParameter();
 #ifdef EXEC_BACKEND
 extern void write_nondefault_variables(GucContext context);
 extern void read_nondefault_variables(void);
@@ -455,4 +457,21 @@ extern void assign_search_path(const char *newval, void *extra);
 extern bool check_wal_buffers(int *newval, void **extra, GucSource source);
 extern void assign_xlog_sync_method(int new_sync_method, void *extra);
 
+#define YB_SHMEM_ARR_LEN 10
+
+#define YB_SHAMEM_SIZE (40* YB_SHMEM_ARR_LEN +8) /* 
+                            * Strarting memory size (in bytes) of shared memory
+                            * for storing the `session_parameter` of a given client 
+                            */
+
+#define KEY_MIN_SHAMEM 2346     /* Smallest key value that will be used for shared memory */
+#define MAX_PARAM_NAME_LEN 30   /* MAX Length of the parameter name */
+#define MAX_PARAM_VALUE_LEN 20  /* MAX Length of the parameter size */
+
+#define YB_SHMEM_ALLOC_ERR_CODE 22
+extern int yb_shmem_create();   /* creates a shared memory block for a client id  */
+/* wrapper functions */
+extern int yb_shmem_remove();   /* remove the shared memory block for a client id */
+extern int yb_shmem_get();      /* remove the shared memory block for a client id */
+extern int yb_shmem_insert(char **list_parameters, const unsigned int icp_id );   /* insert a given */
 #endif							/* GUC_H */

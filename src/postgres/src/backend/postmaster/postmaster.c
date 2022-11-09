@@ -73,6 +73,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <fcntl.h>
+#include<sys/shm.h>
 #include <sys/param.h>
 #include <netdb.h>
 #include <limits.h>
@@ -127,6 +128,8 @@
 #include "utils/dynamic_loader.h"
 #include "utils/memutils.h"
 #include "utils/pidfile.h"
+#include "utils/guc.h"
+#include "utils/guc_tables.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
 #include "utils/varlena.h"
@@ -2613,7 +2616,6 @@ ClosePostmasterPorts(bool am_syslogger)
 #endif
 }
 
-
 /*
  * reset_shared -- reset shared memory and semaphores
  */
@@ -2629,17 +2631,6 @@ reset_shared(int port)
 	 * objects if the postmaster crashes and is restarted.
 	 */
 	CreateSharedMemoryAndSemaphores(port);
-	
-	/*
-	 * Create shared Memory for the `SESSION PARAMETERS`
-	 * Each parameter will be having an array of struct `shared_parameter`
-	 *
-	 */
-	
-	/* todo-yb --> add the Isyugabytedb() function */
-	int shmid;  
-	shmid=shmget((key_t)2345, 1024, 0666|IPC_CREAT);  	/* todo-yb --> Check whether it works without session paramerter */
-
 }
 
 
