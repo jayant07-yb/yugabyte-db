@@ -2629,6 +2629,17 @@ reset_shared(int port)
 	 * objects if the postmaster crashes and is restarted.
 	 */
 	CreateSharedMemoryAndSemaphores(port);
+	
+	/*
+	 * Create shared Memory for the `SESSION PARAMETERS`
+	 * Each parameter will be having an array of struct `shared_parameter`
+	 *
+	 */
+	
+	/* todo-yb --> add the Isyugabytedb() function */
+	int shmid;  
+	shmid=shmget((key_t)2345, 1024, 0666|IPC_CREAT);  	/* todo-yb --> Check whether it works without session paramerter */
+
 }
 
 
