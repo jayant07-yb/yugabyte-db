@@ -73,6 +73,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <fcntl.h>
+#include<sys/shm.h>
 #include <sys/param.h>
 #include <netdb.h>
 #include <limits.h>
@@ -127,6 +128,8 @@
 #include "utils/dynamic_loader.h"
 #include "utils/memutils.h"
 #include "utils/pidfile.h"
+#include "utils/guc.h"
+#include "utils/guc_tables.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
 #include "utils/varlena.h"
@@ -403,6 +406,7 @@ static void getInstallationPaths(const char *argv0);
 static void checkControlFile(void);
 static Port *ConnCreate(int serverFd);
 static void ConnFree(Port *port);
+static void reset_shared_memory();
 static void reset_shared(int port);
 static void SIGHUP_handler(SIGNAL_ARGS);
 static void pmdie(SIGNAL_ARGS);
@@ -1421,6 +1425,7 @@ PostmasterMain(int argc, char *argv[])
 	/* Some workers may be scheduled to start now */
 	maybe_start_bgworkers();
 
+	reset_shared_memory();
 	status = ServerLoop();
 
 	/*
@@ -2613,6 +2618,49 @@ ClosePostmasterPorts(bool am_syslogger)
 #endif
 }
 
+static void
+reset_shared_memory()
+{
+	 /* Get the Key */
+	int shared_memory_key;
+	/* if I get a key then delete it */
+	if( (shared_memory_key = shmget((key_t)2345, 1 , 0666)) > 0 ){
+		if(shmctl(shared_memory_key, IPC_RMID, NULL)==-1)
+			{
+				perror("shmctl error:::");
+				ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Error at shmctl SIZE:: %lu, returned %d with error code %d",(sizeof(struct yb_shared_parameter)*SHAMEM_SIZE) ,  shared_memory_key, errno)));
+
+			}
+	}	
+	if( (shared_memory_key = shmget((key_t)2345, (sizeof(struct yb_shared_parameter)*SHAMEM_SIZE) , 0666|IPC_CREAT)) < 0 ){
+			perror("Error at shmget due to:");
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Error at shmget SIZE:: %lu, returned %d with error code %d",(sizeof(struct yb_shared_parameter)*SHAMEM_SIZE) ,  shared_memory_key, errno)));
+		return ;
+	}
+		ereport(LOG,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("shmid :: %d", shared_memory_key)));
+	
+return ;
+	struct yb_shared_parameter *list_shared_parameter;
+	if( (list_shared_parameter = shmat(shared_memory_key, NULL, 0)) == (struct yb_shared_parameter *) -1){
+
+		return ;
+	}
+
+	int i;
+	for(i=0; i<5; i++)
+		{ strcpy(list_shared_parameter[i].parameter_name,"" );
+		 strcpy(list_shared_parameter[i].parameter_value,"" );
+		 strcpy(list_shared_parameter[i].yb_proxy_client_id,"" );
+		}
+	shmdt((void *) list_shared_parameter);
+
+}
 
 /*
  * reset_shared -- reset shared memory and semaphores
@@ -2629,17 +2677,6 @@ reset_shared(int port)
 	 * objects if the postmaster crashes and is restarted.
 	 */
 	CreateSharedMemoryAndSemaphores(port);
-	
-	/*
-	 * Create shared Memory for the `SESSION PARAMETERS`
-	 * Each parameter will be having an array of struct `shared_parameter`
-	 *
-	 */
-	
-	/* todo-yb --> add the Isyugabytedb() function */
-	int shmid;  
-	shmid=shmget((key_t)2345, 1024, 0666|IPC_CREAT);  	/* todo-yb --> Check whether it works without session paramerter */
-
 }
 
 

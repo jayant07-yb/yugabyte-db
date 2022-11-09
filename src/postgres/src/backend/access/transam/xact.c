@@ -3053,6 +3053,45 @@ void
 CommitTransactionCommand(void)
 {
 	TransactionState s = CurrentTransactionState;
+	/* Update the session parameter to the shared memory */
+	switch (s->blockState)
+	{
+		case TBLOCK_END: 			/* COMMIT received */
+		case TBLOCK_STARTED:		/* running single-query transaction */ 
+			{
+				/* every query will be treated as a single transaction */
+				/* Copy the session parameter from the local memory to the shared memory */
+				ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Updating the shared memory")));
+				
+				YbUpdateSharedMemory();
+				YbCleanChangedSessionParameter();
+			}
+			break;
+		case TBLOCK_BEGIN:
+			{
+				ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Reset the changed session parameters")));
+				YbCleanChangedSessionParameter();
+				break;
+			}
+		case TBLOCK_SUBBEGIN:			/* starting a subtransaction */
+		case TBLOCK_SUBINPROGRESS:		/* live subtransaction */
+		case TBLOCK_SUBRELEASE:			/* RELEASE received */
+		case TBLOCK_SUBCOMMIT:			/* COMMIT received while TBLOCK_SUBINPROGRESS */
+		case TBLOCK_SUBABORT:			/* failed subxact, awaiting ROLLBACK */
+		case TBLOCK_SUBABORT_END:		/* failed subxact, ROLLBACK received */
+		case TBLOCK_SUBABORT_PENDING:	/* live subxact, ROLLBACK received */
+		case TBLOCK_SUBRESTART:			/* live subxact, ROLLBACK TO received */
+		case TBLOCK_SUBABORT_RESTART:	/* failed subxact, ROLLBACK TO received */
+				/* do nothing for sub transaction since */
+			break;
+		default:
+				/* do nothing */
+			break;
+	}
 
 	switch (s->blockState)
 	{

@@ -93,6 +93,7 @@
 #include "utils/tzparser.h"
 #include "utils/varlena.h"
 #include "utils/xml.h"
+#include<sys/shm.h>
 
 #include "pg_yb_utils.h"
 
@@ -526,6 +527,8 @@ int			tcp_keepalives_idle;
 int			tcp_keepalives_interval;
 int			tcp_keepalives_count;
 
+char  		yb_session_client_id[20];
+struct list_changed_parameters *yb_changed_session_parameter = NULL;
 /*
  * SSL renegotiation was been removed in PostgreSQL 9.5, but we tolerate it
  * being set to zero (meaning never renegotiate) for backward compatibility.
@@ -6244,6 +6247,34 @@ BeginReportingGUCOptions(void)
 }
 
 /*
+ * YbUpdateSessionParameter
+ * Updates the changes regarding the session parameter 
+ */
+void YbUpdateSessionParameter(const char* parameter_name){
+	if(strcmp(yb_session_client_id,"")==0)
+		return ;	/* No client id */
+
+	/* Update the local parameter */
+
+	ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Updating the value %s",parameter_name)));
+	
+	struct list_changed_parameters *temp;
+	/* Check whether the session parameter has alredy changed in the on going transaction */
+	
+	for(temp = yb_changed_session_parameter ; temp!=NULL; temp = temp->next)
+		if(strcmp(temp->parameter_name,parameter_name)==0)
+			return ;	/* the parameter name already exist in the list of changed session parameter */
+
+
+	temp = (struct list_changed_parameters *) malloc(sizeof(struct list_changed_parameters)); 
+	strcpy(temp->parameter_name,parameter_name); 
+	temp->next = yb_changed_session_parameter;
+	yb_changed_session_parameter = temp;
+}
+
+/*
  * ReportGUCOption: if appropriate, transmit option value to frontend
  */
 static void
@@ -7649,7 +7680,7 @@ set_config_option(const char *name, const char *value,
 #undef newval
 			}
 	}
-
+	
 	if (changeVal && (record->flags & GUC_REPORT))
 		ReportGUCOption(record);
 
@@ -8338,6 +8369,54 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 }
 
 /*
+ * YbHandleSetClientId - Handles SET client_id 
+ *  1. Assign the yb_session_client_id
+ *  2. Reset all parameters
+ *  
+ */
+void YbHandleSetClientId(char * client_id)
+{
+	strcpy(yb_session_client_id,client_id);
+ 	ResetAllOptions();
+
+	 /* Get the Key */
+	int shared_memory_key;  
+	if( (shared_memory_key = shmget((key_t)2345, sizeof(struct yb_shared_parameter)*SHAMEM_SIZE, 0666)) < 0 ){
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Error at shmget")));
+			
+		return ;
+	}
+
+	struct yb_shared_parameter *list_shared_parameter;
+	
+	if( (list_shared_parameter = shmat(shared_memory_key, NULL, 0)) == (struct yb_shared_parameter *) -1){
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Error at shmat")));
+			
+		return ;
+	}
+
+	int i;
+	for(i=0; i<5; i++)
+    	if(strcmp(list_shared_parameter[i].yb_proxy_client_id,client_id)==0)
+		{
+			ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Updated the session parameter in the update list from the shared memory %s , %s",list_shared_parameter[i].parameter_name, list_shared_parameter[i].parameter_value)));
+			/* load the client context from the shared memory */
+			(void) set_config_option(list_shared_parameter[i].parameter_name, list_shared_parameter[i].parameter_value,
+					PGC_USERSET, PGC_S_SESSION,
+					GUC_ACTION_SET, true, 0, false);
+
+			break;
+		}
+    shmdt((void *) list_shared_parameter);
+}
+
+/*
  * SET command
  */
 void
@@ -8368,6 +8447,15 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("cannot set parameters during a parallel operation")));
+	
+	/*
+	 * Check for `SET client_id`
+	 */
+	if(strcmp(stmt->name,"client_id")==0)
+	{
+		YbHandleSetClientId(ExtractSetVariableArgs(stmt));	/* Handle the client_id */
+		return;
+	}
 
 	switch (stmt->kind)
 	{
@@ -8375,13 +8463,21 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 		case VAR_SET_CURRENT:
 			if (stmt->is_local)
 				WarnNoTransactionBlock(isTopLevel, "SET LOCAL");
-			(void) set_config_option(stmt->name,
+			
+			if(set_config_option(stmt->name,
 									 ExtractSetVariableArgs(stmt),
 									 (superuser() || YbDbAdminCanSet
 									  ? PGC_SUSET : PGC_USERSET),
 									 PGC_S_SESSION,
-									 action, true, 0, false);
+									 action, true, 0, false) == 1)
+			{
+				YbUpdateSessionParameter(stmt->name);
+				ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Updating ....")));
+			}
 			check_reserved_prefixes(stmt->name);
+
 			break;
 		case VAR_SET_MULTI:
 
@@ -8510,12 +8606,18 @@ SetPGVariable(const char *name, List *args, bool is_local)
 	char	   *argstring = flatten_set_variable_args(name, args);
 
 	/* Note SET DEFAULT (argstring == NULL) is equivalent to RESET */
-	(void) set_config_option(name,
+	if(set_config_option(name,
 							 argstring,
 							 (superuser() ? PGC_SUSET : PGC_USERSET),
 							 PGC_S_SESSION,
 							 is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET,
-							 true, 0, false);
+							 true, 0, false)==1 && is_local == 0)
+	{
+		YbUpdateSessionParameter(name);
+		ereport(WARNING,
+			(errcode(ERRCODE_PROTOCOL_VIOLATION),
+			errmsg("Updating ....")));
+	}
 }
 
 /*
@@ -8553,12 +8655,16 @@ set_config_by_name(PG_FUNCTION_ARGS)
 		is_local = PG_GETARG_BOOL(2);
 
 	/* Note SET DEFAULT (argstring == NULL) is equivalent to RESET */
-	(void) set_config_option(name,
+	if(set_config_option(name,
 							 value,
 							 (superuser() ? PGC_SUSET : PGC_USERSET),
 							 PGC_S_SESSION,
 							 is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET,
-							 true, 0, false);
+							 true, 0, false)==1){
+				YbUpdateSessionParameter(name);
+				ereport(WARNING,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Updating ....")));}
 
 	/* get the new current value */
 	new_value = GetConfigOptionByName(name, NULL, false);
@@ -8566,7 +8672,6 @@ set_config_by_name(PG_FUNCTION_ARGS)
 	/* Convert return string to text */
 	PG_RETURN_TEXT_P(cstring_to_text(new_value));
 }
-
 
 /*
  * Common code for DefineCustomXXXVariable subroutines: allocate the
@@ -10935,6 +11040,97 @@ GUCArrayReset(ArrayType *array)
 	}
 
 	return newarray;
+}
+
+/*
+ * YbUpdateSharedMemory
+ * Copy the changed session parameter value to the shared memory 
+ * 	1. Check for `yb_session_client_id` if not present then exit
+ * 	2. Copy the context from local memory to shared memory
+ * 	3. Delete the local context.
+ *  4. Reset `yb_session_client_id`
+ * 
+ * NOTE: This function will only be called on `COMMIT` or `SUBCOMMIT`.
+ */
+void YbUpdateSharedMemory(){
+	if(strcmp(yb_session_client_id,"")==0)
+	{
+		/* yb_changed_session_parameter can only be present if yb_session_client_id is set */
+		Assert(yb_changed_session_parameter==NULL);	
+		return;
+	}
+ 
+	/* Get the Key */
+
+	int shared_memory_key;  
+	if( (shared_memory_key = shmget((key_t)2345, sizeof(struct yb_shared_parameter)*SHAMEM_SIZE, 0666)) < 0 ){
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Error at shmget")));
+			
+		return ;
+	}
+
+	struct yb_shared_parameter *list_shared_parameter;
+	
+	if( (list_shared_parameter = shmat(shared_memory_key, NULL, 0)) == (struct yb_shared_parameter *) -1){
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("Error at shmat")));
+			
+		return ;
+	}
+	int i;
+	bool found =0 ;
+	/* debug::-- working fine till here */
+	
+	for(struct list_changed_parameters *temp = yb_changed_session_parameter; temp!=NULL; temp=temp->next)
+	{
+		char *parameter_name = temp->parameter_name;
+		for(i=0; i<5; i++)
+			if(strcmp(list_shared_parameter[i].yb_proxy_client_id,yb_session_client_id)==0 && strcmp(list_shared_parameter[i].parameter_name ,parameter_name)==0 )
+	        {
+	                /* load the client context to the shared memory */
+	                strcpy(list_shared_parameter[i].parameter_value ,GetConfigOptionByName(parameter_name, NULL, false));
+	                found = 1;
+	                break;
+	        }
+		
+		if(found==0)
+	        for(i=0;i<5; i++)
+	                if(strcmp(list_shared_parameter[i].yb_proxy_client_id,"")==0)
+	                {
+
+	                    /* load the client context to the shared memory */
+	                    strcpy(list_shared_parameter[i].parameter_value ,GetConfigOptionByName(parameter_name, NULL, false));
+	                    strcpy(list_shared_parameter[i].yb_proxy_client_id ,yb_session_client_id);
+	                    strcpy(list_shared_parameter[i].parameter_name ,parameter_name);
+	                    found = 1;
+						ereport(WARNING,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						errmsg("Updated the session parameter in the update list to the shared memory %s , %s",list_shared_parameter[i].parameter_name, list_shared_parameter[i].parameter_value)));
+			
+	                        break;
+	                }
+		
+    	//Assert(found);
+		if(found == 0)
+		ereport(WARNING,
+			(errcode(ERRCODE_PROTOCOL_VIOLATION),
+			errmsg("Unable to store the session parameter")));
+			
+	}
+	shmdt((void *) list_shared_parameter);
+}
+
+void YbCleanChangedSessionParameter(){
+	struct list_changed_parameters *temp;
+	while(yb_changed_session_parameter != NULL)
+	{
+		temp = yb_changed_session_parameter->next;
+		free(yb_changed_session_parameter);
+		yb_changed_session_parameter = temp;
+	}
 }
 
 /*
