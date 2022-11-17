@@ -45,7 +45,7 @@ func (s *shellTask) Process(ctx context.Context) (string, error) {
 	util.FileLogger().Infof("Running command %s with args %v", s.cmd, s.args)
 	err := shellCmd.Run()
 	if err != nil {
-		output = errOut.String()
+		output = fmt.Sprintf("%s: %s", err.Error(), errOut.String())
 		util.FileLogger().Errorf("Shell Run - %s task failed - %s", s.name, err.Error())
 		util.FileLogger().Errorf("Shell command output %s", output)
 	} else {
@@ -54,7 +54,6 @@ func (s *shellTask) Process(ctx context.Context) (string, error) {
 		util.FileLogger().Debugf("Shell command output %s", output)
 	}
 	s.done = true
-
 	return output, err
 }
 
@@ -126,9 +125,9 @@ func (handler *PreflightCheckHandler) getOptions(preflightScriptPath string) []s
 	if provider.AirGapInstall {
 		options = append(options, "--airgap")
 	}
-	//To-do: Should the api return a string instead of a list?
-	if data := provider.CustomHostCidrs; len(data) > 0 {
-		options = append(options, "--yb_home_dir", data[0])
+
+	if homeDir, ok := provider.Config["YB_HOME_DIR"]; ok {
+		options = append(options, "--yb_home_dir", "'"+homeDir+"'")
 	} else {
 		options = append(options, "--yb_home_dir", util.NodeHomeDirectory)
 	}

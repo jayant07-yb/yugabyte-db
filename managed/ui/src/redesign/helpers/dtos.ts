@@ -360,11 +360,11 @@ export enum TableType {
   PGSQL_TABLE_TYPE = 'PGSQL_TABLE_TYPE'
 }
 
-export const TABLE_TYPE_MAP: Record<TableType, string> = {
+export const TableTypeLabel: Record<TableType, string> = {
   YQL_TABLE_TYPE: 'YCQL',
   PGSQL_TABLE_TYPE: 'YSQL',
   REDIS_TABLE_TYPE: 'REDIS'
-};
+} as const;
 
 export interface MetricsData {
   type: string;
@@ -455,4 +455,18 @@ export enum RecommendationTypeEnum {
   ConnectionSkew = 'ConnectionSkew',
   CpuSkew = 'CpuSkew',
   CpuUsage = 'CpuUsage'
+}
+
+export interface RunTimeConfigData {
+  configID: number;
+  configKey: string;
+  configValue: string;
+  isConfigInherited: boolean;
+}
+
+export enum RunTimeConfigScope {
+  GLOBAL = 'GLOBAL',
+  UNIVERSE = 'UNIVERSE',
+  PROVIDER = 'PROVIDER',
+  CUSTOMER = 'CUSTOMER'
 }

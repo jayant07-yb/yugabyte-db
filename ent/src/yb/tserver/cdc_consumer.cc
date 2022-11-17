@@ -50,17 +50,16 @@
 
 using std::string;
 
-DEFINE_int32(cdc_consumer_handler_thread_pool_size, 0,
+DEFINE_UNKNOWN_int32(cdc_consumer_handler_thread_pool_size, 0,
              "Override the max thread pool size for CDCConsumerHandler, which is used by "
              "CDCPollers. If set to 0, then the thread pool will use the default size (number of "
              "cpus on the system).");
 TAG_FLAG(cdc_consumer_handler_thread_pool_size, advanced);
 
-DEFINE_int32(xcluster_safe_time_update_interval_secs, 1,
+DEFINE_RUNTIME_int32(xcluster_safe_time_update_interval_secs, 1,
     "The interval at which xcluster safe time is computed. This controls the staleness of the data "
     "seen when performing database level xcluster consistent reads. If there is any additional lag "
     "in the replication, then it will add to the overall staleness of the data.");
-TAG_FLAG(xcluster_safe_time_update_interval_secs, runtime);
 
 static bool ValidateXClusterSafeTimeUpdateInterval(const char* flagname, int32 value) {
   if (value <= 0) {
@@ -156,6 +155,8 @@ CDCConsumer::CDCConsumer(
 
 CDCConsumer::~CDCConsumer() {
   Shutdown();
+  SharedLock<rw_spinlock> read_lock(producer_pollers_map_mutex_);
+  DCHECK(producer_pollers_map_.empty());
 }
 
 void CDCConsumer::Shutdown() {
@@ -170,6 +171,8 @@ void CDCConsumer::Shutdown() {
     thread_pool_->Shutdown();
   }
 
+  // Shutdown the pollers outside of the master_data_mutex lock to keep lock ordering the same.
+  std::vector<std::shared_ptr<CDCPoller>> pollers_to_shutdown;
   {
     std::lock_guard<rw_spinlock> write_lock(master_data_mutex_);
     producer_consumer_tablet_map_from_master_.clear();
@@ -181,13 +184,19 @@ void CDCConsumer::Shutdown() {
         uuid_and_client.second->Shutdown();
       }
 
-      // Shutdown the pollers and output clients.
+      // Fetch all the pollers.
+      pollers_to_shutdown.reserve(pollers_to_shutdown.size());
       for (const auto& poller : producer_pollers_map_) {
-        poller.second->Shutdown();
+        pollers_to_shutdown.push_back(poller.second);
       }
       producer_pollers_map_.clear();
     }
     local_client_->client->Shutdown();
+  }
+
+  // Now can shutdown the pollers.
+  for (const auto& poller : pollers_to_shutdown) {
+    poller->Shutdown();
   }
 
   if (run_trigger_poll_thread_) {

@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_PACKED_ROW_H
-#define YB_DOCDB_PACKED_ROW_H
+#pragma once
 
 #include <optional>
 #include <unordered_map>
@@ -119,5 +118,3 @@ class RowPacker {
 
 } // namespace docdb
 } // namespace yb
-
-#endif // YB_DOCDB_PACKED_ROW_H

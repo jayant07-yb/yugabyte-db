@@ -33,19 +33,16 @@
 #include "yb/util/atomic.h"
 #include "yb/util/size_literals.h"
 #include "yb/util/fast_varint.h"
-#include "yb/util/flag_tags.h"
 #include "yb/util/flags.h"
 
 #include "yb/common/hybrid_time.h"
 
-DEFINE_int32(cdc_max_apply_batch_num_records, 1024, "Max CDC write request batch num records. If"
-                                                    " set to 0, there is no max num records, which"
-                                                    " means batches will be limited only by size.");
-TAG_FLAG(cdc_max_apply_batch_num_records, runtime);
+DEFINE_RUNTIME_int32(cdc_max_apply_batch_num_records, 1024,
+    "Max CDC write request batch num records. If set to 0, there is no max num records, which"
+    " means batches will be limited only by size.");
 
-DEFINE_int32(cdc_max_apply_batch_size_bytes, 0, "Max CDC write request batch size in kb. If 0,"
-                                                " default to consensus_max_batch_size_bytes.");
-TAG_FLAG(cdc_max_apply_batch_size_bytes, runtime);
+DEFINE_RUNTIME_int32(cdc_max_apply_batch_size_bytes, 0,
+    "Max CDC write request batch size in kb. If 0, default to consensus_max_batch_size_bytes.");
 
 DEFINE_test_flag(bool, twodc_write_hybrid_time, false,
                  "Override external_hybrid_time with initialHybridTimeValue for testing.");

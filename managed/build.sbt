@@ -418,7 +418,7 @@ runPlatform := {
 }
 
 libraryDependencies += "org.yb" % "ybc-client" % "1.0.0-b4"
-libraryDependencies += "org.yb" % "yb-client" % "0.8.31-SNAPSHOT"
+libraryDependencies += "org.yb" % "yb-client" % "0.8.33-SNAPSHOT"
 
 libraryDependencies ++= Seq(
   "io.netty" % "netty-tcnative-boringssl-static" % "2.0.54.Final",
@@ -430,6 +430,9 @@ libraryDependencies ++= Seq(
 
 dependencyOverrides += "com.google.protobuf" % "protobuf-java" % "3.19.4"
 dependencyOverrides += "com.google.guava" % "guava" % "23.0"
+// SSO functionality only works on the older version of nimbusds.
+// Azure library upgrade tries to upgrade nimbusds to latest version.
+dependencyOverrides += "com.nimbusds" % "oauth2-oidc-sdk" % "7.1.1"
 
 concurrentRestrictions in Global := Seq(Tags.limitAll(16))
 

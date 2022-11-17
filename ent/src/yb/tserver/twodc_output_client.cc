@@ -30,7 +30,7 @@
 #include "yb/tserver/cdc_consumer.h"
 #include "yb/tserver/tserver_service.proxy.h"
 #include "yb/tserver/twodc_write_interface.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/logging.h"
 #include "yb/util/net/net_util.h"
 #include "yb/util/result.h"
@@ -39,9 +39,8 @@
 
 DECLARE_int32(cdc_write_rpc_timeout_ms);
 
-DEFINE_bool(cdc_force_remote_tserver, false,
+DEFINE_RUNTIME_bool(cdc_force_remote_tserver, false,
     "Avoid local tserver apply optimization for CDC and force remote RPCs.");
-TAG_FLAG(cdc_force_remote_tserver, runtime);
 
 DECLARE_int32(cdc_read_rpc_timeout_ms);
 

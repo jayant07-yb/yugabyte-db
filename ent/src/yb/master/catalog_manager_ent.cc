@@ -89,7 +89,7 @@
 #include "yb/util/cast.h"
 #include "yb/util/date_time.h"
 #include "yb/util/debug-util.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/format.h"
 #include "yb/util/logging.h"
 #include "yb/util/random_util.h"
@@ -118,37 +118,32 @@ using std::set;
 
 using strings::Substitute;
 
-DEFINE_int32(cdc_state_table_num_tablets, 0,
-             "Number of tablets to use when creating the CDC state table. "
-             "0 to use the same default num tablets as for regular tables.");
+DEFINE_RUNTIME_int32(cdc_state_table_num_tablets, 0,
+    "Number of tablets to use when creating the CDC state table. "
+    "0 to use the same default num tablets as for regular tables.");
 
-DEFINE_int32(cdc_wal_retention_time_secs, 4 * 3600,
-             "WAL retention time in seconds to be used for tables for which a CDC stream was "
-             "created.");
+DEFINE_RUNTIME_int32(cdc_wal_retention_time_secs, 4 * 3600,
+    "WAL retention time in seconds to be used for tables for which a CDC stream was created.");
 DECLARE_int32(master_rpc_timeout_ms);
 
-DEFINE_bool(enable_transaction_snapshots, true,
-            "The flag enables usage of transaction aware snapshots.");
+DEFINE_RUNTIME_bool(enable_transaction_snapshots, true,
+    "The flag enables usage of transaction aware snapshots.");
 TAG_FLAG(enable_transaction_snapshots, hidden);
 TAG_FLAG(enable_transaction_snapshots, advanced);
-TAG_FLAG(enable_transaction_snapshots, runtime);
 
 DEFINE_test_flag(bool, disable_cdc_state_insert_on_setup, false,
                  "Disable inserting new entries into cdc state as part of the setup flow.");
 
 DECLARE_bool(xcluster_wait_on_ddl_alter);
 
-DEFINE_bool(xcluster_skip_schema_compatibility_checks_on_alter, false,
-            "When xCluster replication sends a DDL change, skip checks "
-            "for any schema compatibility");
-TAG_FLAG(xcluster_skip_schema_compatibility_checks_on_alter, runtime);
+DEFINE_RUNTIME_bool(xcluster_skip_schema_compatibility_checks_on_alter, false,
+    "When xCluster replication sends a DDL change, skip checks "
+    "for any schema compatibility");
 
-DEFINE_bool(allow_consecutive_restore, true,
-            "DEPRECATED. Has no effect, use ForwardRestoreCheck to disallow any forward restores.");
-TAG_FLAG(allow_consecutive_restore, runtime);
+DEPRECATE_FLAG(bool, allow_consecutive_restore, "10_2022");
 
-DEFINE_bool(check_bootstrap_required, false,
-            "Is it necessary to check whether bootstrap is required for Universe Replication.");
+DEFINE_RUNTIME_bool(check_bootstrap_required, false,
+    "Is it necessary to check whether bootstrap is required for Universe Replication.");
 
 DEFINE_test_flag(bool, exit_unfinished_deleting, false,
                  "Whether to exit part way through the deleting universe process.");
@@ -156,61 +151,53 @@ DEFINE_test_flag(bool, exit_unfinished_deleting, false,
 DEFINE_test_flag(bool, exit_unfinished_merging, false,
                  "Whether to exit part way through the merging universe process.");
 
-DEFINE_bool(disable_universe_gc, false,
-            "Whether to run the GC on universes or not.");
-TAG_FLAG(disable_universe_gc, runtime);
+DEFINE_RUNTIME_bool(disable_universe_gc, false,
+    "Whether to run the GC on universes or not.");
 DEFINE_test_flag(double, crash_during_sys_catalog_restoration, 0.0,
                  "Probability of crash during the RESTORE_SYS_CATALOG phase.");
-TAG_FLAG(TEST_crash_during_sys_catalog_restoration, runtime);
 
-DEFINE_bool(enable_replicate_transaction_status_table, false,
-            "Whether to enable xCluster replication of the transaction status table.");
+DEFINE_RUNTIME_bool(enable_replicate_transaction_status_table, false,
+    "Whether to enable xCluster replication of the transaction status table.");
 
-DEFINE_int32(
-    cdc_parent_tablet_deletion_task_retry_secs, 30,
+DEFINE_RUNTIME_int32(cdc_parent_tablet_deletion_task_retry_secs, 30,
     "Frequency at which the background task will verify parent tablets retained for xCluster or "
     "CDCSDK replication and determine if they can be cleaned up.");
 
-DEFINE_int32(wait_replication_drain_retry_timeout_ms, 2000,
-             "Timeout in milliseconds in between CheckReplicationDrain calls to tservers "
-             "in case of retries.");
+DEFINE_RUNTIME_int32(wait_replication_drain_retry_timeout_ms, 2000,
+    "Timeout in milliseconds in between CheckReplicationDrain calls to tservers "
+    "in case of retries.");
 DEFINE_test_flag(bool, hang_wait_replication_drain, false,
                  "Used in tests to temporarily block WaitForReplicationDrain.");
 DEFINE_test_flag(bool, import_snapshot_failed, false,
                  "Return a error from ImportSnapshotMeta RPC for testing the RPC failure.");
-DEFINE_int32(ns_replication_sync_retry_secs, 5,
-             "Frequency at which the bg task will try to sync with producer and add tables to "
-             "the current NS-level replication, when there are non-replicated consumer tables.");
-DEFINE_int32(ns_replication_sync_backoff_secs, 60,
+DEFINE_RUNTIME_int32(ns_replication_sync_retry_secs, 5,
+    "Frequency at which the bg task will try to sync with producer and add tables to "
+    "the current NS-level replication, when there are non-replicated consumer tables.");
+DEFINE_RUNTIME_int32(ns_replication_sync_backoff_secs, 60,
              "Frequency of the add table task for a NS-level replication, when there are no "
              "non-replicated consumer tables.");
-DEFINE_int32(ns_replication_sync_error_backoff_secs, 300,
-             "Frequency of the add table task for a NS-level replication, when there are too "
-             "many consecutive errors happening for the replication.");
+DEFINE_RUNTIME_int32(ns_replication_sync_error_backoff_secs, 300,
+    "Frequency of the add table task for a NS-level replication, when there are too "
+    "many consecutive errors happening for the replication.");
 
-DEFINE_uint64(import_snapshot_max_concurrent_create_table_requests, 20,
-             "Maximum number of create table requests to the master that can be outstanding "
-             "during the import snapshot metadata phase of restore.");
-TAG_FLAG(import_snapshot_max_concurrent_create_table_requests, runtime);
+DEFINE_RUNTIME_uint64(import_snapshot_max_concurrent_create_table_requests, 20,
+    "Maximum number of create table requests to the master that can be outstanding "
+    "during the import snapshot metadata phase of restore.");
 
-DEFINE_int32(inflight_splits_completion_timeout_secs, 600,
-             "Total time to wait for all inflight splits to complete during Restore.");
+DEFINE_RUNTIME_int32(inflight_splits_completion_timeout_secs, 600,
+    "Total time to wait for all inflight splits to complete during Restore.");
 TAG_FLAG(inflight_splits_completion_timeout_secs, advanced);
-TAG_FLAG(inflight_splits_completion_timeout_secs, runtime);
 
-DEFINE_int32(pitr_max_restore_duration_secs, 600,
-             "Maximum amount of time to complete a PITR restore.");
+DEFINE_RUNTIME_int32(pitr_max_restore_duration_secs, 600,
+    "Maximum amount of time to complete a PITR restore.");
 TAG_FLAG(pitr_max_restore_duration_secs, advanced);
-TAG_FLAG(pitr_max_restore_duration_secs, runtime);
 
-DEFINE_int32(pitr_split_disable_check_freq_ms, 500,
-             "Delay before retrying to see if inflight tablet split operations have completed "
-             "after which PITR restore can be performed.");
+DEFINE_RUNTIME_int32(pitr_split_disable_check_freq_ms, 500,
+    "Delay before retrying to see if inflight tablet split operations have completed "
+    "after which PITR restore can be performed.");
 TAG_FLAG(pitr_split_disable_check_freq_ms, advanced);
-TAG_FLAG(pitr_split_disable_check_freq_ms, runtime);
 
-DEFINE_int32(
-    cdcsdk_table_processing_limit_per_run, 2,
+DEFINE_RUNTIME_int32(cdcsdk_table_processing_limit_per_run, 2,
     "The number of newly added tables we will add to CDCSDK streams, per run of the background "
     "task.");
 
@@ -2178,13 +2165,24 @@ Status CatalogManager::ImportTableEntry(const NamespaceMap& namespace_map,
         // For YSQL, the table must be created via external call. Therefore, continue the search for
         // the table, this time checking for name matches rather than id matches.
 
-        // TODO(alex): Handle tablegroups in #11632
         if (meta.colocated() && IsColocatedDbParentTableId(table_data->old_table_id)) {
           // For the parent colocated table we need to generate the new_table_id ourselves
           // since the names will not match.
           // For normal colocated tables, we are still able to follow the normal table flow, so no
           // need to generate the new_table_id ourselves.
           table_data->new_table_id = GetColocatedDbParentTableId(new_namespace_id);
+          is_parent_colocated_table = true;
+        } else if (meta.colocated() && IsTablegroupParentTableId(table_data->old_table_id)) {
+          // Since we preserve tablegroup oid in ysql_dump, for the parent tablegroup table, if we
+          // didn't find a match by id in the previous step, then we need to generate the
+          // new_table_id ourselves because the namespace id of the namespace where this tablegroup
+          // was created changes.
+          uint32_t database_oid = VERIFY_RESULT(GetPgsqlDatabaseOid(new_namespace_id));
+          uint32_t tablegroup_oid =
+              VERIFY_RESULT(GetPgsqlTablegroupOid(
+                  GetTablegroupIdFromParentTableId(table_data->old_table_id)));
+          table_data->new_table_id =
+              GetTablegroupParentTableId(GetPgsqlTablegroupId(database_oid, tablegroup_oid));
           is_parent_colocated_table = true;
         } else {
           if (!table_data->new_table_id.empty()) {
@@ -2379,6 +2377,15 @@ Status CatalogManager::ImportTableEntry(const NamespaceMap& namespace_map,
       l.mutable_data()->pb.set_next_column_id(schema.max_col_id() + 1);
       l.mutable_data()->pb.set_version(l->pb.version() + 1);
       // Update sys-catalog with the new table schema.
+      RETURN_NOT_OK(sys_catalog_->Upsert(leader_ready_term(), table));
+      l.Commit();
+      notify_ts_for_schema_change = true;
+    }
+
+    // Bump up the schema version to the version of the snapshot if it is less.
+    if (meta.version() > table->LockForRead()->pb.version()) {
+      auto l = table->LockForWrite();
+      l.mutable_data()->pb.set_version(meta.version());
       RETURN_NOT_OK(sys_catalog_->Upsert(leader_ready_term(), table));
       l.Commit();
       notify_ts_for_schema_change = true;
@@ -3359,7 +3366,12 @@ Status CatalogManager::DeleteCDCStreamsMetadataForTables(const vector<TableId>& 
 
   std::vector<scoped_refptr<CDCStreamInfo>> streams;
   for (const auto& tid : table_ids) {
-    auto newstreams = FindCDCStreamsForTableToDeleteMetadata(tid);
+    std::vector<scoped_refptr<CDCStreamInfo>> newstreams;
+    {
+      LockGuard lock(mutex_);
+      cdcsdk_tables_to_stream_map_.erase(tid);
+      newstreams = FindCDCStreamsForTableToDeleteMetadata(tid);
+    }
     streams.insert(streams.end(), newstreams.begin(), newstreams.end());
   }
 
@@ -3413,7 +3425,6 @@ std::vector<scoped_refptr<CDCStreamInfo>> CatalogManager::FindCDCStreamsForTable
 std::vector<scoped_refptr<CDCStreamInfo>> CatalogManager::FindCDCStreamsForTableToDeleteMetadata(
     const TableId& table_id) const {
   std::vector<scoped_refptr<CDCStreamInfo>> streams;
-  SharedLock lock(mutex_);
 
   for (const auto& entry : cdc_stream_map_) {
     auto ltm = entry.second->LockForRead();
@@ -3659,7 +3670,9 @@ Status CatalogManager::CreateCDCStream(const CreateCDCStreamRequestPB* req,
           // For cdcsdk cases, we also need to persist last_active_time in the 'cdc_state' table. We
           // will store this info in the map in the 'kCdcData' column.
           auto column_id = cdc_table.ColumnId(master::kCdcData);
-          cdc_table.AddMapColumnValue(req, column_id, "active_time", "0");
+          auto map_value_pb = client::AddMapColumn(req, column_id);
+          client::AddMapEntryToColumn(map_value_pb, "active_time", "0");
+          client::AddMapEntryToColumn(map_value_pb, "cdc_sdk_safe_time", "0");
         }
 
         session->Apply(op);
@@ -3974,8 +3987,9 @@ Status CatalogManager::AddTabletEntriesToCDCSDKStreamsForNewTables(
         QLAddStringRangeValue(insert_req, stream->id());
         cdc_table.AddStringColumnValue(
             insert_req, master::kCdcCheckpoint, OpId::Invalid().ToString());
-        cdc_table.AddMapColumnValue(
-            insert_req, cdc_table.ColumnId(master::kCdcData), "active_time", "0");
+        auto map_value_pb = client::AddMapColumn(insert_req, cdc_table.ColumnId(master::kCdcData));
+        client::AddMapEntryToColumn(map_value_pb, "active_time", "0");
+        client::AddMapEntryToColumn(map_value_pb, "cdc_sdk_safe_time", "0");
         session->Apply(insert_op);
       }
 
@@ -3997,6 +4011,14 @@ Status CatalogManager::AddTabletEntriesToCDCSDKStreamsForNewTables(
         LOG(WARNING) << "Encountered error while trying to update sys_catalog of stream: "
                      << stream->id() << ", with table: " << table_id;
         continue;
+      }
+
+      // Add the table/ stream pair details to 'cdcsdk_tables_to_stream_map_', so that parent
+      // tablets on which tablet split is successful will be hidden rather than deleted straight
+      // away, as needed.
+      {
+        LockGuard lock(mutex_);
+        cdcsdk_tables_to_stream_map_[table_id].insert(stream->id());
       }
 
       stream_lock.Commit();
@@ -5774,8 +5796,11 @@ Status CatalogManager::UpdateCDCProducerOnTabletSplit(
         if (is_cdcsdk_stream) {
           auto last_active_time = GetCurrentTimeMicros();
           auto column_id = cdc_table.ColumnId(master::kCdcData);
-          cdc_table.AddMapColumnValue(
-              insert_req, column_id, "active_time", std::to_string(last_active_time));
+          auto map_value_pb = client::AddMapColumn(insert_req, column_id);
+          client::AddMapEntryToColumn(
+              map_value_pb, "active_time", std::to_string(last_active_time));
+          client::AddMapEntryToColumn(
+              map_value_pb, "cdc_sdk_safe_time", std::to_string(last_active_time));
         }
         session->Apply(insert_op);
       }
@@ -7443,6 +7468,11 @@ CatalogManager::XClusterConsumerTableStreamInfoMap
 bool CatalogManager::IsCdcEnabled(
     const TableInfo& table_info) const {
   SharedLock lock(mutex_);
+  return IsCdcEnabledUnlocked(table_info);
+}
+
+bool CatalogManager::IsCdcEnabledUnlocked(
+    const TableInfo& table_info) const {
   return IsTableCdcProducer(table_info) || IsTableCdcConsumer(table_info);
 }
 
@@ -7468,6 +7498,11 @@ bool CatalogManager::IsCdcSdkEnabled(const TableInfo& table_info) {
 
 bool CatalogManager::IsTablePartOfBootstrappingCdcStream(const TableInfo& table_info) const {
   SharedLock lock(mutex_);
+  return IsTablePartOfBootstrappingCdcStreamUnlocked(table_info);
+}
+
+bool CatalogManager::IsTablePartOfBootstrappingCdcStreamUnlocked(
+    const TableInfo& table_info) const {
   auto it = xcluster_producer_tables_to_stream_map_.find(table_info.id());
   if (it != xcluster_producer_tables_to_stream_map_.end()) {
     // Check that at least one of these streams is being bootstrapped.
