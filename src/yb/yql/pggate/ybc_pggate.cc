@@ -254,6 +254,15 @@ YBCStatus YBCGetPgggateCurrentAllocatedBytes(int64_t *consumption) {
   return YBCStatusOK();
 }
 
+YBCStatus YbGetActualHeapSizeBytes(int64_t *consumption) {
+#ifdef TCMALLOC_ENABLED
+    *consumption = yb::MemTracker::GetTCMallocActualHeapSizeBytes();
+#else
+    *consumption = 0;
+#endif
+    return YBCStatusOK();
+}
+
 bool YBCTryMemConsume(int64_t bytes) {
   if (pgapi) {
     pgapi->GetMemTracker().Consume(bytes);
@@ -279,8 +288,10 @@ YBCStatus YBCPgConnectDatabase(const char *database_name) {
   return ToYBCStatus(pgapi->ConnectDatabase(database_name));
 }
 
-YBCStatus YBCPgIsDatabaseColocated(const YBCPgOid database_oid, bool *colocated) {
-  return ToYBCStatus(pgapi->IsDatabaseColocated(database_oid, colocated));
+YBCStatus YBCPgIsDatabaseColocated(const YBCPgOid database_oid, bool *colocated,
+                                   bool *legacy_colocated_database) {
+  return ToYBCStatus(pgapi->IsDatabaseColocated(database_oid, colocated,
+                                                legacy_colocated_database));
 }
 
 YBCStatus YBCPgNewCreateDatabase(const char *database_name,
