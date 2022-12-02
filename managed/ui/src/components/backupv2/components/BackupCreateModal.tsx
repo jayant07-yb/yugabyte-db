@@ -323,7 +323,8 @@ export const BackupCreateModal: FC<BackupCreateModalProps> = ({
     incremental_backup_frequency: Yup.number().test({
       message: 'Incremental backup interval must be less than full backup',
       test: function (value) {
-        if (!isScheduledBackup) return true;
+        if (!isScheduledBackup || !this.parent.is_incremental_backup_enabled || this.parent.use_cron_expression) return true;
+        
         return (
           value *
             MILLISECONDS_IN[this.parent.incremental_backup_frequency_type.value.toUpperCase()] <
@@ -609,19 +610,19 @@ function BackupConfigurationForm({
                   {target.label}
                   {target.value === Backup_Options_Type.CUSTOM &&
                     values['backup_tables'] === Backup_Options_Type.CUSTOM && (
-                      <span className="tables-count">
-                        <span>{values['selected_ycql_tables'].length} tables selected</span>
-                        <span
-                          className="edit-selection"
-                          onClick={() => {
-                            setFieldValue('show_select_ycql_table', true);
-                          }}
-                        >
-                          <i className="fa fa-pencil" />&nbsp;
-                          {`${isIncrementalBackup || isEditMode ? 'View' : 'Edit'} `} selection
-                        </span>
+                    <span className="tables-count">
+                      <span>{values['selected_ycql_tables'].length} tables selected</span>
+                      <span
+                        className="edit-selection"
+                        onClick={() => {
+                          setFieldValue('show_select_ycql_table', true);
+                        }}
+                      >
+                        <i className="fa fa-pencil" />&nbsp;
+                        {`${isIncrementalBackup || isEditMode ? 'View' : 'Edit'} `} selection
                       </span>
-                    )}
+                    </span>
+                  )}
                 </label>
                 <br />
               </>
@@ -922,26 +923,26 @@ export const SelectYCQLTablesModal: FC<SelectYCQLTablesModalProps> = ({
           {values['selected_ycql_tables'].length === 0
             ? infoText
             : values['selected_ycql_tables'].map((t: ITable) => {
-                return (
-                  <div className="selected-table-item" key={t.tableUUID}>
-                    {t.tableName}
-                    <span
-                      className="remove-selected-table"
-                      onClick={() => {
-                        if (isEditMode) return;
-                        setFieldValue(
-                          'selected_ycql_tables',
-                          values['selected_ycql_tables'].filter(
-                            (f: ITable) => f.tableUUID !== t.tableUUID
-                          )
-                        );
-                      }}
-                    >
-                      <img alt="Remove" src={Close} width="22" />
-                    </span>
-                  </div>
-                );
-              })}
+              return (
+                <div className="selected-table-item" key={t.tableUUID}>
+                  {t.tableName}
+                  <span
+                    className="remove-selected-table"
+                    onClick={() => {
+                      if (isEditMode) return;
+                      setFieldValue(
+                        'selected_ycql_tables',
+                        values['selected_ycql_tables'].filter(
+                          (f: ITable) => f.tableUUID !== t.tableUUID
+                        )
+                      );
+                    }}
+                  >
+                    <img alt="Remove" src={Close} width="22" />
+                  </span>
+                </div>
+              );
+            })}
         </Col>
       </Row>
     </YBModalForm>
