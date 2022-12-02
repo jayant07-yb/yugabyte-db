@@ -15,15 +15,14 @@
 // Structure definitions for a Postgres table descriptor.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_PGGATE_PG_TABLEDESC_H_
-#define YB_YQL_PGGATE_PG_TABLEDESC_H_
+#pragma once
 
 #include "yb/common/partition.h"
 #include "yb/common/pg_types.h"
 #include "yb/common/pgsql_protocol.messages.h"
 #include "yb/common/schema.h"
 
-#include "yb/client/yb_op.h"
+#include "yb/client/table.h"
 #include "yb/client/yb_table_name.h"
 
 #include "yb/master/master_ddl.pb.h"
@@ -52,6 +51,7 @@ class PgTableDesc : public RefCountedThreadSafe<PgTableDesc> {
 
   const PartitionSchema& partition_schema() const;
 
+  size_t num_range_key_columns() const;
   size_t num_hash_key_columns() const;
   size_t num_key_columns() const;
   size_t num_columns() const;
@@ -72,17 +72,17 @@ class PgTableDesc : public RefCountedThreadSafe<PgTableDesc> {
   size_t GetPartitionCount() const;
 
   // When reading a row given its associated ybctid, the ybctid value is decoded to the row.
-  Result<string> DecodeYbctid(const Slice& ybctid) const;
+  Result<std::string> DecodeYbctid(const Slice& ybctid) const;
 
   // Seek the tablet partition where the row whose "ybctid" value was given can be found.
   Result<size_t> FindPartitionIndex(const Slice& ybctid) const;
 
   // These values are set by  PgGate to optimize query to narrow the scanning range of a query.
   Status SetScanBoundary(LWPgsqlReadRequestPB *req,
-                                 const string& partition_lower_bound,
-                                 bool lower_bound_is_inclusive,
-                                 const string& partition_upper_bound,
-                                 bool upper_bound_is_inclusive);
+                         const std::string& partition_lower_bound,
+                         bool lower_bound_is_inclusive,
+                         const std::string& partition_upper_bound,
+                         bool upper_bound_is_inclusive);
 
   const Schema& schema() const;
 
@@ -91,7 +91,11 @@ class PgTableDesc : public RefCountedThreadSafe<PgTableDesc> {
 
   YBCPgOid GetColocationId() const;
 
+  YBCPgOid GetTablegroupOid() const;
+
   uint32_t schema_version() const;
+
+  bool IsIndex() const;
 
  private:
   PgObjectId id_;
@@ -104,9 +108,8 @@ class PgTableDesc : public RefCountedThreadSafe<PgTableDesc> {
 
   // Attr number to column index map.
   std::unordered_map<int, size_t> attr_num_map_;
+  YBCPgOid tablegroup_oid_{kInvalidOid};
 };
 
 }  // namespace pggate
 }  // namespace yb
-
-#endif  // YB_YQL_PGGATE_PG_TABLEDESC_H_

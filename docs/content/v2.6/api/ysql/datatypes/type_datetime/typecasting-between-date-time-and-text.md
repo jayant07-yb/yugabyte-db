@@ -8,8 +8,7 @@ menu:
     identifier: typecasting-between-date-time-and-text
     parent: api-ysql-datatypes-datetime
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This section and its peer, [Timezones and _UTC offsets_](../timezones/), are placed, with respect to the sequential reading order of the overall _date-time_ time data types section that the [table of contents](../../type_datetime/) presents, before the main treatment of the [semantics of the _date-time_ data types](../date-time-data-types-semantics/) because the code examples in those subsequent sections rely on typecasting between _date-time_ values and _text_ values and on setting the timezone, either as a session parameter or as part of a _date-time_ expression with the _at time zone_ operator.
@@ -21,12 +20,12 @@ Typecasting between _date-time_ values and _text_ values, rather than using expl
 {{< note title="'Date-time' functions and operators in the PostgreSQL documentation." >}}
 PostgreSQL, and therefore YSQL, provide many functions and equivalent syntactical constructs that operate on, or produce, _date-time_ values. These will presently be documented in a dedicated section within the main section [Functions and operators](../../../exprs/). Meanwhile, refer to the PostgreSQL documentation sections:
 
-- <a href="https://www.postgresql.org/docs/11/functions-datetime.html" target="_blank">9.9. Date/Time Functions and Operators <i class="fas fa-external-link-alt"></i></a>
-- <a href="https://www.postgresql.org/docs/11/functions-formatting.html" target="_blank">9.8. Data Type Formatting Functions <i class="fas fa-external-link-alt"></i></a>
+- <a href="https://www.postgresql.org/docs/11/functions-datetime.html" target="_blank">9.9. Date/Time Functions and Operators <i class="fa-solid fa-up-right-from-square"></i></a>
+- <a href="https://www.postgresql.org/docs/11/functions-formatting.html" target="_blank">9.8. Data Type Formatting Functions <i class="fa-solid fa-up-right-from-square"></i></a>
 
 and the other sections that are referenced below.
 
-The following _to_char_demo()_ code example uses the _to_timestamp()_ function to produce a _timestamptz_ value from a _double precision_ value. The input represents the real number of seconds after, or before, the start of the Unix Epoch (a.k.a. the POSIX Epoch). See the Wikipedia article <a href="https://en.wikipedia.org/wiki/Unix_time" target="_blank">Unix time <i class="fas fa-external-link-alt"></i></a>. The Unix Epoch begins at midnight on 1-January-1970 _UTC_. Try this:
+The following _to_char_demo()_ code example uses the _to_timestamp()_ function to produce a _timestamptz_ value from a _double precision_ value. The input represents the real number of seconds after, or before, the start of the Unix Epoch (a.k.a. the POSIX Epoch). See the Wikipedia article <a href="https://en.wikipedia.org/wiki/Unix_time" target="_blank">Unix time <i class="fa-solid fa-up-right-from-square"></i></a>. The Unix Epoch begins at midnight on 1-January-1970 _UTC_. Try this:
 
 ```plpgsql
 set datestyle = 'ISO, DMY';
@@ -43,7 +42,7 @@ See the Wikipedia article [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601). Th
 This is the result:
 
 ```output
-        data type         |         value          
+        data type         |         value
 --------------------------+------------------------
  timestamp with time zone | 1970-01-01 00:00:00+00
 ```
@@ -65,7 +64,7 @@ execute stmt(to_timestamp(0::double precision), 'Europe/Paris');
 This is the result:
 
 ```output
-          data type          |        value        
+          data type          |        value
 -----------------------------+---------------------
  timestamp without time zone | 1970-01-01 01:00:00
 ```
@@ -112,22 +111,22 @@ $body$;
 select z from to_char_demo();
 ```
 
-Because this uses the _to_char()_ function, and not typecasting, the result is not sensitive to the _DateStyle_ setting. PostgreSQL documents the various components, like _'TMDay'_, _'TMMonth'_, _'yyyy'_, _dd_, and so on that define the format that _to_char()_ produces in <a href="https://www.postgresql.org/docs/11/functions-formatting.html#FUNCTIONS-FORMATTING-DATETIME-TABLE" target="_blank">Table 9.24. Template Patterns for Date/Time Formatting <i class="fas fa-external-link-alt"></i></a>.
+Because this uses the _to_char()_ function, and not typecasting, the result is not sensitive to the _DateStyle_ setting. PostgreSQL documents the various components, like _'TMDay'_, _'TMMonth'_, _'yyyy'_, _dd_, and so on that define the format that _to_char()_ produces in <a href="https://www.postgresql.org/docs/11/functions-formatting.html#FUNCTIONS-FORMATTING-DATETIME-TABLE" target="_blank">Table 9.24. Template Patterns for Date/Time Formatting <i class="fa-solid fa-up-right-from-square"></i></a>.
 
 And because _to_char_demo()_ uses the _at time zone_ operator, it is not sensitive to the current _TimeZone_ setting. This is the result:
 
 ```output
  Friday / September
  Fri 07-Sep-1042 11:59:59.543216 BC
- 
+
  Venerdì / Settembre
  Ven 07-Set-1042 11:59:59.543216 BC
- 
+
  Perjantai / Syyskuu
  Pe 07-Syy-1042 11:59:59.543216 BC
 ```
 
-As you see, the _lc_time_ session parameter determines the national language that is used for the spellings of the short and long day and month names. The PostgreSQL documentation describes this parameter in the section <a href="https://www.postgresql.org/docs/11/locale.html" target="_blank">23.1. Locale Support <i class="fas fa-external-link-alt"></i></a> Notice that this section, in turn, references the section <a href="https://www.postgresql.org/docs/11/runtime-config-client.html#RUNTIME-CONFIG-CLIENT-FORMAT" target="_blank">23.1. 19.11.2. Locale and Formatting <i class="fas fa-external-link-alt"></i></a>.
+As you see, the _lc_time_ session parameter determines the national language that is used for the spellings of the short and long day and month names. The PostgreSQL documentation describes this parameter in the section <a href="https://www.postgresql.org/docs/11/locale.html" target="_blank">23.1. Locale Support <i class="fa-solid fa-up-right-from-square"></i></a> Notice that this section, in turn, references the section <a href="https://www.postgresql.org/docs/11/runtime-config-client.html#RUNTIME-CONFIG-CLIENT-FORMAT" target="_blank">23.1. 19.11.2. Locale and Formatting <i class="fa-solid fa-up-right-from-square"></i></a>.
 
 In short, a setting like _'fi_FI'_ is operating-system-dependent and may, or may not, be available according to what local support files have been installed. You can see what's available on a Unix-like system with this shell command:
 
@@ -378,23 +377,23 @@ Yugabyte recommends that application code should convert between _text_ values a
 ```plpgsql
   drop table if exists t cascade;
   create table t(k int primary key, t1 time not null, t2 time not null);
-  insert into t(k, t1, t2) values(1, '00:00:00'::time, '00:00:00'::time); 
-  
+  insert into t(k, t1, t2) values(1, '00:00:00'::time, '00:00:00'::time);
+
   deallocate all;
   prepare s_1(text) as
   update t set t1 = to_timestamp($1, 'hh24:mi:ss')::time
   where k = 1;
-  
+
   prepare s_2(text) as
   update t set t2 = to_timestamp($1, 'hh24:mi:ss')::time
   where k = 1;
-  
+
   set timezone = 'UTC';
   execute s_1('13:00:56');
-  
+
   set timezone = 'America/Los_Angeles';
   execute s_2('13:00:56');
-  
+
   select (t1 = t2)::text from t where k = 1;
 ```
 
@@ -472,7 +471,7 @@ order by intervalstyle;
 This is the result:
 
 ```output
-  intervalstyle   |                      i_as_text                      |                  i                   
+  intervalstyle   |                      i_as_text                      |                  i
 ------------------+-----------------------------------------------------+--------------------------------------
  iso_8601         | P1Y2M3DT4H5M6.345678S                               | 1 year 2 mons 3 days 04:05:06.345678
  postgres         | 1 year 2 mons 3 days 04:05:06.345678                | 1 year 2 mons 3 days 04:05:06.345678

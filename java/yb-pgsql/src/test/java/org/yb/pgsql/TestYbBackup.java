@@ -15,7 +15,9 @@ package org.yb.pgsql;
 import java.io.File;
 import java.lang.Math;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.Statement;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
@@ -38,10 +40,11 @@ import org.slf4j.LoggerFactory;
 import org.apache.commons.io.FileUtils;
 import org.yb.minicluster.MiniYBCluster;
 import org.yb.minicluster.MiniYBClusterBuilder;
+import org.yb.util.SystemUtil;
 import org.yb.util.TableProperties;
 import org.yb.util.YBBackupException;
 import org.yb.util.YBBackupUtil;
-import org.yb.util.YBTestRunnerNonSanitizersOrMac;
+import org.yb.util.YBTestRunnerNonTsanAsan;
 
 import com.google.common.collect.ImmutableMap;
 
@@ -53,7 +56,7 @@ import static org.yb.AssertionWrappers.assertLessThan;
 import static org.yb.AssertionWrappers.assertTrue;
 import static org.yb.AssertionWrappers.fail;
 
-@RunWith(value=YBTestRunnerNonSanitizersOrMac.class)
+@RunWith(value=YBTestRunnerNonTsanAsan.class)
 public class TestYbBackup extends BasePgSQLTest {
   private static final Logger LOG = LoggerFactory.getLogger(TestYbBackup.class);
 
@@ -295,7 +298,7 @@ public class TestYbBackup extends BasePgSQLTest {
   public void testColocatedWithColocationIdAlreadySet() throws Exception {
     String ybTablePropsSql = "SELECT c.relname, props.colocation_id"
         + " FROM pg_class c, yb_table_properties(c.oid) props"
-        + " WHERE c.oid >= 16384"
+        + " WHERE c.oid >= " + FIRST_NORMAL_OID
         + " ORDER BY c.relname";
     String uniqueIndexOnlySql = "SELECT b FROM test_tbl WHERE b = 3.14";
     try (Statement stmt = connection.createStatement()) {
@@ -381,31 +384,30 @@ public class TestYbBackup extends BasePgSQLTest {
     }
   }
 
-  @Ignore // TODO(alex): Enable after #11632 is fixed.
-  public void testTablegroups() throws Exception {
-    // TODO: Add constraint with a different tablegroup once #11600 is done.
+  // TODO: Enable this test once issue #14873 is fixed.
+  @Ignore
+  public void testTablegroup() throws Exception {
     String ybTablePropsSql = "SELECT c.relname, tg.grpname, props.colocation_id"
         + " FROM pg_class c, yb_table_properties(c.oid) props"
         + " LEFT JOIN pg_yb_tablegroup tg ON tg.oid = props.tablegroup_oid"
-        + " WHERE c.oid >= 16384"
+        + " WHERE c.oid >= " + FIRST_NORMAL_OID
         + " ORDER BY c.relname";
     String uniqueIndexOnlySql = "SELECT b FROM test_tbl WHERE b = 3.14";
+    String backupDir = null;
     try (Statement stmt = connection.createStatement()) {
       stmt.execute("CREATE DATABASE yb1");
     }
     try (Connection connection2 = getConnectionBuilder().withDatabase("yb1").connect();
          Statement stmt = connection2.createStatement()) {
       stmt.execute("CREATE TABLEGROUP tg1");
-      stmt.execute("CREATE TABLEGROUP tg2");
       stmt.execute("CREATE TABLE test_tbl ("
           + "  h INT PRIMARY KEY,"
           + "  a INT,"
           + "  b FLOAT CONSTRAINT test_tbl_uniq UNIQUE WITH (colocation_id=654321)"
           + ") WITH (colocation_id=123456)"
           + " TABLEGROUP tg1");
-      stmt.execute("CREATE INDEX test_tbl_tg2_idx ON test_tbl (a ASC)"
-          + " WITH (colocation_id=11223344) TABLEGROUP tg2");
-      stmt.execute("CREATE INDEX test_tbl_notg_idx ON test_tbl (a ASC) NO TABLEGROUP");
+      stmt.execute("CREATE INDEX test_tbl_idx ON test_tbl (a ASC)"
+          + " WITH (colocation_id=11223344)");
       stmt.execute("INSERT INTO test_tbl (h, a, b) VALUES (1, 101, 3.14)");
 
       runInvalidQuery(stmt, "INSERT INTO test_tbl (h, a, b) VALUES (2, 202, 3.14)",
@@ -413,16 +415,18 @@ public class TestYbBackup extends BasePgSQLTest {
 
       assertQuery(stmt, ybTablePropsSql,
           new Row("test_tbl", "tg1", 123456),
-          new Row("test_tbl_notg_idx", null, null),
+          new Row("test_tbl_idx", "tg1", 11223344),
           new Row("test_tbl_pkey", null, null),
-          new Row("test_tbl_tg2_idx", "tg2", 11223344),
           new Row("test_tbl_uniq", "tg1", 654321));
 
       assertTrue(isIndexOnlyScan(stmt, uniqueIndexOnlySql, "test_tbl_uniq"));
 
       // Check that backup and restore works fine.
-      YBBackupUtil.runYbBackupCreate("--keyspace", "ysql.yb1");
-      YBBackupUtil.runYbBackupRestore("--keyspace", "ysql.yb2");
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yb1");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+      YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb2");
     }
     // Verify data is correct.
     try (Connection connection2 = getConnectionBuilder().withDatabase("yb2").connect();
@@ -432,9 +436,8 @@ public class TestYbBackup extends BasePgSQLTest {
 
       assertQuery(stmt, ybTablePropsSql,
           new Row("test_tbl", "tg1", 123456),
-          new Row("test_tbl_notg_idx", null, null),
+          new Row("test_tbl_idx", "tg1", 11223344),
           new Row("test_tbl_pkey", null, null),
-          new Row("test_tbl_tg2_idx", "tg2", 11223344),
           new Row("test_tbl_uniq", "tg1", 654321));
 
       runInvalidQuery(stmt, "INSERT INTO test_tbl (h, a, b) VALUES (2, 202, 3.14)",
@@ -444,8 +447,11 @@ public class TestYbBackup extends BasePgSQLTest {
       assertQuery(stmt, uniqueIndexOnlySql, new Row(3.14));
 
       // Now try to do a backup/restore of the restored db.
-      YBBackupUtil.runYbBackupCreate("--keyspace", "ysql.yb2");
-      YBBackupUtil.runYbBackupRestore("--keyspace", "ysql.yb3");
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yb2");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+      YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb3");
     }
     // Verify data is correct.
     try (Connection connection2 = getConnectionBuilder().withDatabase("yb3").connect();
@@ -455,9 +461,8 @@ public class TestYbBackup extends BasePgSQLTest {
 
       assertQuery(stmt, ybTablePropsSql,
           new Row("test_tbl", "tg1", 123456),
-          new Row("test_tbl_notg_idx", null, null),
+          new Row("test_tbl_idx", "tg1", 11223344),
           new Row("test_tbl_pkey", null, null),
-          new Row("test_tbl_tg2_idx", "tg2", 11223344),
           new Row("test_tbl_uniq", "tg1", 654321));
 
       runInvalidQuery(stmt, "INSERT INTO test_tbl (h, a, b) VALUES (2, 202, 3.14)",
@@ -471,6 +476,54 @@ public class TestYbBackup extends BasePgSQLTest {
       stmt.execute("DROP DATABASE yb1");
       stmt.execute("DROP DATABASE yb2");
       stmt.execute("DROP DATABASE yb3");
+    }
+  }
+
+  @Test
+  public void testMultipleTablegroups() throws Exception {
+    String backupDir = null;
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute("CREATE TABLE dummy (k INT PRIMARY KEY, v INT)");
+      stmt.execute("CREATE TABLEGROUP tg1");
+      stmt.execute("CREATE TABLEGROUP tg2");
+      stmt.execute("CREATE TABLE tbl1_in_tg1 (k INT PRIMARY KEY, v INT) TABLEGROUP tg1");
+      stmt.execute("INSERT INTO tbl1_in_tg1 VALUES (1, 1), (2, 2)");
+      stmt.execute("CREATE TABLE tbl2_in_tg1 (k TEXT PRIMARY KEY, v TEXT) TABLEGROUP tg1");
+      stmt.execute("INSERT INTO tbl2_in_tg1 VALUES ('a', 'b'), ('c', 'd')");
+      stmt.execute("CREATE TABLE tbl3_in_tg2 (k INT PRIMARY KEY, v TEXT) TABLEGROUP tg2");
+      stmt.execute("INSERT INTO tbl3_in_tg2 VALUES (1, 'a'), (2, 'b')");
+      stmt.execute("CREATE TABLE tbl4_in_tg2 (k TEXT PRIMARY KEY, v INT) TABLEGROUP tg2");
+      stmt.execute("INSERT INTO tbl4_in_tg2 VALUES ('x', 100), ('y', 200)");
+
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yugabyte");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+    }
+
+    YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb2");
+
+    try (Connection connection2 = getConnectionBuilder().withDatabase("yb2").connect();
+         Statement stmt = connection2.createStatement()) {
+      assertQuery(stmt, "SELECT * FROM tbl1_in_tg1 ORDER BY k",
+                  new Row(1, 1), new Row(2, 2));
+      assertQuery(stmt, "SELECT * FROM tbl2_in_tg1 ORDER BY k",
+                  new Row("a", "b"), new Row("c", "d"));
+      assertQuery(stmt, "SELECT * FROM tbl3_in_tg2 ORDER BY k",
+                  new Row(1, "a"), new Row(2, "b"));
+      assertQuery(stmt, "SELECT * FROM tbl4_in_tg2 ORDER BY k",
+                  new Row("x", 100), new Row("y", 200));
+
+      String ybTablePropsSql = "SELECT c.relname, tg.grpname"
+          + " FROM pg_class c, yb_table_properties(c.oid) props"
+          + " JOIN pg_yb_tablegroup tg ON tg.oid = props.tablegroup_oid"
+          + " WHERE c.oid >= " + FIRST_NORMAL_OID
+          + " ORDER BY c.relname";
+      assertQuery(stmt, ybTablePropsSql,
+                  new Row("tbl1_in_tg1", "tg1"),
+                  new Row("tbl2_in_tg1", "tg1"),
+                  new Row("tbl3_in_tg2", "tg2"),
+                  new Row("tbl4_in_tg2", "tg2"));
     }
   }
 
@@ -885,8 +938,16 @@ public class TestYbBackup extends BasePgSQLTest {
       JSONObject json = new JSONObject(output);
       long expectedBackupSize = json.getLong("backup_size_in_bytes");
       long actualBackupSize = FileUtils.sizeOfDirectory(new File(json.getString("snapshot_url")));
+      LOG.info("Expected size = " + expectedBackupSize + "  ActualSize = " + actualBackupSize);
       long allowedDelta = 1 * 1024;     // 1 KB
-      assertLessThan(Math.abs(expectedBackupSize - actualBackupSize), allowedDelta);
+
+      // On MAC the expected size can be zero - not calculated.
+      // On MAC 'du -sb' does not work: '-b' is not supported.
+      // The issue on MAC is ignored for now because MacOS is not a production OS.
+      // https://github.com/yugabyte/yugabyte-db/issues/14724
+      if (SystemUtil.IS_LINUX) {
+        assertLessThan(Math.abs(expectedBackupSize - actualBackupSize), allowedDelta);
+      }
     }
   }
 
@@ -1359,9 +1420,11 @@ public class TestYbBackup extends BasePgSQLTest {
     }
   }
 
-  private void testMaterializedViewsHelper(boolean matviewOnMatview) throws Exception {
+  private void testMaterializedViewsHelper(boolean matviewOnMatview, String dbName)
+      throws Exception {
     String backupDir = null;
-    try (Statement stmt = connection.createStatement()) {
+    try (Connection connection = getConnectionBuilder().withDatabase(dbName).connect();
+         Statement stmt = connection.createStatement()) {
       stmt.execute("DROP TABLE IF EXISTS test_tbl");
       stmt.execute("CREATE TABLE test_tbl (t int)");
       stmt.execute("CREATE MATERIALIZED VIEW test_mv AS SELECT * FROM test_tbl");
@@ -1375,7 +1438,7 @@ public class TestYbBackup extends BasePgSQLTest {
       }
       backupDir = YBBackupUtil.getTempBackupDir();
       String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
-          "--keyspace", "ysql.yugabyte");
+          "--keyspace", String.format("ysql.%s", dbName));
       backupDir = new JSONObject(output).getString("snapshot_url");
     }
 
@@ -1392,11 +1455,409 @@ public class TestYbBackup extends BasePgSQLTest {
 
   @Test
   public void testRefreshedMaterializedViewsBackup() throws Exception {
-    testMaterializedViewsHelper(false);
+    testMaterializedViewsHelper(false, "yugabyte");
   }
 
   @Test
   public void testRefreshedMaterializedViewsOnMaterializedViewsBackup() throws Exception {
-    testMaterializedViewsHelper(true);
+    testMaterializedViewsHelper(true, "yugabyte");
+  }
+
+  @Test
+  public void testColocatedMateralizedViewBackup() throws Exception {
+    String dbName = "colocated_db";
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute(String.format("CREATE DATABASE %s COLOCATED=true", dbName));
+    }
+    testMaterializedViewsHelper(false, dbName);
+  }
+
+  @Test
+  public void testSequence() throws Exception {
+    String backupDir = null;
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute("CREATE TABLE test_tbl (k SERIAL PRIMARY KEY, v INT)");
+      stmt.execute("INSERT INTO test_tbl(v) SELECT * FROM generate_series(1, 50)");
+
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yugabyte");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+    }
+
+    YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb2");
+
+    try (Connection connection2 = getConnectionBuilder().withDatabase("yb2").connect();
+         Statement stmt = connection2.createStatement()) {
+      stmt.execute("INSERT INTO test_tbl(v) VALUES (200)");
+      // In YB, default sequence cache size is 100,
+      // so the expected number generated from test_tbl's sequence after restore should be 101.
+      assertQuery(stmt, "SELECT * FROM test_tbl WHERE v = 200", new Row(101, 200));
+    }
+
+    // Cleanup.
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute("DROP DATABASE yb2");
+    }
+  }
+
+  @Test
+  public void testPgHintPlan() throws Exception {
+    String backupDir = null;
+    try (Statement stmt = connection.createStatement()) {
+      // Create tables, pg_hint_plan extension, and insert data.
+      stmt.execute("CREATE EXTENSION pg_hint_plan");
+      stmt.execute("CREATE TABLE tbl1 (k INT PRIMARY KEY, v INT)");
+      stmt.execute("CREATE TABLE tbl2 (k INT PRIMARY KEY, v INT)");
+      stmt.execute("INSERT INTO tbl1 SELECT i, i FROM generate_series(1,100) i");
+      stmt.execute("INSERT INTO tbl2 SELECT i, i FROM generate_series(3,102) i");
+
+      // Test pg_hint_plan before backup.
+      stmt.execute("SET pg_hint_plan.enable_hint_table = on");
+      stmt.execute("INSERT INTO hint_plan.hints(norm_query_string, application_name, hints)" +
+                   " VALUES ('EXPLAIN (COSTS false) SELECT * FROM tbl1 WHERE tbl1.k = ?'," +
+                   " '', 'SeqScan(tbl1)')");
+      assertQuery(stmt, "EXPLAIN (COSTS false) SELECT * FROM tbl1 WHERE tbl1.k = 1",
+                  new Row("YB Seq Scan on tbl1"),
+                  new Row("  Remote Filter: (k = 1)"));
+      stmt.execute("SET pg_hint_plan.enable_hint_table = off");
+      assertQuery(stmt, "EXPLAIN (COSTS false) SELECT * FROM tbl1 WHERE tbl1.k = 1",
+                  new Row("Index Scan using tbl1_pkey on tbl1"),
+                  new Row("  Index Cond: (k = 1)"));
+
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yugabyte");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+    }
+
+    YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb2");
+
+    try (Connection connection2 = getConnectionBuilder().withDatabase("yb2").connect();
+         Statement stmt = connection2.createStatement()) {
+      // Test pg_hint_plan after restore.
+      stmt.execute("INSERT INTO hint_plan.hints(norm_query_string, application_name, hints)" +
+                   " VALUES ('EXPLAIN (COSTS false) SELECT * FROM tbl2 WHERE tbl2.k = ?'," +
+                   " '', 'SeqScan(tbl2)')");
+      stmt.execute("SET pg_hint_plan.enable_hint_table = on");
+      assertQuery(stmt, "EXPLAIN (COSTS false) SELECT * FROM tbl1 WHERE tbl1.k = 1",
+                  new Row("YB Seq Scan on tbl1"),
+                  new Row("  Remote Filter: (k = 1)"));
+      assertQuery(stmt, "EXPLAIN (COSTS false) SELECT * FROM tbl2 WHERE tbl2.k = 3",
+                  new Row("YB Seq Scan on tbl2"),
+                  new Row("  Remote Filter: (k = 3)"));
+      stmt.execute("SET pg_hint_plan.enable_hint_table = off");
+      assertQuery(stmt, "EXPLAIN (COSTS false) SELECT * FROM tbl1 WHERE tbl1.k = 1",
+                  new Row("Index Scan using tbl1_pkey on tbl1"),
+                  new Row("  Index Cond: (k = 1)"));
+      assertQuery(stmt, "EXPLAIN (COSTS false) SELECT * FROM tbl2 WHERE tbl2.k = 3",
+                  new Row("Index Scan using tbl2_pkey on tbl2"),
+                  new Row("  Index Cond: (k = 3)"));
+
+      // Test unique index: hints_norm_and_app.
+      runInvalidQuery(stmt, "INSERT INTO hint_plan.hints" +
+                      "(norm_query_string, application_name, hints)" +
+                      " VALUES ('EXPLAIN (COSTS false) SELECT * FROM tbl1 WHERE tbl1.k = ?'," +
+                      " '', 'SeqScan(tbl1)')",
+                      "duplicate key value violates unique constraint " +
+                      "\"hints_norm_and_app\"");
+
+      // Test pg_extension catalog info regarding configuration relations is correct.
+      stmt.execute("SELECT ARRAY['hint_plan.hints'::regclass::oid, " +
+                   "'hint_plan.hints_id_seq'::regclass::oid]::TEXT");
+      ResultSet rs = stmt.getResultSet();
+      rs.next();
+      String extconfig = rs.getString(1);
+      assertQuery(stmt, "SELECT extconfig::TEXT FROM pg_extension WHERE extname = 'pg_hint_plan'",
+                  new Row(extconfig));
+
+      // Test whether extension membership is set correctly after restoration.
+      stmt.execute("DROP EXTENSION pg_hint_plan CASCADE");
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_class WHERE relname = 'hints')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_class " +
+                  "WHERE relname = 'hints_norm_and_app')", new Row(false));
+
+    }
+
+    // Cleanup.
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute("DROP DATABASE yb2");
+    }
+  }
+
+  @Test
+  public void testOrafce() throws Exception {
+    String backupDir = null;
+    try (Statement stmt = connection.createStatement()) {
+      // Create orafce extension.
+      stmt.execute("CREATE EXTENSION orafce");
+      // Test orafce function created in pg_catalog schema.
+      assertQuery(stmt, "SELECT pg_catalog.to_char(100)", new Row("100"));
+      // Test function in other schema.
+      assertQuery(stmt, "SELECT oracle.substr('abcdef', 3)", new Row("cdef"));
+      // Test operator.
+      stmt.execute("SET search_path TO oracle, \"$user\", public");
+      assertQuery(stmt, "SELECT oracle.to_date('2014-07-02 10:08:55','YYYY-MM-DD HH:MI:SS')" +
+                        " + 9::integer", new Row(Timestamp.valueOf("2014-07-11 10:08:55")));
+      // Test domain.
+      stmt.execute("CREATE TABLE tbl_use_domain (k utl_file.file_type)");
+      stmt.execute("INSERT INTO tbl_use_domain (k) VALUES (1), (2)");
+      // Test base type.
+      stmt.execute("CREATE TABLE tbl_varchar2 (a VARCHAR2(5))");
+      stmt.execute("INSERT INTO tbl_varchar2(a) VALUES ('a'), ('bc')");
+      // Test cast.
+      assertQuery(stmt, "SELECT CAST('abc'::TEXT AS VARCHAR2)", new Row("abc"));
+      // Test aggregate.
+      stmt.execute("CREATE TABLE tbl (v INT)");
+      stmt.execute("INSERT INTO tbl SELECT generate_series(1,100)");
+      assertQuery(stmt, "SELECT median(v) FROM tbl", new Row(50.5));
+      // Test view.
+      assertQuery(stmt, "SELECT COUNT(*) FROM oracle.user_tables", new Row(76));
+
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yugabyte");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+    }
+
+    YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb2");
+
+    try (Connection connection2 = getConnectionBuilder().withDatabase("yb2").connect();
+         Statement stmt = connection2.createStatement()) {
+      // Test orafce after restore.
+      // Test orafce function created in pg_catalog schema.
+      assertQuery(stmt, "SELECT pg_catalog.to_char(100)", new Row("100"));
+      // Test function in other schema.
+      assertQuery(stmt, "SELECT oracle.substr('abcdef', 3)", new Row("cdef"));
+      // Test operator.
+      stmt.execute("SET search_path TO oracle, \"$user\", public");
+      assertQuery(stmt, "SELECT oracle.to_date('2014-07-02 10:08:55','YYYY-MM-DD HH:MI:SS')" +
+                        " + 9::integer", new Row(Timestamp.valueOf("2014-07-11 10:08:55")));
+      // Test domain.
+      assertQuery(stmt, "SELECT * FROM tbl_use_domain ORDER BY k",
+                  new Row(1), new Row(2));
+      // Test base type.
+      assertQuery(stmt, "SELECT * FROM tbl_varchar2 ORDER BY a",
+                  new Row("a"), new Row("bc"));
+      // Test cast.
+      assertQuery(stmt, "SELECT CAST('abc'::TEXT AS VARCHAR2)", new Row("abc"));
+      // Test aggregate.
+      stmt.execute("INSERT INTO tbl SELECT generate_series(101,200)");
+      assertQuery(stmt, "SELECT median(v) FROM tbl", new Row(100.5));
+      // Test view.
+      assertQuery(stmt, "SELECT COUNT(*) FROM oracle.user_tables", new Row(76));
+
+      // Test whether extension membership is set correctly after restoration.
+      stmt.execute("DROP EXTENSION orafce CASCADE");
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_proc " +
+                  "WHERE proname = 'to_char' AND prosrc = 'orafce_to_char_int4')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_proc " +
+                  "WHERE proname = 'substr' AND prosrc = 'oracle_substr2')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_operator " +
+                  "WHERE oprname = '+' AND oprresult = 'timestamp'::regtype::oid " +
+                  "AND oprright = 'integer'::regtype::oid)", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_type " +
+                  "WHERE typname = 'file_type')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_type " +
+                  "WHERE typname = 'varchar2')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_cast JOIN pg_type ON " +
+                  "pg_cast.casttarget = pg_type.oid WHERE castsource = " +
+                  "'text'::regtype::oid AND typname = 'varchar2')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_proc " +
+                  "WHERE proname = 'median')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_class " +
+                  "WHERE relname = 'user_tables')", new Row(false));
+    }
+
+    // Cleanup.
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute("DROP DATABASE yb2");
+    }
+  }
+
+  @Test
+  public void testPostgresfdw() throws Exception {
+    String backupDir = null;
+    try (Statement stmt = connection.createStatement()) {
+      // Create postgres_fdw extension, schema, table and insert data.
+      stmt.execute("CREATE EXTENSION postgres_fdw");
+      stmt.execute("CREATE SCHEMA test_schema");
+      stmt.execute("CREATE TABLE test_schema.test_tbl (k INT, v INT)");
+      stmt.execute("INSERT INTO test_schema.test_tbl VALUES (1, 1)");
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yugabyte");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+    }
+
+    YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb2");
+
+    try (Connection connection2 = getConnectionBuilder().withDatabase("yb2").connect();
+         Statement stmt = connection2.createStatement()) {
+      // Test postgres_fdw functionality after restore.
+      // Create foreign server.
+      stmt.execute("SELECT current_setting('listen_addresses')");
+      ResultSet rs = stmt.getResultSet();
+      rs.next();
+      String host = rs.getString(1);
+      stmt.execute("SELECT current_setting('port')");
+      rs = stmt.getResultSet();
+      rs.next();
+      String port = rs.getString(1);
+      stmt.execute(String.format("CREATE SERVER test_server FOREIGN DATA WRAPPER" +
+                                 " postgres_fdw OPTIONS (host '%s', port '%s', dbname 'yb2')",
+                                 host, port));
+      stmt.execute("CREATE USER MAPPING FOR CURRENT_USER SERVER test_server" +
+                   " OPTIONS (user 'yugabyte')");
+      stmt.execute("CREATE FOREIGN TABLE foreign_tbl (k INT, v INT) SERVER test_server" +
+                   " OPTIONS (schema_name 'test_schema', table_name 'test_tbl')");
+      stmt.execute("INSERT INTO foreign_tbl VALUES (2, 2)");
+      assertQuery(stmt, "SELECT * FROM foreign_tbl ORDER BY k",
+                  new Row(1, 1), new Row(2, 2));
+
+      // Test whether extension membership is set correctly after restoration.
+      stmt.execute("DROP EXTENSION postgres_fdw CASCADE");
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_foreign_data_wrapper " +
+                  "WHERE fdwname = 'postgres_fdw')", new Row(false));
+    }
+
+    // Cleanup.
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute("DROP DATABASE yb2");
+    }
+  }
+
+  @Test
+  public void testExtensionBackupUsingTestExtension() throws Exception {
+    String backupDir = null;
+    try (Statement stmt = connection.createStatement()) {
+      // Create test extension.
+      stmt.execute("CREATE EXTENSION yb_test_extension");
+      // Set up tables to test extension type backup.
+      stmt.execute("CREATE TABLE enum_tbl (v test_enum)");
+      stmt.execute("INSERT INTO enum_tbl(v) VALUES ('a'), ('c'), ('b')");
+      stmt.execute("CREATE TABLE range_tbl (v test_range)");
+      stmt.execute("INSERT INTO range_tbl(v) VALUES ('(1,4)'::test_range)");
+      stmt.execute("CREATE TABLE composite_tbl (v test_composite)");
+      stmt.execute("INSERT INTO composite_tbl(v) VALUES (('a', 'c')), (('b', 'd'))");
+
+      backupDir = YBBackupUtil.getTempBackupDir();
+      String output = YBBackupUtil.runYbBackupCreate("--backup_location", backupDir,
+          "--keyspace", "ysql.yugabyte");
+      backupDir = new JSONObject(output).getString("snapshot_url");
+    }
+
+    YBBackupUtil.runYbBackupRestore(backupDir, "--keyspace", "ysql.yb2");
+
+    try (Connection connection2 = getConnectionBuilder().withDatabase("yb2").connect();
+         Statement stmt = connection2.createStatement()) {
+      // Test trigger.
+      stmt.execute("INSERT INTO tbl VALUES (1, 1), (2, 2)");
+      assertQuery(stmt, "SELECT * FROM tbl ORDER BY k",
+                  new Row(1, 2), new Row(2, 3));
+
+      // Test event trigger.
+      stmt.execute("CREATE TABLE dummy_tbl1 (k INT, v INT)");
+      stmt.execute("CREATE TABLE dummy_tbl2 (k INT, v INT)");
+      stmt.execute("DROP TABLE dummy_tbl1");
+      stmt.execute("DROP TABLE dummy_tbl2");
+      assertQuery(stmt, "SELECT * FROM command_tag ORDER BY k",
+                  new Row(1, "DROP TABLE"), new Row(2, "DROP TABLE"));
+
+      // Test sequence.
+      assertQuery(stmt, "SELECT nextval('test_sequence')", new Row(101));
+
+      // Test privilege.
+      stmt.execute("SET ROLE yb_fdw");
+      assertQuery(stmt, "SELECT nextval('test_sequence')", new Row(102));
+      stmt.execute("RESET ROLE");
+
+      // Test TS parser.
+      assertQuery(stmt, "SELECT * FROM ts_parse('default', '123')",
+                  new Row(22, "123"));
+      assertQuery(stmt, "SELECT * FROM ts_parse('test_parser', '123')",
+                  new Row(22, "123"));
+
+      // Test TS dictionary.
+      assertQuery(stmt, "SELECT ts_lexize('test_dict', 'YeS')::text",
+                  new Row("{yes}"));
+
+      // Test TS configuration.
+      assertQuery(stmt, "SELECT alias, token, lexemes::text FROM ts_debug('english', 'cat')",
+                  new Row("asciiword", "cat", "{cat}"));
+      assertQuery(stmt, "SELECT alias, token, lexemes::text FROM" +
+                  " ts_debug('test_config', 'cat')",
+                  new Row("asciiword", "cat", "{cat}"));
+
+      // Test TS template.
+      // Create a dictionary using test_template.
+      stmt.execute("CREATE TEXT SEARCH DICTIONARY dict (" +
+                   "  TEMPLATE = test_template," +
+                   "  STOPWORDS = english" +
+                   ")");
+      assertQuery(stmt, "SELECT ts_lexize('dict', 'YeS')::text",
+                  new Row("{yes}"));
+      stmt.execute("DROP TEXT SEARCH DICTIONARY dict");
+
+      // Test collation.
+      stmt.execute("CREATE TABLE tbl_collation (k SERIAL, v TEXT COLLATE test_collation)");
+      stmt.execute("INSERT INTO tbl_collation(v) VALUES ('bbc'), ('abc')");
+      assertQuery(stmt, "SELECT * FROM tbl_collation ORDER BY v",
+                  new Row(2, "abc"), new Row(1, "bbc"));
+
+      // Test language.
+      stmt.execute("CREATE FUNCTION one()" +
+                   "  RETURNS INT AS $$" +
+                   "  BEGIN " +
+                   "    RETURN 1;" +
+                   "  END;" +
+                   "  $$ LANGUAGE test_language");
+      assertQuery(stmt, "SELECT one()", new Row(1));
+
+      // Test enum type.
+      assertQuery(stmt, "SELECT * FROM enum_tbl ORDER BY v",
+                  new Row("c"), new Row("b"), new Row("a"));
+
+      // Test range type.
+      assertQuery(stmt, "SELECT * FROM range_tbl ORDER BY v",
+                  new Row("(1,4)"));
+
+      // Test composite type.
+      assertQuery(stmt, "SELECT * FROM composite_tbl ORDER BY v",
+                  new Row("(a,c)"), new Row("(b,d)"));
+
+      // Test whether extension membership is set correctly after restoration.
+      stmt.execute("DROP EXTENSION yb_test_extension CASCADE");
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname = 'increment_v')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_event_trigger " +
+                  "WHERE evtname = 'record_drop_command')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_class WHERE relname = 'test_sequence')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_ts_parser WHERE prsname = 'test_parser')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_ts_dict WHERE dictname = 'test_dict')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_ts_config WHERE cfgname = 'test_config')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_ts_template " +
+                  "WHERE tmplname = 'test_template')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_collation " +
+                  "WHERE collname = 'test_collation')", new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_language WHERE lanname = 'test_language')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_type WHERE typname = 'test_enum')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_type WHERE typname = 'test_range')",
+                  new Row(false));
+      assertQuery(stmt, "SELECT EXISTS(SELECT 1 FROM pg_type WHERE typname = 'test_composite')",
+                  new Row(false));
+    }
+
+    // Cleanup.
+    try (Statement stmt = connection.createStatement()) {
+      stmt.execute("DROP DATABASE yb2");
+    }
   }
 }

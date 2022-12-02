@@ -8,8 +8,7 @@ menu:
     identifier: deploy-manual-deployment-start-masters
     parent: deploy-manual-deployment
     weight: 613
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 {{< note title="Note" >}}
@@ -92,4 +91,6 @@ Remember to add the command with which you launched `yb-master` to a cron to res
 
 {{< /tip >}}
 
-Now you are ready to start the YB-TServers.
+## Next step
+
+Now you are ready to [start the YB-TServers](../start-tservers/).

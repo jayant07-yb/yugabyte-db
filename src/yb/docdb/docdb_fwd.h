@@ -11,8 +11,9 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_DOCDB_FWD_H
-#define YB_DOCDB_DOCDB_FWD_H
+#pragma once
+
+#include "yb/common/common_fwd.h"
 
 #include "yb/docdb/docdb.fwd.h"
 
@@ -29,10 +30,14 @@ class DocDBCompactionFilterFactory;
 class DocKey;
 class DocOperation;
 class DocPath;
+class DocPgsqlScanSpec;
+class DocQLScanSpec;
 class DocRowwiseIterator;
 class DocWriteBatch;
+class ExternalTxnIntentsState;
 class HistoryRetentionPolicy;
 class IntentAwareIterator;
+class IntentAwareIteratorIf;
 class KeyBytes;
 class KeyEntryValue;
 class ManualHistoryRetentionPolicy;
@@ -40,24 +45,32 @@ class PgsqlWriteOperation;
 class PrimitiveValue;
 class QLWriteOperation;
 class RedisWriteOperation;
+class RowPacker;
+class ScanChoices;
 class SchemaPacking;
 class SchemaPackingStorage;
 class SharedLockManager;
 class SubDocKey;
+class TransactionStatusCache;
 class YQLRowwiseIteratorIf;
 class YQLStorageIf;
 
 struct ApplyTransactionState;
+struct ColumnPackingData;
 struct CompactionSchemaPacking;
 struct DocDB;
 struct DocReadContext;
 struct IntentKeyValueForCDC;
 struct KeyBounds;
 struct LockBatchEntry;
+struct ValueControlFields;
 
 using DocKeyHash = uint16_t;
 using LockBatchEntries = std::vector<LockBatchEntry>;
 using DocReadContextPtr = std::shared_ptr<DocReadContext>;
+using ScanChoicesPtr = std::unique_ptr<ScanChoices>;
+
+using IndexRequests = std::vector<std::pair<const IndexInfo*, QLWriteRequestPB>>;
 
 enum class KeyEntryType;
 enum class ValueEntryType;
@@ -82,5 +95,3 @@ YB_DEFINE_ENUM(IntentStrength, (kWeak)(kStrong));
 
 }  // namespace docdb
 }  // namespace yb
-
-#endif // YB_DOCDB_DOCDB_FWD_H

@@ -4,31 +4,30 @@ headerTitle: Create a multi-zone universe with Kubernetes
 linkTitle: Multi-zone universe
 description: Use YugabyteDB Anywhere and Kubernetes to create a YugabyteDB universe that spans multiple availability zones.
 menu:
-  preview:
+  preview_yugabyte-platform:
     identifier: create-multi-zone-universe-kubernetes
     parent: create-deployments
     weight: 20
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
   <ul class="nav nav-tabs-alt nav-tabs-yb">
 <li>
     <a href="../create-universe-multi-zone/" class="nav-link">
-      <i class="fas fa-building" aria-hidden="true"></i>
+      <i class="fa-solid fa-building" aria-hidden="true"></i>
 Generic</a>
   </li>
 
   <li>
     <a href="../create-universe-multi-zone-kubernetes/" class="nav-link active">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       Kubernetes
     </a>
   </li>
 
 </ul>
 
-YugabyteDB Anywhere allows you to create a universe in one geographic region across multiple availability zones using Kubernetes as a cloud provider.
+<br>YugabyteDB Anywhere allows you to create a universe in one geographic region across multiple availability zones using Kubernetes as a cloud provider.
 
 ## Prerequisites
 
@@ -55,7 +54,7 @@ Complete the rest of the **Cloud Configuration** section as follows:
 
 - Provide the value in the **Nodes** field. This value should be equal to or greater than the replication factor. The default value is 3. When this value is supplied, the nodes are automatically placed across all the availability zones to guarantee the maximum availability.
 
-- In the **Replication Factor** field, define the replication factor, as per the following illustration:<br><br>
+- In the **Replication Factor** field, define the replication factor, as per the following illustration:<br>
 
   ![img](/images/yb-platform/kubernetes-config5.png)
 
@@ -82,12 +81,12 @@ Complete the **G-Flags** section as follows:
 - Click **Add Flags > Add to T-Server** to specify the YugabyteDB T-Servers parameters, one parameter per field.<br>
 
   For details, see the following:
-  
+
   - [Edit configuration flags](/preview/yugabyte-platform/manage-deployments/edit-config-flags)
-  
+
   - [YB Master Configuration Flags](/preview/reference/configuration/yb-master/#configuration-flags)
-  
-  - [YB T-Server Configuration Flags](/preview/reference/configuration/yb-tserver/#configuration-flags) 
+
+  - [YB T-Server Configuration Flags](/preview/reference/configuration/yb-tserver/#configuration-flags)
 
 Accept default values for all of the remaining fields.
 

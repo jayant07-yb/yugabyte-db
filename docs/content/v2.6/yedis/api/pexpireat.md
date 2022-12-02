@@ -6,13 +6,13 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2234
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`PEXPIREAT key ttl-as-timestamp`</b><br>
+**`PEXPIREAT key ttl-as-timestamp`**
+
 PEXPIREAT has the same effect as EXPIREAT, but the Unix timestamp at which the key will expire is specified in milliseconds instead of seconds.
 
 ## Return value
@@ -47,4 +47,4 @@ $ PTTL yugakey
 
 ## See also
 
-[`expireat`](../expireat/), [`ttl`](../ttl/), [`pttl`](../pttl/), [`set`](../set/) 
+[`expireat`](../expireat/), [`ttl`](../ttl/), [`pttl`](../pttl/), [`set`](../set/)

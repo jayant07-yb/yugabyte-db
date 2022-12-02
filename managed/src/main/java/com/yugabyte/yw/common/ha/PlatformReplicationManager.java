@@ -12,13 +12,14 @@ package com.yugabyte.yw.common.ha;
 
 import static play.mvc.Http.Status.BAD_REQUEST;
 
-import akka.actor.ActorSystem;
 import akka.actor.Cancellable;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Sets;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
+import com.yugabyte.yw.common.ConfigHelper;
+import com.yugabyte.yw.common.PlatformScheduler;
 import com.yugabyte.yw.common.PlatformServiceException;
 import com.yugabyte.yw.common.ShellResponse;
 import com.yugabyte.yw.common.utils.FileUtils;
@@ -40,7 +41,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
-import scala.concurrent.ExecutionContext;
 
 @Singleton
 @Slf4j
@@ -52,22 +52,28 @@ public class PlatformReplicationManager {
   @VisibleForTesting
   public static final String NO_LOCAL_INSTANCE_MSG = "NO LOCAL INSTANCE! Won't sync";
 
+  public static final String STORAGE_PATH = "yb.storage.path";
+
   private final AtomicReference<Cancellable> schedule;
 
-  private final ActorSystem actorSystem;
-
-  private final ExecutionContext executionContext;
+  private final PlatformScheduler platformScheduler;
 
   private final PlatformReplicationHelper replicationHelper;
 
+  private final ConfigHelper configHelper;
+
+  private final play.Configuration appConfig;
+
   @Inject
   public PlatformReplicationManager(
-      ActorSystem actorSystem,
-      ExecutionContext executionContext,
-      PlatformReplicationHelper replicationHelper) {
-    this.actorSystem = actorSystem;
-    this.executionContext = executionContext;
+      PlatformScheduler platformScheduler,
+      PlatformReplicationHelper replicationHelper,
+      ConfigHelper configHelper,
+      play.Configuration appConfig) {
+    this.platformScheduler = platformScheduler;
     this.replicationHelper = replicationHelper;
+    this.configHelper = configHelper;
+    this.appConfig = appConfig;
     this.schedule = new AtomicReference<>(null);
   }
 
@@ -128,13 +134,11 @@ public class PlatformReplicationManager {
 
   private Cancellable createSchedule(Duration frequency) {
     log.info("Scheduling periodic platform backups every {}", frequency.toString());
-    return this.actorSystem
-        .scheduler()
-        .schedule(
-            Duration.ofMillis(0), // initialDelay
-            frequency, // interval
-            this::sync,
-            this.executionContext);
+    return platformScheduler.schedule(
+        getClass().getSimpleName(),
+        Duration.ZERO, // initialDelay
+        frequency, // interval
+        this::sync);
   }
 
   public List<File> listBackups(URL leader) {
@@ -330,8 +334,9 @@ public class PlatformReplicationManager {
 
   public boolean saveReplicationData(String fileName, File uploadedFile, URL leader, URL sender) {
     Path replicationDir = replicationHelper.getReplicationDirFor(leader.getHost());
-    Path saveAsFile = Paths.get(replicationDir.toString(), fileName);
-    if (replicationDir.toFile().exists() || replicationDir.toFile().mkdirs()) {
+    Path saveAsFile = Paths.get(replicationDir.toString(), fileName).normalize();
+    if ((replicationDir.toFile().exists() || replicationDir.toFile().mkdirs())
+        && saveAsFile.toString().startsWith(replicationDir.toString())) {
       try {
         FileUtils.moveFile(uploadedFile.toPath(), saveAsFile);
         log.debug(
@@ -346,10 +351,11 @@ public class PlatformReplicationManager {
       }
     } else {
       log.error(
-          "Could create folder {} to store platform backup received from leader {} via {}",
+          "Couldn't create folder {} to store platform backup received from leader {} via {} to {}",
           replicationDir,
           leader.toString(),
-          sender.toString());
+          sender.toString(),
+          saveAsFile.toString());
     }
 
     return false;
@@ -462,6 +468,7 @@ public class PlatformReplicationManager {
       commandArgs.add("restore");
       commandArgs.add("--input");
       commandArgs.add(input.getAbsolutePath());
+      commandArgs.add("--disable_version_check");
 
       return commandArgs;
     }
@@ -497,6 +504,9 @@ public class PlatformReplicationManager {
     ShellResponse response = replicationHelper.runCommand(new RestorePlatformBackupParams(input));
     if (response.code != 0) {
       log.error("Restore failed: " + response.message);
+    } else {
+      // Sync the files stored in DB to FS in case restore is successful.
+      configHelper.syncFileData(appConfig.getString(STORAGE_PATH), true);
     }
 
     return response.code == 0;

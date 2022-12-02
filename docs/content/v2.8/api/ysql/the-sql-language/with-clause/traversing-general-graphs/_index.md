@@ -9,15 +9,9 @@ menu:
     identifier: traversing-general-graphs
     parent: with-clause
     weight: 50
-isTocNested: true
-showAsideToc: true
+type: indexpage
+showRightNav: true
 ---
-
-**On this page**<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Undirected cyclic graph](./#undirected-cyclic-graph)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Directed cyclic graph](./#directed-cyclic-graph)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Directed acyclic graph](./#directed-acyclic-graph)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Rooted tree](./#rooted-tree)
 
 {{< tip title="Download a zip of scripts that include all the code examples that this section uses" >}}
 
@@ -93,7 +87,7 @@ This section describes the minimal table structure for representing graphs.
 
 ### Common code for traversing all kinds of graph — [here](./common-code/)
 
-The described traversal schemes all depend upon some common artifacts, like tables into which to insert the results to support subsequent _ad hoc_ queries and various helper functions and procedures. This section describes them. 
+The described traversal schemes all depend upon some common artifacts, like tables into which to insert the results to support subsequent _ad hoc_ queries and various helper functions and procedures. This section describes them.
 
 ### Path finding approaches
 

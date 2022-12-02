@@ -25,8 +25,7 @@
  *--------------------------------------------------------------------------------------------------
  */
 
-#ifndef YBCEXPR_H
-#define YBCEXPR_H
+#pragma once
 
 #include "postgres.h"
 #include "nodes/execnodes.h"
@@ -48,7 +47,9 @@ extern YBCPgExpr YBCNewConstant(YBCPgStatement ybc_stmt, Oid type_id,
 extern YBCPgExpr YBCNewConstantVirtual(YBCPgStatement ybc_stmt, Oid type_id,
 									   YBCPgDatumKind kind);
 
-extern Expr *YbExprInstantiateParams(Expr* expr, ParamListInfo paramLI);
+extern Expr *YbExprInstantiateParams(Expr* expr, EState *estate);
+extern PushdownExprs *YbInstantiateRemoteParams(PushdownExprs *remote,
+												EState *estate);
 
 extern bool YbCanPushdownExpr(Expr *pg_expr, List **params);
 
@@ -60,5 +61,3 @@ extern YbPgExecOutParam *YbCreateExecOutParam();
 
 extern void YbWriteExecOutParam(YbPgExecOutParam *out_param,
 								const YbcPgExecOutParamValue *value);
-
-#endif							/* YBCEXPR_H */

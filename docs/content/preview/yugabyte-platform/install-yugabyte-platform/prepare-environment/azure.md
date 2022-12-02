@@ -4,26 +4,24 @@ headerTitle: Prepare the Azure cloud environment
 linkTitle: Prepare the environment
 description: Prepare the Azure environment for YugabyteDB Anywhere.
 menu:
-  preview:
+  preview_yugabyte-platform:
     identifier: prepare-environment-3-azure
     parent: install-yugabyte-platform
     weight: 55
-isTocNested: false
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
-
   <li>
     <a href="../aws/" class="nav-link">
-      <i class="fab fa-aws" aria-hidden="true"></i>
+      <i class="fa-brands fa-aws" aria-hidden="true"></i>
       AWS
     </a>
   </li>
 
   <li>
     <a href="../gcp/" class="nav-link">
-       <i class="fab fa-google" aria-hidden="true"></i>
+       <i class="fa-brands fa-google" aria-hidden="true"></i>
       GCP
     </a>
   </li>
@@ -37,21 +35,21 @@ showAsideToc: true
 
   <li>
     <a href="../kubernetes/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       Kubernetes
     </a>
   </li>
 
 <li>
     <a href="../openshift/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       OpenShift
     </a>
  </li>
 
   <li>
     <a href="../on-premises/" class="nav-link">
-      <i class="fas fa-building" aria-hidden="true"></i>
+      <i class="fa-solid fa-building" aria-hidden="true"></i>
       On-premises
     </a>
   </li>

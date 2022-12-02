@@ -6,22 +6,22 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2552
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 `SUBSCRIBE`
 
 ## Synopsis
 
-<b>`SUBSCRIBE channel [channel ...]`</b><br>
+**`SUBSCRIBE channel [channel ...]`**
+
 This command subscribes the client to the specified channel(s). The client will receive a message whenever a
 publisher sends a message to any of the channels that it has subscribed to.
 
 ## See also
 
-[`pubsub`](../pubsub/), 
-[`publish`](../publish/), 
-[`subscribe`](../subscribe/), 
-[`unsubscribe`](../unsubscribe/), 
-[`psubscribe`](../psubscribe/), 
+[`pubsub`](../pubsub/),
+[`publish`](../publish/),
+[`subscribe`](../subscribe/),
+[`unsubscribe`](../unsubscribe/),
+[`psubscribe`](../psubscribe/),
 [`punsubscribe`](../punsubscribe/)

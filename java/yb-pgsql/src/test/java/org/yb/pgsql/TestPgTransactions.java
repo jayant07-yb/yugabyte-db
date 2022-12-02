@@ -21,7 +21,7 @@ import com.yugabyte.util.PSQLState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yb.minicluster.MiniYBClusterBuilder;
-import org.yb.util.RandomNumberUtil;
+import org.yb.util.RandomUtil;
 import org.yb.util.BuildTypeUtil;
 import org.yb.util.YBTestRunnerNonTsanOnly;
 
@@ -218,7 +218,7 @@ public class TestPgTransactions extends BasePgSQLTest {
               "UPDATE counters SET v = ? WHERE k = ?");
           long attemptId =
               1000 * 1000 * 1000L * threadIndex +
-              1000 * 1000L * Math.abs(RandomNumberUtil.getRandomGenerator().nextInt(1000));
+              1000 * 1000L * Math.abs(RandomUtil.getRandomGenerator().nextInt(1000));
           while (numIncrementsDone < INCREMENTS_PER_THREAD && !hadErrors.get()) {
             ++attemptId;
             boolean committed = false;
@@ -651,7 +651,7 @@ public class TestPgTransactions extends BasePgSQLTest {
       statement.execute(guard_start_stmt);
     }
     for (String stmt : stmts) {
-      verifyStatementTxnMetric(statement, stmt, 1);
+      verifyStatementTxnMetric(statement, stmt, 0);
     }
 
     // After ending guard, statements should go back to using non-txn path.
@@ -659,7 +659,7 @@ public class TestPgTransactions extends BasePgSQLTest {
       statement.execute(guard_end_stmt);
     }
     for (String stmt : stmts) {
-      verifyStatementTxnMetric(statement, stmt, 0);
+      verifyStatementTxnMetric(statement, stmt, 1);
     }
   }
 
@@ -674,7 +674,7 @@ public class TestPgTransactions extends BasePgSQLTest {
     // Verify standalone statements use non-txn path.
     Statement statement = connection.createStatement();
     for (String stmt : stmts) {
-      verifyStatementTxnMetric(statement, stmt, 0);
+      verifyStatementTxnMetric(statement, stmt, 1);
     }
 
     // Test in txn block.
@@ -738,7 +738,7 @@ public class TestPgTransactions extends BasePgSQLTest {
     // Verify statements with WITH clause use txn path.
     verifyStatementTxnMetric(statement,
                              "WITH test2 AS (UPDATE test SET v = 2 WHERE k = 1) " +
-                             "UPDATE test SET v = 3 WHERE k = 1", 1);
+                             "UPDATE test SET v = 3 WHERE k = 1", 0);
 
     // Verify JDBC single-row prepared statements use non-txn path.
     long oldTxnValue = getMetricCounter(SINGLE_SHARD_TRANSACTIONS_METRIC);
@@ -761,7 +761,8 @@ public class TestPgTransactions extends BasePgSQLTest {
     updateStatement.executeUpdate();
 
     long newTxnValue = getMetricCounter(SINGLE_SHARD_TRANSACTIONS_METRIC);
-    assertEquals(oldTxnValue, newTxnValue);
+    // The delete and update would result in 3 single-row transactions
+    assertEquals(oldTxnValue+3, newTxnValue);
   }
 
   /*
@@ -1045,5 +1046,20 @@ public class TestPgTransactions extends BasePgSQLTest {
     restartClusterWithFlags(
       Collections.emptyMap(),
       Collections.singletonMap("yb_enable_read_committed_isolation", "false"));
+  }
+
+  @Test
+  public void testMiscellaneous() throws Exception {
+    // Test issue #12004 - READ COMMITTED isolation in YSQL maps to REPEATABLE READ if
+    // yb_enable_read_committed_isolation=false. In this case, if the first statement takes an
+    // explicit locking, a transaction should be present/created.
+    try (Statement s1 = getConnectionBuilder().connect().createStatement();) {
+      s1.execute("CREATE TABLE test (k int PRIMARY KEY, v INT)");
+      s1.execute("INSERT INTO test values (1, 1)");
+      s1.execute("BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED");
+      s1.execute("SELECT * FROM test WHERE k=1 for update");
+      s1.execute("COMMIT");
+      s1.execute("DROP TABLE test");
+    }
   }
 }

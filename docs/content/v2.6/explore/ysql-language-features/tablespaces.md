@@ -9,8 +9,7 @@ menu:
     identifier: explore-ysql-language-features-tablespaces
     parent: explore-ysql-language-features
     weight: 320
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This document provides an overview of YSQL Tablespaces and demonstrates how they can be used to specify data placement for tables and indexes in the cloud.
@@ -55,13 +54,13 @@ The differences between single-zone, multi-zone and multi-region configuration b
 <ul class="nav nav-tabs nav-tabs-yb">
   <li >
     <a href="#yugabyted" class="nav-link active" id="yugabyted-tab" data-toggle="tab" role="tab" aria-controls="yugabyted" aria-selected="true">
-      <i class="fas fa-file-alt" aria-hidden="true"></i>
+      <i class="fa-solid fa-file-lines" aria-hidden="true"></i>
       Yugabyted
     </a>
   </li>
   <li>
     <a href="#platform" class="nav-link" id="platform-tab" data-toggle="tab" role="tab" aria-controls="platform" aria-selected="false">
-      <i class="fas fa-cloud" aria-hidden="true"></i>
+      <i class="fa-solid fa-cloud" aria-hidden="true"></i>
       Yugabyte Platform
     </a>
   </li>
@@ -69,10 +68,10 @@ The differences between single-zone, multi-zone and multi-region configuration b
 
 <div class="tab-content">
   <div id="yugabyted" class="tab-pane fade show active" role="tabpanel" aria-labelledby="yugabyted-tab">
-    {{% includeMarkdown "./tablespaces-yugabyted.md" /%}}
+  {{% includeMarkdown "./tablespaces-yugabyted.md" %}}
   </div>
   <div id="platform" class="tab-pane fade show active" role="tabpanel" aria-labelledby="platform-tab">
-    {{% includeMarkdown "./tablespaces-platform.md" /%}}
+  {{% includeMarkdown "./tablespaces-platform.md" %}}
   </div>
 </div>
 

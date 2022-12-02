@@ -10,6 +10,7 @@ menu:
     identifier: explore-observability
     parent: explore
     weight: 310
+type: indexpage
 ---
 
 <div class="row">
@@ -17,7 +18,7 @@ menu:
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">
     <a class="section-link icon-offset" href="prometheus-integration/macos">
       <div class="head">
-        <div class="icon"><i class="fas fa-chart-line"></i></div>
+        <div class="icon"><i class="fa-solid fa-chart-line"></i></div>
         <div class="title">Prometheus Integration</div>
       </div>
       <div class="body">

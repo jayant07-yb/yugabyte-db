@@ -8,7 +8,7 @@ menu:
     identifier: apache-spark-3-python
     parent: integrations
     weight: 572
-
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -21,7 +21,7 @@ menu:
 
   <li >
     <a href="{{< relref "./java.md" >}}" class="nav-link">
-      <i class="icon-java-bold" aria-hidden="true"></i>
+      <i class="fa-brands fa-java" aria-hidden="true"></i>
       Java
     </a>
   </li>

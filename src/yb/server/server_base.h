@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_SERVER_SERVER_BASE_H
-#define YB_SERVER_SERVER_BASE_H
+#pragma once
 
 #include <memory>
 #include <string>
@@ -107,6 +106,9 @@ class RpcServerBase {
   const std::string get_hostname() const;
 
   virtual Status ReloadKeysAndCertificates() { return Status::OK(); }
+  virtual std::string GetCertificateDetails() { return ""; }
+
+  virtual uint32_t GetAutoFlagConfigVersion() const { return 0; }
 
  protected:
   RpcServerBase(std::string name,
@@ -116,13 +118,15 @@ class RpcServerBase {
                 const scoped_refptr<Clock>& clock = nullptr);
   virtual ~RpcServerBase();
 
-  Status Init();
+  virtual Status InitAutoFlags();
+  virtual Status Init();
+  virtual Status Start();
+
   Status RegisterService(
       size_t queue_limit, rpc::ServiceIfPtr rpc_impl,
       rpc::ServicePriority priority = rpc::ServicePriority::kNormal);
-  Status Start();
   Status StartRpcServer();
-  void Shutdown();
+  virtual void Shutdown();
   void SetConnectionContextFactory(rpc::ConnectionContextFactoryPtr connection_context_factory);
   virtual Status SetupMessengerBuilder(rpc::MessengerBuilder* builder);
 
@@ -165,13 +169,16 @@ YB_STRONGLY_TYPED_BOOL(RpcOnly);
 // and provides a common interface for server-type-agnostic functions.
 class RpcAndWebServerBase : public RpcServerBase {
  public:
-  const Webserver *web_server() const { return web_server_.get(); }
+  const Webserver* web_server() const { return web_server_.get(); }
+
+  // Get writable Web Server object for test scenarios.
+  Webserver* TEST_web_server() { return web_server_.get(); }
 
   FsManager* fs_manager() { return fs_manager_.get(); }
 
   // Return the first HTTP address that this server has bound to.
-  // FATALs if the server is not started.
-  Endpoint first_http_address() const;
+  // Return an error status if the server is not started.
+  Result<Endpoint> first_http_address() const;
 
   // Return a PB describing the status of the server (version info, bound ports, etc)
   void GetStatusPB(ServerStatusPB* status) const override;
@@ -197,9 +204,9 @@ class RpcAndWebServerBase : public RpcServerBase {
   static void DisplayIconTile(std::stringstream* output, const std::string icon,
                               const std::string caption, const std::string url);
 
-  Status Init();
-  Status Start();
-  void Shutdown();
+  Status Init() override;
+  Status Start() override;
+  void Shutdown() override;
 
   std::unique_ptr<FsManager> fs_manager_;
   std::unique_ptr<Webserver> web_server_;
@@ -231,5 +238,3 @@ void TEST_Isolate(rpc::Messenger* messenger);
 
 } // namespace server
 } // namespace yb
-
-#endif /* YB_SERVER_SERVER_BASE_H */

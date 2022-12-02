@@ -11,10 +11,9 @@
 // under the License.
 //
 
-#ifndef ENT_SRC_YB_SERVER_SECURE_H
-#define ENT_SRC_YB_SERVER_SECURE_H
+#pragma once
 
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 
 #include "yb/rpc/rpc_fwd.h"
 
@@ -51,6 +50,10 @@ Result<std::unique_ptr<rpc::SecureContext>> SetupSecureContext(
     const std::string& cert_dir, const std::string& root_dir, const std::string& name,
     SecureContextType type, rpc::MessengerBuilder* builder);
 
+Result<std::unique_ptr<rpc::SecureContext>> SetupInternalSecureContext(
+    const std::string& local_hosts, const FsManager& fs_manager,
+    rpc::MessengerBuilder* messenger_builder);
+
 YB_STRONGLY_TYPED_BOOL(UseClientCerts);
 
 Result<std::unique_ptr<rpc::SecureContext>> CreateSecureContext(
@@ -71,7 +74,9 @@ Status ReloadSecureContextKeysAndCertificates(
 
 void ApplySecureContext(const rpc::SecureContext* context, rpc::MessengerBuilder* builder);
 
+bool IsNodeToNodeEncryptionEnabled();
+
+bool IsClientToServerEncryptionEnabled();
+
 } // namespace server
 } // namespace yb
-
-#endif // ENT_SRC_YB_SERVER_SECURE_H

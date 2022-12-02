@@ -26,6 +26,8 @@
 
 #include "yb/yql/cql/ql/test/ql-test-base.h"
 
+using std::string;
+
 DECLARE_int32(TEST_simulate_slow_table_create_secs);
 DECLARE_bool(master_enable_metrics_snapshotter);
 DECLARE_bool(tserver_enable_metrics_snapshotter);
@@ -402,6 +404,8 @@ TEST_F(TestQLCreateTable, TestQLCreateTableWithPartitionScemeOf) {
 
 // Check for presence of rows in system.metrics table.
 TEST_F(TestQLCreateTable, TestMetrics) {
+  FLAGS_metrics_snapshotter_interval_ms = 1000 * kTimeMultiplier;
+
   FLAGS_master_enable_metrics_snapshotter = true;
   FLAGS_tserver_enable_metrics_snapshotter = true;
 

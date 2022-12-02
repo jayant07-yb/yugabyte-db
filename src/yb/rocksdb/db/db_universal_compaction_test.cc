@@ -24,7 +24,6 @@
 #include "yb/rocksdb/db/db_test_util.h"
 #include "yb/rocksdb/db/job_context.h"
 #include "yb/rocksdb/port/stack_trace.h"
-#if !defined(ROCKSDB_LITE)
 #include "yb/rocksdb/util/file_util.h"
 #include "yb/rocksdb/util/sync_point.h"
 
@@ -875,7 +874,8 @@ TEST_P(DBTestUniversalCompactionWithParam, UniversalCompactionCompressRatio2) {
     ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable());
     ASSERT_OK(dbfull()->TEST_WaitForCompact());
   }
-  ASSERT_LT(TotalSize(), 120000U * 12 * 0.8 + 120000 * 2);
+  // Adding 10000 to account for regression in compression in Snappy added in google/snappy#d53de18.
+  ASSERT_LT(TotalSize(), 120000U * 12 * 0.8 + 120000 * 2 + 10000);
 }
 
 // Test that checks trivial move in universal compaction
@@ -1466,14 +1466,9 @@ TEST_F(DBTestUniversalCompaction, IncludeFilesSmallerThanThreshold) {
 
 }  // namespace rocksdb
 
-#endif  // !defined(ROCKSDB_LITE)
 
 int main(int argc, char** argv) {
-#if !defined(ROCKSDB_LITE)
   rocksdb::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
-#else
-  return 0;
-#endif
 }

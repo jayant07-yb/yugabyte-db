@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_RPC_LIGHTWEIGHT_MESSAGE_H
-#define YB_RPC_LIGHTWEIGHT_MESSAGE_H
+#pragma once
 
 #include <google/protobuf/io/coded_stream.h>
 #include <google/protobuf/wire_format_lite.h>
@@ -22,6 +21,7 @@
 #include "yb/rpc/serialization.h"
 
 #include "yb/util/memory/arena.h"
+#include "yb/util/memory/arena_list.h"
 #include "yb/util/status.h"
 
 namespace yb {
@@ -235,18 +235,28 @@ const T& empty_message() {
   return result;
 }
 
-template <class T>
-std::shared_ptr<T> MakeSharedMessage() {
-  auto arena = std::make_shared<Arena>();
-  auto t = arena->NewObject<T>(arena.get());
+template <class T, class... Args>
+std::shared_ptr<T> SharedMessage(Args&&... args) {
+  AllocatedBuffer buffer;
+  SharedArenaAllocator<Arena> allocator(&buffer);
+  auto arena = std::allocate_shared<PreallocatedArena>(allocator, buffer);
+  auto t = arena->arena().NewObject<T>(&arena->arena(), std::forward<Args>(args)...);
   return std::shared_ptr<T>(std::move(arena), t);
 }
 
-template <class T, class PB>
-std::shared_ptr<T> CopySharedMessage(const PB& rhs) {
-  auto arena = std::make_shared<Arena>();
-  auto t = arena->NewObject<T>(arena.get(), rhs);
-  return std::shared_ptr<T>(std::move(arena), t);
+template <class T>
+std::shared_ptr<T> MakeSharedMessage() {
+  return SharedMessage<T>();
+}
+
+template <class LW>
+std::enable_if_t<std::is_base_of_v<LightweightMessage, LW>, LW*> LightweightMessageType(LW*);
+
+template <class PB>
+auto CopySharedMessage(const PB& rhs) {
+  using LW = typename std::remove_pointer<
+      decltype(LightweightMessageType(static_cast<PB*>(nullptr)))>::type;
+  return SharedMessage<LW>(rhs);
 }
 
 template <class T>
@@ -277,7 +287,13 @@ void AppendFieldTitle(const char* name, const char* suffix, bool* first, std::st
 
 void SetupLimit(google::protobuf::io::CodedInputStream* in);
 
+template <class T>
+auto ToRepeatedPtrField(const ArenaList<T>& list) {
+  google::protobuf::RepeatedPtrField<decltype(list.front().ToGoogleProtobuf())> result;
+  list.ToGoogleProtobuf(&result);
+  return result;
+}
+
+
 } // namespace rpc
 } // namespace yb
-
-#endif // YB_RPC_LIGHTWEIGHT_MESSAGE_H

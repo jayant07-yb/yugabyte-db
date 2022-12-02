@@ -4,15 +4,14 @@ headerTitle: Isolation Levels
 linkTitle: Isolation Levels
 description: Isolation Levels in YugabyteDB.
 headcontent: Isolation Levels in YugabyteDB.
-image: <div class="icon"><i class="fas fa-file-invoice-dollar"></i></div>
+image: <div class="icon"><i class="fa-solid fa-file-invoice-dollar"></i></div>
 menu:
   v2.6:
     name: Isolation Levels
     identifier: explore-transactions-isolation-levels-1-ysql
     parent: explore-transactions
     weight: 235
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -289,4 +288,3 @@ SELECT * FROM example;
 
 
 </table>
-

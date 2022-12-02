@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_ATOMIC_H
-#define YB_UTIL_ATOMIC_H
+#pragma once
 
 #include <algorithm>
 #include <atomic>
@@ -419,6 +418,12 @@ void UpdateAtomicMax(std::atomic<T>* max_holder, T new_value) {
   while (new_value > current_max && !max_holder->compare_exchange_weak(current_max, new_value)) {}
 }
 
+template<typename T>
+void UpdateAtomicMin(std::atomic<T>* min_holder, T value) {
+  auto current_min = min_holder->load(std::memory_order_acquire);
+  while (value < current_min && !min_holder->compare_exchange_weak(current_min, value)) {}
+}
+
 class AtomicTryMutex {
  public:
   void unlock() {
@@ -473,4 +478,3 @@ bool IsAcceptableAtomicImpl(const std::atomic<T>& atomic_variable) {
 }
 
 } // namespace yb
-#endif /* YB_UTIL_ATOMIC_H */

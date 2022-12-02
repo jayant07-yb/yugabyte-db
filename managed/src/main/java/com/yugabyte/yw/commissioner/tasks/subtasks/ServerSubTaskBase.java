@@ -13,7 +13,7 @@ package com.yugabyte.yw.commissioner.tasks.subtasks;
 import com.google.common.net.HostAndPort;
 import com.yugabyte.yw.commissioner.AbstractTaskBase;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
-import com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType;
+import com.yugabyte.yw.commissioner.tasks.UniverseTaskBase.ServerType;
 import com.yugabyte.yw.commissioner.tasks.params.ServerSubTaskParams;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.NodeDetails;
@@ -92,7 +92,8 @@ public abstract class ServerSubTaskBase extends AbstractTaskBase {
     }
 
     if (taskParams().serverType != ServerType.TSERVER
-        && taskParams().serverType != ServerType.MASTER) {
+        && taskParams().serverType != ServerType.MASTER
+        && taskParams().serverType != ServerType.CONTROLLER) {
       throw new IllegalArgumentException(
           "Unexpected server type "
               + taskParams().serverType

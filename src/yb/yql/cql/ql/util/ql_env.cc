@@ -33,11 +33,15 @@
 #include "yb/util/result.h"
 #include "yb/util/status_format.h"
 #include "yb/util/status_log.h"
+#include "yb/util/flags.h"
 
-DEFINE_bool(use_cassandra_authentication, false, "If to require authentication on startup.");
-DEFINE_bool(ycql_cache_login_info, false, "Use authentication information cached locally.");
-DEFINE_bool(ycql_require_drop_privs_for_truncate, false,
-    "Require DROP TABLE permission in order to truncate table");
+DEFINE_UNKNOWN_bool(use_cassandra_authentication, false,
+    "If to require authentication on startup.");
+DEFINE_UNKNOWN_bool(ycql_cache_login_info, false, "Use authentication information cached locally.");
+DEFINE_UNKNOWN_bool(ycql_require_drop_privs_for_truncate, false,
+            "Require DROP TABLE permission in order to truncate table");
+DEFINE_UNKNOWN_bool(ycql_use_local_transaction_tables, false,
+            "Whether or not to use local transaction tables when possible for YCQL transactions.");
 
 namespace yb {
 namespace ql {
@@ -102,12 +106,13 @@ Result<YBTransactionPtr> QLEnv::NewTransaction(const YBTransactionPtr& transacti
   }
   if (transaction_pool_ == nullptr) {
     if (transaction_pool_provider_) {
-      transaction_pool_ = transaction_pool_provider_();
+      transaction_pool_ = &transaction_pool_provider_();
     } else {
       return STATUS(InternalError, "No transaction pool provider");
     }
   }
-  auto result = transaction_pool_->Take(client::ForceGlobalTransaction::kTrue, deadline);
+  auto result = transaction_pool_->Take(
+      client::ForceGlobalTransaction(!FLAGS_ycql_use_local_transaction_tables), deadline);
   RETURN_NOT_OK(result->Init(isolation_level));
   return result;
 }
@@ -145,14 +150,12 @@ shared_ptr<YBTable> QLEnv::GetTableDesc(const TableId& table_id, bool* cache_use
   return yb_table;
 }
 
-Status QLEnv::GetUpToDateTableSchemaVersion(const YBTableName& table_name,
-                                                    uint32_t* ver) {
+Result<SchemaVersion> QLEnv::GetUpToDateTableSchemaVersion(const YBTableName& table_name) {
   shared_ptr<YBTable> yb_table;
   RETURN_NOT_OK(client_->OpenTable(table_name, &yb_table));
 
   if (yb_table) {
-    *ver = yb_table->schema().version();
-    return Status::OK();
+    return yb_table->schema().version();
   } else {
     return STATUS_SUBSTITUTE(NotFound, "Cannot get table $0", table_name.ToString());
   }

@@ -10,8 +10,7 @@ menu:
 aliases:
   - /preview/api/cassandra/ddl_drop_type
   - /preview/api/ycql/ddl_drop_type
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -26,9 +25,10 @@ Use the `DROP TYPE` statement to remove an existing user-defined data type.
 
 ### Grammar
 
-```
+```ebnf
 drop_type ::= DROP TYPE [ IF EXISTS ] type_name;
 ```
+
 Where
 
 - `type_name` is an identifier (possibly qualified with a keyspace name).

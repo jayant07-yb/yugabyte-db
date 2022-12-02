@@ -6,15 +6,14 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2551
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`PUBLISH channel message`</b><br>
-This command publishes the given message to the specified channel. All subscribers that are subscribed to the specified channel
-across all the Yugabyte YEDIS API server(s) in the cluster will receive the message.
+**`PUBLISH channel message`**
+
+This command publishes the given message to the specified channel. All subscribers that are subscribed to the specified channel across all the Yugabyte YEDIS API server(s) in the cluster will receive the message.
 
 ## Return value
 
@@ -32,8 +31,8 @@ $ PUBLISH channel message
 
 ## See also
 
-[`pubsub`](../pubsub/), 
-[`subscribe`](../subscribe/), 
-[`unsubscribe`](../unsubscribe/), 
-[`psubscribe`](../psubscribe/), 
+[`pubsub`](../pubsub/),
+[`subscribe`](../subscribe/),
+[`unsubscribe`](../unsubscribe/),
+[`psubscribe`](../psubscribe/),
 [`punsubscribe`](../punsubscribe/)

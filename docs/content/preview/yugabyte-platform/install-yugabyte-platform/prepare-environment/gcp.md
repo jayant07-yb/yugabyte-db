@@ -4,26 +4,25 @@ headerTitle: Prepare the Google Cloud Platform (GCP) environment
 linkTitle: Prepare the environment
 description: Prepare the Google Cloud Platform (GCP) environment
 menu:
-  preview:
+  preview_yugabyte-platform:
     parent: install-yugabyte-platform
     identifier: prepare-environment-2-gcp
     weight: 55
-isTocNested: false
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li>
     <a href="../aws/" class="nav-link">
-      <i class="fab fa-aws" aria-hidden="true"></i>
+      <i class="fa-brands fa-aws" aria-hidden="true"></i>
       AWS
     </a>
   </li>
 
   <li>
     <a href="../gcp/" class="nav-link active">
-       <i class="fab fa-google" aria-hidden="true"></i>
+       <i class="fa-brands fa-google" aria-hidden="true"></i>
       GCP
     </a>
   </li>
@@ -37,21 +36,21 @@ showAsideToc: true
 
   <li>
     <a href="../kubernetes/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       Kubernetes
     </a>
   </li>
 
 <li>
     <a href="../openshift/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       OpenShift
     </a>
  </li>
 
   <li>
     <a href="../on-premises/" class="nav-link">
-      <i class="fas fa-building" aria-hidden="true"></i>
+      <i class="fa-solid fa-building" aria-hidden="true"></i>
       On-premises
     </a>
   </li>
@@ -127,16 +126,16 @@ You need to create an instance to run YugabyteDB Anywhere. To do this, from your
 Once the instance has been created, use the **SSH Keys** tab to add a custom public key and a login user to this instance. To do so, you start by creating a key-pair, as follows:
 
 ```sh
-$ ssh-keygen -t rsa -f ~/.ssh/yugabyte-1-gcp -C centos
+ssh-keygen -t rsa -f ~/.ssh/yugabyte-1-gcp -C centos
 ```
 
-<br>You can set the appropriate credentials for the SSH key as follows:
+You can set the appropriate credentials for the SSH key as follows:
 
 ```sh
-$ chmod 400 ~/.ssh/yugabyte-1-gcp
+chmod 400 ~/.ssh/yugabyte-1-gcp
 ```
 
-<br>Enter the contents of `yugabyte-1-gcp.pub` as the value for this field.
+Enter the contents of `yugabyte-1-gcp.pub` as the value for this field.
 
 For more information, see the following GCP documentation:
 
@@ -151,8 +150,7 @@ Use the GCP Cloud Console to find the public IP address of the instance you laun
 To connect to this server, execute the following command:
 
 ```sh
-$ ssh -i ~/.ssh/yugabyte-1-gcp centos@NN.NN.NN.NN
+ssh -i ~/.ssh/yugabyte-1-gcp centos@NN.NN.NN.NN
 ```
 
 Replace `NN.NN.NN.NN` with the IP address and `yugabyte-1-gcp` with the appropriate SSH key.
-

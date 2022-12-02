@@ -6,15 +6,15 @@ import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.UpgradeTaskBase;
 import com.yugabyte.yw.commissioner.UserTaskDetails.SubTaskGroupType;
 import com.yugabyte.yw.forms.ThirdpartySoftwareUpgradeParams;
-import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.NodeDetails.NodeState;
 import java.util.LinkedHashSet;
-import java.util.stream.Collectors;
 import javax.inject.Inject;
+import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
+@EqualsAndHashCode(callSuper = false)
 public class ThirdpartySoftwareUpgrade extends UpgradeTaskBase {
 
   @Inject
@@ -41,19 +41,8 @@ public class ThirdpartySoftwareUpgrade extends UpgradeTaskBase {
   public void run() {
     runUpgrade(
         () -> {
-          LinkedHashSet<NodeDetails> nodesToUpdate =
-              toOrderedSet(fetchNodes(taskParams().upgradeOption));
-          // Verify the request params and fail if invalid
-          Universe universe = getUniverse();
-          taskParams().clusters =
-              taskParams()
-                  .clusters
-                  .stream()
-                  .map(c -> universe.getCluster(c.uuid))
-                  .collect(Collectors.toList());
-          taskParams().rootCA = universe.getUniverseDetails().rootCA;
-          taskParams().clientRootCA = universe.getUniverseDetails().clientRootCA;
-          taskParams().verifyParams(universe);
+          taskParams().verifyParams(getUniverse());
+          LinkedHashSet<NodeDetails> nodesToUpdate = fetchAllNodes(taskParams().upgradeOption);
 
           createRollingNodesUpgradeTaskFlow(
               (nodes, processTypes) -> {
@@ -64,7 +53,8 @@ public class ThirdpartySoftwareUpgrade extends UpgradeTaskBase {
                 }
               },
               nodesToUpdate,
-              DEFAULT_CONTEXT);
+              DEFAULT_CONTEXT,
+              taskParams().ybcInstalled);
         });
   }
 }

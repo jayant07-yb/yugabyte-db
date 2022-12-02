@@ -13,8 +13,7 @@
 
 // Utilities for encoding and decoding key/value pairs that are used in the DocDB code.
 
-#ifndef YB_DOCDB_DOC_SCANSPEC_UTIL_H_
-#define YB_DOCDB_DOC_SCANSPEC_UTIL_H_
+#pragma once
 
 #include "yb/common/ql_scanspec.h"
 #include "yb/docdb/docdb_fwd.h"
@@ -28,13 +27,26 @@ std::vector<KeyEntryValue> GetRangeKeyScanSpec(
     const Schema& schema,
     const std::vector<KeyEntryValue>* prefixed_range_components,
     const QLScanRange* scan_range,
+    std::vector<bool> *inclusivities,
     bool lower_bound,
-    bool include_static_columns = false);
+    bool include_static_columns = false,
+    bool use_strictness = true);
 
+// Gets the lower/upper bound value of the given range
 KeyEntryValue GetQLRangeBoundAsPVal(const QLScanRange::QLRange& ql_range,
                                     SortingType sorting_type,
                                     bool lower_bound);
+
+const boost::optional<QLScanRange::QLBound> &GetQLRangeBound(
+    const QLScanRange::QLRange& ql_range,
+    SortingType sorting_type,
+    bool lower_bound);
+
+// Gets whether the lower/upper bound of the given range is inclusive
+bool GetQLRangeBoundIsInclusive(
+    const QLScanRange::QLRange& ql_range,
+    SortingType sorting_type,
+    bool lower_bound);
+
 }  // namespace docdb
 }  // namespace yb
-
-#endif  // YB_DOCDB_DOC_SCANSPEC_UTIL_H_

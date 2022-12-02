@@ -30,8 +30,13 @@
 #include "yb/util/redis_util.h"
 #include "yb/util/status_format.h"
 #include "yb/util/stol_utils.h"
+#include "yb/util/flags.h"
 
-DEFINE_bool(emulate_redis_responses,
+using std::string;
+using std::numeric_limits;
+using std::vector;
+
+DEFINE_UNKNOWN_bool(emulate_redis_responses,
     true,
     "If emulate_redis_responses is false, we hope to get slightly better performance by just "
     "returning OK for commands that might require us to read additional records viz. SADD, HSET, "
@@ -114,8 +119,8 @@ Status KeyEntryValueFromSubKey(
 
 // Stricter version of the above when we know the exact datatype to expect.
 Status QLValueFromSubKeyStrict(const RedisKeyValueSubKeyPB& subkey_pb,
-                                       RedisDataType data_type,
-                                       QLValuePB* out) {
+                               RedisDataType data_type,
+                               QLValuePB* out) {
   switch (data_type) {
     case REDIS_TYPE_LIST: FALLTHROUGH_INTENDED;
     case REDIS_TYPE_SET: FALLTHROUGH_INTENDED;
@@ -207,6 +212,7 @@ Result<RedisDataType> GetRedisValueType(
     case ValueEntryType::kRedisList:
       return REDIS_TYPE_LIST;
     case ValueEntryType::kNullLow: FALLTHROUGH_INTENDED; // This value is a set member.
+    case ValueEntryType::kCollString:
     case ValueEntryType::kString:
       return REDIS_TYPE_STRING;
     default:
@@ -249,11 +255,11 @@ Result<RedisValue> GetRedisValue(
   RETURN_NOT_OK(GetRedisSubDocument(
       iterator, data, /* projection */ nullptr, SeekFwdSuffices::kFalse));
   if (!doc_found) {
-    return RedisValue{REDIS_TYPE_NONE};
+    return RedisValue{.type = REDIS_TYPE_NONE, .value = "", .exp = {}};
   }
 
   if (HasExpiredTTL(data.exp.write_ht, data.exp.ttl, iterator->read_time().read)) {
-    return RedisValue{REDIS_TYPE_NONE};
+    return RedisValue{.type = REDIS_TYPE_NONE, .value = "", .exp = {}};
   }
 
   if (exp)
@@ -262,22 +268,22 @@ Result<RedisValue> GetRedisValue(
   if (!doc.IsPrimitive()) {
     switch (doc.value_type()) {
       case ValueEntryType::kObject:
-        return RedisValue{REDIS_TYPE_HASH};
+        return RedisValue{.type = REDIS_TYPE_HASH, .value = "", .exp = {}};
       case ValueEntryType::kRedisTS:
-        return RedisValue{REDIS_TYPE_TIMESERIES};
+        return RedisValue{.type = REDIS_TYPE_TIMESERIES, .value = "", .exp = {}};
       case ValueEntryType::kRedisSortedSet:
-        return RedisValue{REDIS_TYPE_SORTEDSET};
+        return RedisValue{.type = REDIS_TYPE_SORTEDSET, .value = "", .exp = {}};
       case ValueEntryType::kRedisSet:
-        return RedisValue{REDIS_TYPE_SET};
+        return RedisValue{.type = REDIS_TYPE_SET, .value = "", .exp = {}};
       case ValueEntryType::kRedisList:
-        return RedisValue{REDIS_TYPE_LIST};
+        return RedisValue{.type = REDIS_TYPE_LIST, .value = "", .exp = {}};
       default:
         return STATUS_SUBSTITUTE(IllegalState, "Invalid value type: $0",
                                  static_cast<int>(doc.value_type()));
     }
   }
 
-  auto val = RedisValue{REDIS_TYPE_STRING, doc.GetString(), data.exp};
+  auto val = RedisValue{.type = REDIS_TYPE_STRING, .value = doc.GetString(), .exp = data.exp};
   return val;
 }
 
@@ -320,8 +326,9 @@ bool VerifyTypeAndSetCode(
 }
 
 Status AddPrimitiveValueToResponseArray(const PrimitiveValue& value,
-                                                RedisArrayPB* redis_array) {
+                                        RedisArrayPB* redis_array) {
   switch (value.value_type()) {
+    case ValueEntryType::kCollString:
     case ValueEntryType::kString:
       redis_array->add_elements(value.GetString());
       return Status::OK();
@@ -338,7 +345,7 @@ Status AddPrimitiveValueToResponseArray(const PrimitiveValue& value,
 }
 
 Status AddPrimitiveValueToResponseArray(const KeyEntryValue& value,
-                                                RedisArrayPB* redis_array) {
+                                        RedisArrayPB* redis_array) {
   switch (value.type()) {
     case KeyEntryType::kString: FALLTHROUGH_INTENDED;
     case KeyEntryType::kStringDescending:
@@ -379,11 +386,11 @@ struct AddResponseValuesGeneric {
 // first refers to the score for the given values.
 // second refers to a subdocument where each key is a value with the given score.
 Status AddResponseValuesSortedSets(const KeyEntryValue& first,
-                                           const SubDocument& second,
-                                           RedisResponsePB* response,
-                                           bool add_keys,
-                                           bool add_values,
-                                           bool reverse = false) {
+                                   const SubDocument& second,
+                                   RedisResponsePB* response,
+                                   bool add_keys,
+                                   bool add_values,
+                                   bool reverse = false) {
   AddResponseValuesGeneric add_response_values_generic;
   if (reverse) {
     for (auto it = second.object_container().rbegin();
@@ -403,12 +410,12 @@ Status AddResponseValuesSortedSets(const KeyEntryValue& first,
 
 template <typename T, typename AddResponseRow>
 Status PopulateRedisResponseFromInternal(T iter,
-                                                 AddResponseRow add_response_row,
-                                                 const T& iter_end,
-                                                 RedisResponsePB *response,
-                                                 bool add_keys,
-                                                 bool add_values,
-                                                 bool reverse = false) {
+                                         AddResponseRow add_response_row,
+                                         const T& iter_end,
+                                         RedisResponsePB *response,
+                                         bool add_keys,
+                                         bool add_values,
+                                         bool reverse = false) {
   response->set_allocated_array_response(new RedisArrayPB());
   for (; iter != iter_end; iter++) {
     RETURN_NOT_OK(add_response_row(
@@ -419,11 +426,11 @@ Status PopulateRedisResponseFromInternal(T iter,
 
 template <typename AddResponseRow>
 Status PopulateResponseFrom(const SubDocument::ObjectContainer &key_values,
-                                    AddResponseRow add_response_row,
-                                    RedisResponsePB *response,
-                                    bool add_keys,
-                                    bool add_values,
-                                    bool reverse = false) {
+                            AddResponseRow add_response_row,
+                            RedisResponsePB *response,
+                            bool add_keys,
+                            bool add_values,
+                            bool reverse = false) {
   if (reverse) {
     return PopulateRedisResponseFromInternal(key_values.rbegin(), add_response_row,
                                              key_values.rend(), response, add_keys,
@@ -637,7 +644,7 @@ Status RedisWriteOperation::ApplySet(const DocOperationApplyData& data) {
           // Need to insert the document instead of extending it.
           RETURN_NOT_OK(data.doc_write_batch->InsertSubDocument(
               doc_path, value_ref, data.read_time,
-              data.deadline, redis_query_id(), ttl, ValueControlFields::kInvalidUserTimestamp,
+              data.deadline, redis_query_id(), ttl, ValueControlFields::kInvalidTimestamp,
               false /* init_marker_ttl */));
         } else {
           RETURN_NOT_OK(data.doc_write_batch->ExtendSubDocument(

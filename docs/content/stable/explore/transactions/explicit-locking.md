@@ -4,21 +4,20 @@ headerTitle: Explicit Locking
 linkTitle: Explicit Locking
 description: Explicit Locking in YugabyteDB.
 headcontent: Explicit Locking in YugabyteDB.
-image: <div class="icon"><i class="fas fa-file-invoice-dollar"></i></div>
+image: <div class="icon"><i class="fa-solid fa-file-invoice-dollar"></i></div>
 menu:
   stable:
     name: Explicit Locking
     identifier: explore-transactions-explicit-locking-1-ysql
     parent: explore-transactions
     weight: 245
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li >
-    <a href="/preview/explore/multi-region-deployments/synchronous-replication-ysql/" class="nav-link active">
+    <a href="../explicit-locking/" class="nav-link active">
       <i class="icon-postgres" aria-hidden="true"></i>
       YSQL
     </a>

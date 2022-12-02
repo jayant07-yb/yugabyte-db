@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_SYS_CATALOG_WRITER_H
-#define YB_MASTER_SYS_CATALOG_WRITER_H
+#pragma once
 
 #include <set>
 #include <utility>
@@ -54,11 +53,11 @@ class SysCatalogWriter {
 
   // Insert a row into a Postgres sys catalog table.
   Status InsertPgsqlTableRow(const Schema& source_schema,
-                                     const QLTableRow& source_row,
-                                     const TableId& target_table_id,
-                                     const Schema& target_schema,
-                                     const uint32_t target_schema_version,
-                                     bool is_upsert);
+                             const QLTableRow& source_row,
+                             const TableId& target_table_id,
+                             const Schema& target_schema,
+                             const uint32_t target_schema_version,
+                             bool is_upsert);
 
   tserver::WriteRequestPB& req() {
     return *req_;
@@ -125,8 +124,11 @@ Status EnumerateSysCatalog(
 Status EnumerateSysCatalog(
     docdb::DocRowwiseIterator* doc_iter, const Schema& schema, int8_t entry_type,
     const EnumerationCallback& callback);
+// A helper function for EnumerateSysCatalog.
+Status ReadNextSysCatalogRow(
+    docdb::DocRowwiseIterator* doc_iter, const Schema& schema, int8_t entry_type,
+    ssize_t type_col_idx, ssize_t entry_id_col_idx, ssize_t metadata_col_idx,
+    const EnumerationCallback& callback);
 
 } // namespace master
 } // namespace yb
-
-#endif // YB_MASTER_SYS_CATALOG_WRITER_H

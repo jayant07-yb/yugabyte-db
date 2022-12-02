@@ -1,7 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '../../../test-utils';
-import userEvent from '@testing-library/user-event';
-import { within } from '@testing-library/dom';
+import { render, screen } from '../../../test-utils';
 import OnPremNodesList from './OnPremNodesList';
 
 jest.mock('axios');
@@ -50,7 +48,7 @@ const cloudMockState = {
         config: {USE_HOSTNAME: "false"},
         customerUUID: "f33e3c9b-75ab-4c30-80ad-cba85646ea39",
         hostedZoneId: null,
-        instanceTypes: [{idKey: {providerUuid: PROVIDER_UUID, instanceTypeCode: "Linux"}}],
+        instanceTypes: [{providerUuid: PROVIDER_UUID, instanceTypeCode: "Linux"}],
         name: "fewaijgeaf",
         priceComponents: [],
         uuid: PROVIDER_UUID

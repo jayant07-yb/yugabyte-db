@@ -10,8 +10,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 
-#ifndef YB_CLIENT_ASYNC_INITIALIZER_H_
-#define YB_CLIENT_ASYNC_INITIALIZER_H_
+#pragma once
 
 #include <future>
 
@@ -29,11 +28,10 @@ YB_STRONGLY_TYPED_BOOL(AutoStart);
 class AsyncClientInitialiser {
  public:
   AsyncClientInitialiser(
-      const std::string& client_name, const uint32_t num_reactors,
-      const uint32_t timeout_seconds, const std::string& tserver_uuid,
+      const std::string& client_name, MonoDelta default_timeout, const std::string& tserver_uuid,
       const server::ServerBaseOptions* opts, scoped_refptr<MetricEntity> metric_entity,
       const std::shared_ptr<MemTracker>& parent_mem_tracker,
-      rpc::Messenger* messenger = nullptr);
+      rpc::Messenger* messenger);
 
   ~AsyncClientInitialiser();
 
@@ -71,5 +69,3 @@ class AsyncClientInitialiser {
 
 }  // namespace client
 }  // namespace yb
-
-#endif // YB_CLIENT_ASYNC_INITIALIZER_H_

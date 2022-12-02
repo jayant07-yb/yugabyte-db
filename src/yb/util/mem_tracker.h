@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_MEM_TRACKER_H
-#define YB_UTIL_MEM_TRACKER_H
+#pragma once
 
 #include <stdint.h>
 
@@ -77,9 +76,17 @@ YB_STRONGLY_TYPED_BOOL(CreateMetrics);
 YB_STRONGLY_TYPED_BOOL(OnlyChildren);
 
 typedef std::function<int64_t()> ConsumptionFunctor;
+typedef std::function<void()> UpdateMaxMemoryFunctor;
 typedef std::function<void()> PollChildrenConsumptionFunctors;
 
 struct SoftLimitExceededResult {
+  static SoftLimitExceededResult NotExceeded() {
+    return SoftLimitExceededResult {
+      .tracker_path = "", .exceeded = false, .current_capacity_pct = 0
+    };
+  }
+
+  std::string tracker_path;
   bool exceeded;
   double current_capacity_pct;
 };
@@ -88,7 +95,7 @@ struct SoftLimitExceededResult {
 // arranged into a tree structure such that the consumption tracked by a
 // MemTracker is also tracked by its ancestors.
 //
-// The MemTracker hierarchy is rooted in a single static MemTracker whose limi
+// The MemTracker hierarchy is rooted in a single static MemTracker whose limit
 // is set via gflag. The root MemTracker always exists, and it is the common
 // ancestor to all MemTrackers. All operations that discover MemTrackers begin
 // at the root and work their way down the tree, while operations that deal
@@ -361,6 +368,9 @@ class MemTracker : public std::enable_shared_from_this<MemTracker> {
   std::string LogUsage(
       const std::string& prefix = "", int64_t usage_threshold = 0, int indent = 0) const;
 
+  // Logs the hard and soft memory limits. Does not include children.
+  void LogMemoryLimits() const;
+
   void EnableLogging(bool enable, bool log_stack) {
     enable_logging_ = enable;
     log_stack_ = log_stack;
@@ -425,6 +435,7 @@ class MemTracker : public std::enable_shared_from_this<MemTracker> {
   const int64_t soft_limit_;
   const std::string id_;
   const ConsumptionFunctor consumption_functor_;
+
   PollChildrenConsumptionFunctors poll_children_consumption_functors_;
   const std::string descr_;
   std::shared_ptr<MemTracker> parent_;
@@ -629,5 +640,3 @@ bool CheckMemoryPressureWithLogging(
     const MemTrackerPtr& mem_tracker, double score, const char* error_prefix);
 
 } // namespace yb
-
-#endif // YB_UTIL_MEM_TRACKER_H

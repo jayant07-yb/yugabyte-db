@@ -10,8 +10,7 @@ menu:
 aliases:
   - /preview/api/cassandra/ddl_alter_table
   - /preview/api/ycql/ddl_alter_table
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -27,7 +26,7 @@ It allows adding, dropping, or renaming a column as well as updating a table pro
 
 ### Grammar
 
-```
+```ebnf
 alter_table ::= ALTER TABLE table_name alter_operator [ alter_operator ...]
 
 alter_operator ::= add_op | drop_op | rename_op | property_op
@@ -71,7 +70,7 @@ ycqlsh:example> DESCRIBE TABLE employees;
 
 Following result would be shown.
 
-```
+```output
 CREATE TABLE example.employees (
     id int,
     name text,
@@ -93,7 +92,7 @@ ycqlsh:example> DESCRIBE TABLE employees;
 
 Following result would be shown.
 
-```
+```output
 CREATE TABLE example.employees (
     id int,
     name text,
@@ -114,7 +113,7 @@ ycqlsh:example> DESCRIBE TABLE employees;
 
 Following result would be shown.
 
-```
+```output
 CREATE TABLE example.employees (
     id int,
     name text,
@@ -137,7 +136,7 @@ ycqlsh:example> DESCRIBE TABLE employees;
 
 Following result would be shown.
 
-```
+```output
 CREATE TABLE example.employees (
     id int,
     name text,

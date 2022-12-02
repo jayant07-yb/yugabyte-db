@@ -14,8 +14,6 @@ import static com.yugabyte.yw.common.AssertHelper.assertUnauthorized;
 import static com.yugabyte.yw.common.AssertHelper.assertValue;
 import static com.yugabyte.yw.common.FakeApiHelper.routeWithYWErrHandler;
 import static com.yugabyte.yw.common.TestHelper.testDatabase;
-import static com.yugabyte.yw.models.Users.Role;
-import static com.yugabyte.yw.models.Users.UserType;
 import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.notNullValue;
@@ -43,6 +41,7 @@ import com.yugabyte.yw.common.ApiUtils;
 import com.yugabyte.yw.common.ConfigHelper;
 import com.yugabyte.yw.common.LdapUtil;
 import com.yugabyte.yw.common.ModelFactory;
+import com.yugabyte.yw.common.TestHelper;
 import com.yugabyte.yw.common.alerts.AlertConfigurationWriter;
 import com.yugabyte.yw.common.alerts.AlertDestinationService;
 import com.yugabyte.yw.common.alerts.QueryAlerts;
@@ -55,6 +54,8 @@ import com.yugabyte.yw.models.Provider;
 import com.yugabyte.yw.models.Region;
 import com.yugabyte.yw.models.Universe;
 import com.yugabyte.yw.models.Users;
+import com.yugabyte.yw.models.Users.Role;
+import com.yugabyte.yw.models.Users.UserType;
 import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.scheduler.Scheduler;
 import java.util.UUID;
@@ -70,7 +71,6 @@ import org.pac4j.play.store.PlaySessionStore;
 import play.Application;
 import play.inject.guice.GuiceApplicationBuilder;
 import play.libs.Json;
-import play.modules.swagger.SwaggerModule;
 import play.mvc.Http;
 import play.mvc.Result;
 import play.test.Helpers;
@@ -96,7 +96,6 @@ public class SessionControllerTest {
     ldapUtil = mock(LdapUtil.class);
     app =
         new GuiceApplicationBuilder()
-            .disable(SwaggerModule.class)
             .disable(GuiceModule.class)
             .configure(testDatabase())
             .configure(ImmutableMap.of("yb.multiTenant", isMultiTenant))
@@ -119,6 +118,7 @@ public class SessionControllerTest {
   @After
   public void tearDown() {
     Helpers.stop(app);
+    TestHelper.shutdownDatabase();
   }
 
   @Test
@@ -185,9 +185,7 @@ public class SessionControllerTest {
     ObjectNode loginJson = Json.newObject();
     loginJson.put("email", "test@customer.com");
     loginJson.put("password", "password");
-    settableRuntimeConfigFactory
-        .globalRuntimeConf()
-        .setValue("yb.security.ldap.use_ldap", "true", false);
+    settableRuntimeConfigFactory.globalRuntimeConf().setValue("yb.security.ldap.use_ldap", "true");
     when(ldapUtil.loginWithLdap(any())).thenReturn(user);
     Result result = route(fakeRequest("POST", "/api/login").bodyJson(loginJson));
     JsonNode json = Json.parse(contentAsString(result));
@@ -196,9 +194,7 @@ public class SessionControllerTest {
     assertNotNull(json.get("authToken"));
     assertAuditEntry(1, customer.uuid);
 
-    settableRuntimeConfigFactory
-        .globalRuntimeConf()
-        .setValue("yb.security.ldap.use_ldap", "false", false);
+    settableRuntimeConfigFactory.globalRuntimeConf().setValue("yb.security.ldap.use_ldap", "false");
   }
 
   @Test
@@ -211,9 +207,7 @@ public class SessionControllerTest {
     ObjectNode loginJson = Json.newObject();
     loginJson.put("email", "test@customer.com");
     loginJson.put("password", "password1");
-    settableRuntimeConfigFactory
-        .globalRuntimeConf()
-        .setValue("yb.security.ldap.use_ldap", "true", false);
+    settableRuntimeConfigFactory.globalRuntimeConf().setValue("yb.security.ldap.use_ldap", "true");
     when(ldapUtil.loginWithLdap(any())).thenReturn(null);
     Result result =
         assertPlatformException(() -> route(fakeRequest("POST", "/api/login").bodyJson(loginJson)));
@@ -225,9 +219,7 @@ public class SessionControllerTest {
         allOf(notNullValue(), containsString("Invalid User Credentials")));
     assertAuditEntry(0, customer.uuid);
 
-    settableRuntimeConfigFactory
-        .globalRuntimeConf()
-        .setValue("yb.security.ldap.use_ldap", "false", false);
+    settableRuntimeConfigFactory.globalRuntimeConf().setValue("yb.security.ldap.use_ldap", "false");
   }
 
   @Test
@@ -259,9 +251,7 @@ public class SessionControllerTest {
     ObjectNode loginJson = Json.newObject();
     loginJson.put("email", "test@customer.com");
     loginJson.put("password", "password");
-    settableRuntimeConfigFactory
-        .globalRuntimeConf()
-        .setValue("yb.security.ldap.use_ldap", "true", false);
+    settableRuntimeConfigFactory.globalRuntimeConf().setValue("yb.security.ldap.use_ldap", "true");
     when(ldapUtil.loginWithLdap(any())).thenReturn(null);
     Result result = route(fakeRequest("POST", "/api/login").bodyJson(loginJson));
     JsonNode json = Json.parse(contentAsString(result));
@@ -270,9 +260,7 @@ public class SessionControllerTest {
     assertNotNull(json.get("authToken"));
     assertAuditEntry(1, customer.uuid);
 
-    settableRuntimeConfigFactory
-        .globalRuntimeConf()
-        .setValue("yb.security.ldap.use_ldap", "false", false);
+    settableRuntimeConfigFactory.globalRuntimeConf().setValue("yb.security.ldap.use_ldap", "false");
   }
 
   @Test

@@ -6,8 +6,7 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2217
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -16,16 +15,16 @@ Returns all keys matching pattern. An error is thrown if over 10,000 keys are in
 against an out of memory state, although this limit can be changed.
 
 Supported patterns:
-<li>?oo matches foo, boo, zoo, ... </li>
-<li>\*oo matches oo, foo, fllllloo, ...</li>
-<li>[fb]oo matches foo and boo.</li>
-<li>[^f]oo matches boo, zoo, ... but not foo.</li>
-<li>[f-g]oo matches foo and goo.</li>
+- ?oo matches foo, boo, zoo, ...
+- \*oo matches oo, foo, fllllloo, ...
+- [fb]oo matches foo and boo.
+- [^f]oo matches boo, zoo, ... but not foo.
+- [f-g]oo matches foo and goo.
 
 Use \\ to escape special characters if you want to match them verbatim.
 
 ## Return Value
-String array with the list of matching keys, error if there are over 10,000 keys. There is no 
+String array with the list of matching keys, error if there are over 10,000 keys. There is no
 ordering invariant on the returned keys.
 
 ## Examples
@@ -43,7 +42,7 @@ $ SADD key val
 ```
 
 ```
-(integer) 1 
+(integer) 1
 ```
 
 Get all keys in the db.

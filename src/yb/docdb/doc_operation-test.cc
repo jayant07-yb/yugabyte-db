@@ -42,10 +42,13 @@
 #include "yb/util/size_literals.h"
 #include "yb/util/tostring.h"
 
+using std::vector;
+
 DECLARE_uint64(rocksdb_max_file_size_for_compaction);
 DECLARE_int32(rocksdb_level0_slowdown_writes_trigger);
 DECLARE_int32(rocksdb_level0_stop_writes_trigger);
 DECLARE_int32(rocksdb_level0_file_num_compaction_trigger);
+DECLARE_int32(test_random_seed);
 
 using namespace std::literals; // NOLINT
 
@@ -178,9 +181,9 @@ class DocOperationTest : public DocDBTestBase {
                const TransactionOperationContext& txn_op_context =
                    kNonTransactionalOperationContext) {
     IndexMap index_map;
-    QLWriteOperation ql_write_op(ql_writereq_pb,
-                                 std::make_shared<DocReadContext>(schema, 1),
-                                 index_map, nullptr /* unique_index_key_schema */, txn_op_context);
+    QLWriteOperation ql_write_op(
+        ql_writereq_pb, std::make_shared<DocReadContext>(DocReadContext::TEST_Create(schema)),
+        index_map, nullptr /* unique_index_key_schema */, txn_op_context);
     ASSERT_OK(ql_write_op.Init(ql_writeresp_pb));
     auto doc_write_batch = MakeDocWriteBatch();
     HybridTime restart_read_ht;
@@ -321,17 +324,18 @@ SubDocKey(DocKey(0x0000, [1], []), [ColumnId(3); HT{ <max> w: 2 }]) -> 4
     QLReadOperation read_op(ql_read_req, kNonTransactionalOperationContext);
     QLRocksDBStorage ql_storage(doc_db());
     const QLRSRowDesc rsrow_desc(*rsrow_desc_pb);
-    faststring rows_data;
+    WriteBuffer rows_data(1024);
     QLResultSet resultset(&rsrow_desc, &rows_data);
     HybridTime read_restart_ht;
-    DocReadContext doc_read_context(schema, 1);
+    auto doc_read_context = DocReadContext::TEST_Create(schema);
     EXPECT_OK(read_op.Execute(
         ql_storage, CoarseTimePoint::max() /* deadline */, ReadHybridTime::SingleTime(read_time),
         doc_read_context, projection, &resultset, &read_restart_ht));
     EXPECT_FALSE(read_restart_ht.is_valid());
 
     // Transfer the column values from result set to rowblock.
-    Slice data(rows_data.data(), rows_data.size());
+    auto data_str = rows_data.ToBuffer();
+    Slice data(data_str);
     EXPECT_OK(row_block.Deserialize(YQL_CLIENT_CQL, &data));
     return row_block;
   }
@@ -356,8 +360,11 @@ TEST_F(DocOperationTest, TestRedisSetKVWithTTL) {
   redis_write_operation_pb.mutable_key_value()->add_value("xyz");
   RedisWriteOperation redis_write_operation(redis_write_operation_pb);
   auto doc_write_batch = MakeDocWriteBatch();
-  ASSERT_OK(redis_write_operation.Apply(
-      {&doc_write_batch, CoarseTimePoint::max() /* deadline */, ReadHybridTime()}));
+  ASSERT_OK(redis_write_operation.Apply(docdb::DocOperationApplyData{
+      .doc_write_batch = &doc_write_batch,
+      .deadline = CoarseTimePoint::max(),
+      .read_time = ReadHybridTime(),
+      .restart_read_ht = nullptr}));
 
   ASSERT_OK(WriteToRocksDB(doc_write_batch, HybridTime::FromMicros(1000)));
 
@@ -553,7 +560,7 @@ SubDocKey(DocKey(0x0000, [100], []), [ColumnId(3); HT{ physical: 0 logical: 3000
       )#");
 
   Schema schema = CreateSchema();
-  DocReadContext doc_read_context(schema, 1);
+  auto doc_read_context = DocReadContext::TEST_Create(schema);
   DocRowwiseIterator iter(schema, doc_read_context, kNonTransactionalOperationContext,
                           doc_db(), CoarseTimePoint::max() /* deadline */,
                           ReadHybridTime::FromUint64(3000));
@@ -766,7 +773,11 @@ std::pair<It, It> GetIteratorRange(const It begin, const It end, const It it, QL
 class DocOperationScanTest : public DocOperationTest {
  protected:
   DocOperationScanTest() {
-    Seed(&rng_);
+    if (FLAGS_test_random_seed == 0) {
+      Seed(&rng_);
+    } else {
+      rng_.seed(FLAGS_test_random_seed);
+    }
   }
 
   void InitSchema(SortingType range_column_sorting) {
@@ -775,7 +786,8 @@ class DocOperationScanTest : public DocOperationTest {
     ColumnSchema range_column("r", INT32, false, false, false, false, 1, range_column_sorting);
     ColumnSchema value_column("v", INT32, false, false);
     auto columns = { hash_column, range_column, value_column };
-    doc_read_context_ = DocReadContext(Schema(columns, CreateColumnIds(columns.size()), 2), 1);
+    doc_read_context_ = DocReadContext::TEST_Create(
+        Schema(columns, CreateColumnIds(columns.size()), 2));
   }
 
   void InsertRows(const size_t num_rows_per_key,
@@ -886,7 +898,7 @@ class DocOperationScanTest : public DocOperationTest {
               doc_read_context_.schema, doc_read_context_, txn_op_context, doc_db(),
               CoarseTimePoint::max() /* deadline */, read_ht);
           ASSERT_OK(ql_iter.Init(ql_scan_spec));
-          LOG(INFO) << "Expected rows: " << yb::ToString(expected_rows);
+          LOG(INFO) << "Expected rows: " << AsString(expected_rows);
           it = expected_rows.begin();
           while (ASSERT_RESULT(ql_iter.HasNext())) {
             QLTableRow value_map;
@@ -925,7 +937,7 @@ class DocOperationScanTest : public DocOperationTest {
 
   std::mt19937_64 rng_;
   SortingType range_column_sorting_type_;
-  DocReadContext doc_read_context_{Schema(), 1};
+  DocReadContext doc_read_context_ = DocReadContext::TEST_Create(Schema());
   int32_t h_key_;
   std::vector<RowDataWithHt> rows_;
 };

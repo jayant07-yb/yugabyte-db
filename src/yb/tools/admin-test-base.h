@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_TOOLS_ADMIN_TEST_BASE_H
-#define YB_TOOLS_ADMIN_TEST_BASE_H
+#pragma once
 
 #include <rapidjson/document.h>
 
@@ -66,6 +65,7 @@ template <class... Args>
 Result<std::string> RunAdminToolCommand(const std::string& master_addresses, Args&&... args) {
   auto command = ToStringVector(
       GetToolPath("yb-admin"), "-master_addresses", master_addresses,
+      "--never_fsync=true",
       std::forward<Args>(args)...);
   std::string result;
   LOG(INFO) << "Run tool: " << AsString(command);
@@ -75,5 +75,3 @@ Result<std::string> RunAdminToolCommand(const std::string& master_addresses, Arg
 
 }  // namespace tools
 }  // namespace yb
-
-#endif  // YB_TOOLS_ADMIN_TEST_BASE_H

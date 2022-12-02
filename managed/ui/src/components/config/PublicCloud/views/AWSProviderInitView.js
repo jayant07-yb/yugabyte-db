@@ -30,8 +30,9 @@ import _ from 'lodash';
 import { regionsData } from './providerRegionsData';
 import { NTPConfig, NTP_TYPES } from './NTPConfig';
 
-import { YBTag } from '../../../common/YBTag';
+import clsx from 'clsx';
 import './providerView.scss';
+import { specialChars } from '../../constants';
 
 const validationIsRequired = (value) => (value && value.trim() !== '' ? undefined : 'Required');
 
@@ -174,24 +175,24 @@ class renderRegions extends Component {
       </option>,
       ...(this.state.editRegionIndex === undefined
         ? //if add new flow - remove already added regions from region select picker
-          _.differenceBy(regionsData, formRegions, 'destVpcRegion').map((region, index) => (
-            <option key={index + 1} value={region.destVpcRegion}>
-              {region.destVpcRegion}
-            </option>
-          ))
+        _.differenceBy(regionsData, formRegions, 'destVpcRegion').map((region, index) => (
+          <option key={index + 1} value={region.destVpcRegion}>
+            {region.destVpcRegion}
+          </option>
+        ))
         : //if edit flow - remove already added regions from region select picker except one to edit and mark it selected
-          _.differenceBy(
-            regionsData,
-            _.filter(
-              formRegions,
-              (o) => o.destVpcRegion !== formRegions[self.state.editRegionIndex].destVpcRegion
-            ),
-            'destVpcRegion'
-          ).map((region, index) => (
-            <option key={index + 1} value={region.destVpcRegion}>
-              {region.destVpcRegion}
-            </option>
-          )))
+        _.differenceBy(
+          regionsData,
+          _.filter(
+            formRegions,
+            (o) => o.destVpcRegion !== formRegions[self.state.editRegionIndex].destVpcRegion
+          ),
+          'destVpcRegion'
+        ).map((region, index) => (
+          <option key={index + 1} value={region.destVpcRegion}>
+            {region.destVpcRegion}
+          </option>
+        )))
     ];
 
     //depending on selected region fetch zones matching this region
@@ -467,7 +468,7 @@ class AWSProviderInitView extends Component {
   constructor(props) {
     super(props);
     this.state = {
-      networkSetupType: 'new_vpc',
+      networkSetupType: 'existing_vpc',
       setupHostedZone: false,
       credentialInputType: 'custom_keys',
       sshPrivateKeyContent: {},
@@ -586,14 +587,14 @@ class AWSProviderInitView extends Component {
     this.props.closeModal();
   };
 
-  generateRow = (label, field) => {
+  generateRow = (label, field, centerAlign = false) => {
     return (
       <Row className="config-provider-row">
         <Col lg={3}>
           <div className="form-item-custom-label">{label}</div>
         </Col>
         <Col lg={7}>
-          <div className="form-right-aligned-labels">{field}</div>
+          <div className={clsx(['form-right-aligned-labels', {'center-align-row' : centerAlign}])}>{field}</div>
         </Col>
       </Row>
     );
@@ -814,7 +815,8 @@ class AWSProviderInitView extends Component {
         onToggle={this.hostedZoneToggled}
         infoTitle={label}
         infoContent={tooltipContent}
-      />
+      />,
+      true
     );
   }
 
@@ -830,7 +832,8 @@ class AWSProviderInitView extends Component {
         defaultChecked={false}
         infoTitle={label}
         infoContent={tooltipContent}
-      />
+      />,
+      true
     );
   }
 
@@ -838,18 +841,18 @@ class AWSProviderInitView extends Component {
     return (
       <Row className="config-provider-row">
         <Col lg={3}>
-          <div className="form-item-custom-label">NTP Setup<YBTag>Beta</YBTag></div>
+          <div className="form-item-custom-label">NTP Setup</div>
         </Col>
         <Col lg={7}>
           <div>{<NTPConfig onChange={change}/>}</div>
         </Col>
       </Row>
-    )
+    );
 
   }
 
   rowOverrideKeyValidateToggle() {
-    const label = 'Override Custom KeyPair Validation'
+    const label = 'Override Custom KeyPair Validation';
     const tooltipContent =
       'Would you like YugaWare to NOT validate KeyPair with AWS?';
     return this.generateRow(
@@ -861,7 +864,7 @@ class AWSProviderInitView extends Component {
         infoTitle={label}
         infoContent={tooltipContent}
       />
-    )
+    );
   }
 
   render() {
@@ -869,7 +872,7 @@ class AWSProviderInitView extends Component {
     // VPC and region setup.
     const network_setup_options = [
       <option key={1} value={'new_vpc'}>
-        {'Create a new VPC'}
+        {'Create a new VPC (Beta)'}
       </option>,
       <option key={2} value={'existing_vpc'}>
         {'Specify an existing VPC'}
@@ -974,6 +977,11 @@ function validate(values) {
   if (!isNonEmptyString(values.accountName)) {
     errors.accountName = 'Account Name is required';
   }
+  else {
+    if(!specialChars.test(values.accountName)){
+      errors.accountName = 'Account Name cannot have special characters except - and _';
+    }
+  }
 
   if (!isNonEmptyArray(values.regionList)) {
     errors.regionList = { _error: 'Provider must have at least one region' };
@@ -1008,7 +1016,7 @@ function validate(values) {
     errors.hostedZoneId = 'Route53 Zone ID is required';
   }
   if(values.ntp_option === NTP_TYPES.MANUAL && values.ntpServers.length === 0){
-    errors.ntpServers = 'NTP servers cannot be empty'
+    errors.ntpServers = 'NTP servers cannot be empty';
   }
   return errors;
 }
@@ -1018,8 +1026,10 @@ let awsProviderConfigForm = reduxForm({
   validate,
   initialValues: {
     ntp_option: NTP_TYPES.PROVIDER,
-    ntpServers: []
-  }
+    ntpServers: [],
+    network_setup : 'existing_vpc'
+  },
+  touchOnChange: true
 })(AWSProviderInitView);
 
 // Decorate with connect to read form values

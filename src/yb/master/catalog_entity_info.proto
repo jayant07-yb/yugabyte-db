@@ -155,12 +155,13 @@ message SysTablesEntryPB {
   // True if the table is colocated (including tablegroups, excluding YSQL system tables).
   optional bool colocated = 25 [ default = false ];
 
+  // For materialized views:
+  optional bytes matview_pg_table_id = 36; // The PG OID of a materialized view
+  optional bool is_matview = 37 [ default = false ]; // True if the table is a materialized view.
+
   optional uint32 fully_applied_schema_version = 23;
   repeated IndexInfoPB fully_applied_indexes = 26;
   optional IndexInfoPB fully_applied_index_info = 27;
-
-  // Optional: Table dependent upon transaction success (abort removes table). Used by YSQL.
-  optional TransactionMetadataPB transaction = 29;
 
   // During an alter table, which involves no schema change but only updating
   // a permission, is it sometimes acceptable for a client's request (which is
@@ -181,6 +182,24 @@ message SysTablesEntryPB {
   optional bytes transaction_table_tablespace_id = 34;
   // Time when the table was hidden.
   optional fixed64 hide_hybrid_time = 35;
+
+  message YsqlDdlTxnVerifierState {
+    optional bool contains_create_table_op = 1;
+    optional bool contains_alter_table_op = 2;
+    optional bool contains_drop_table_op = 3;
+
+    optional SchemaPB previous_schema = 4;
+    optional string previous_table_name = 5;
+  }
+
+  // State that indicates that this table is being changed by a YSQL transaction.
+  // This repeated field contains only a single element as of now. When we support DDL + Savepoints,
+  // we will have one element for every savepoint modifying this table in this field.
+  repeated YsqlDdlTxnVerifierState ysql_ddl_txn_verifier_state = 38;
+
+  // YSQL transaction that is currently modifying this table state. The changes being performed by
+  // it are detailed in 'ysql_ddl_txn_state' above.
+  optional TransactionMetadataPB transaction = 29;
 }
 
 // The on-disk entry in the sys.catalog table ("metadata" column) for
@@ -305,7 +324,7 @@ message EncryptionInfoPB {
   optional bool key_in_memory = 5;
 }
 
-// The on-disk entry in the sys.catalog table for configuration vinformation
+// The on-disk entry in the sys.catalog table for configuration information
 // that are relevant to the entire cluster. This has a version entry that is
 // used for ensuring that client read-modify-writes are valid.
 message SysClusterConfigEntryPB {
@@ -436,6 +455,8 @@ message SysCDCStreamEntryPB {
     DELETING = 1;
     // Currently DELETED is not being used because we delete streams entries from sys catalog.
     DELETED = 2;
+    // Used to handle the stream metadata cleanup as part of drop table.
+    DELETING_METADATA = 4;
   }
   repeated string table_id = 1;
   repeated CDCStreamOptionsPB options = 2;
@@ -518,6 +539,16 @@ message SysUniverseReplicationEntryPB {
   // producer table ID -> consumer table ID map.
   map<string, string> validated_tables = 5;
 
-  // producer table ID -> producer CDC stream map.
+  // producer table ID -> producer CDC stream ID map.
   map<string, string> table_streams = 6;
+
+  // Namespace-level replication setup.
+  optional bool is_ns_replication = 7 [default = false];
+  optional NamespaceIdentifierPB producer_namespace = 8;
+  optional NamespaceIdentifierPB consumer_namespace = 9;
+}
+
+message XClusterSafeTimePB {
+  // Map[Local NamespaceId]: xCluster safe read HybridTime
+  map<string, fixed64> safe_time_map = 1;
 }

@@ -6,13 +6,13 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2272
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`PSETEX key ttl_in_msec string_value`</b><br>
+**`PSETEX key ttl_in_msec string_value`**
+
 This command sets the value of `key` to be `string_value`, and sets the key to expire in `ttl_in_msec` milli-seconds.
 
 ## Return Value
@@ -42,7 +42,7 @@ $ PTTL yugakey
 ```
 
 ```
-(integer) 900 
+(integer) 900
 ```
 
 ## See also

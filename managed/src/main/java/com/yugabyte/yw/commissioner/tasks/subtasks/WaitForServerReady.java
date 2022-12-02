@@ -12,7 +12,7 @@ package com.yugabyte.yw.commissioner.tasks.subtasks;
 
 import com.google.common.net.HostAndPort;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
-import com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType;
+import com.yugabyte.yw.commissioner.tasks.UniverseTaskBase.ServerType;
 import com.yugabyte.yw.commissioner.tasks.params.ServerSubTaskParams;
 import com.yugabyte.yw.forms.UpgradeParams;
 import java.time.Duration;
@@ -74,14 +74,14 @@ public class WaitForServerReady extends ServerSubTaskBase {
             : UpgradeParams.DEFAULT_SLEEP_AFTER_RESTART_MS;
 
     HostAndPort hp = getHostPort();
-    boolean isTserverTask = taskParams().serverType == ServerType.TSERVER;
+    boolean isMasterTask = taskParams().serverType == ServerType.MASTER;
 
     IsServerReadyResponse response = null;
     YBClient client = getClient();
     try {
       while (true) {
         numIters++;
-        response = client.isServerReady(hp, isTserverTask);
+        response = client.isServerReady(hp, !isMasterTask);
 
         if (response.hasError()) {
           log.info("Response has error {} after iters={}.", response.errorMessage(), numIters);

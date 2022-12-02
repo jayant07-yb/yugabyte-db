@@ -10,6 +10,7 @@ menu:
     identifier: explore-multi-region-deployments
     parent: explore
     weight: 270
+type: indexpage
 ---
 
 YugabyteDB supports a rich set of multi-region deployment topologies. This section explains some of these deployments. The predominant deployments include:
@@ -94,6 +95,4 @@ The deployment types are explained in the following sections:
       </div>
     </a>
   </div>
-</div>
-
 </div>

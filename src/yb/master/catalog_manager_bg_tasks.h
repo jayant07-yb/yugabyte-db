@@ -29,11 +29,12 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 
-#ifndef YB_MASTER_CATALOG_MANAGER_BG_TASKS_H
-#define YB_MASTER_CATALOG_MANAGER_BG_TASKS_H
+#pragma once
 
 #include <atomic>
+#include <unordered_set>
 
+#include "yb/common/entity_ids_types.h"
 #include "yb/util/status_fwd.h"
 #include "yb/util/mutex.h"
 #include "yb/util/condition_variable.h"
@@ -65,6 +66,7 @@ class CatalogManagerBgTasks final {
   void WakeIfHasPendingUpdates();
 
  private:
+  void TryResumeBackfillForTables(std::unordered_set<TableId>* tables);
   void Run();
 
  private:
@@ -74,9 +76,8 @@ class CatalogManagerBgTasks final {
   ConditionVariable cond_;
   scoped_refptr<yb::Thread> thread_;
   enterprise::CatalogManager *catalog_manager_;
+  bool was_leader_ = false;
 };
 
 }  // namespace master
 }  // namespace yb
-
-#endif  // YB_MASTER_CATALOG_MANAGER_BG_TASKS_H

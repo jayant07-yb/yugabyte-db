@@ -15,11 +15,9 @@ linux_packages:
   - rsync
   - openssl
 
-azure_packages:
-  - libselinux-python
-
 aarch64_packages:
   - libatomic
+  - glibc-langpack-en
 
 debian_aarch64_packages:
   - libatomic1

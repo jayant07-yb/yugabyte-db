@@ -36,7 +36,7 @@ from typing import DefaultDict, Dict, List, Any, Optional, Pattern, Tuple
 from datetime import datetime
 
 from yb.common_util import (
-    init_env,
+    init_logging,
     YB_SRC_ROOT,
     read_file,
     load_yaml_file,
@@ -46,13 +46,11 @@ from yb.common_util import (
     write_file,
     make_parent_dir,
     )
-from sys_detection import local_sys_conf, SHORT_OS_NAME_REGEX_STR
+from sys_detection import local_sys_conf, SHORT_OS_NAME_REGEX_STR, is_macos
 
 from collections import defaultdict
 
 from yb.os_versions import adjust_os_type, is_compatible_os
-
-from yb.llvm_urls import get_llvm_url
 
 
 ruamel_yaml_object = ruamel.yaml.YAML()
@@ -69,6 +67,8 @@ ARCH_REGEX_STR = '|'.join(['x86_64', 'aarch64', 'arm64'])
 
 # These were incorrectly used without the "clang" prefix to indicate various versions of Clang.
 NUMBER_ONLY_VERSIONS_OF_CLANG = [str(i) for i in [12, 13, 14]]
+
+PREFERRED_OS_TYPE = 'centos7'
 
 
 def get_arch_regex(index: int) -> str:
@@ -107,6 +107,8 @@ SHA_FOR_LOCAL_CHECKOUT_KEY = 'sha_for_local_checkout'
 
 # Skip these problematic tags.
 BROKEN_TAGS = set(['v20210907234210-47a70bc7dc-centos7-x86_64-linuxbrew-gcc5'])
+
+SHA_HASH = re.compile(r'^[0-9a-f]{40}$')
 
 
 def get_archive_name_from_tag(tag: str) -> str:
@@ -150,6 +152,11 @@ class ThirdPartyReleaseBase:
             (self.KEY_FIELDS_WITH_TAG if include_tag else self.KEY_FIELDS_NO_TAG))
 
 
+class SkipThirdPartyReleaseException(Exception):
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg)
+
+
 class GitHubThirdPartyRelease(ThirdPartyReleaseBase):
     github_release: GitRelease
 
@@ -157,11 +164,14 @@ class GitHubThirdPartyRelease(ThirdPartyReleaseBase):
     url: str
     branch_name: Optional[str]
 
-    def __init__(self, github_release: GitRelease) -> None:
+    def __init__(self, github_release: GitRelease, target_commitish: Optional[str] = None) -> None:
         self.github_release = github_release
-        self.sha = self.github_release.target_commitish
+        self.sha = target_commitish or self.github_release.target_commitish
 
         tag = self.github_release.tag_name
+        if tag.endswith('-snyk-scan'):
+            raise SkipThirdPartyReleaseException(f"Skipping a tag ending with '-snyk-scan': {tag}")
+
         tag_match = TAG_RE.match(tag)
         if not tag_match:
             logging.info(f"Full regular expression for release tags: {TAG_RE_STR}")
@@ -171,9 +181,9 @@ class GitHubThirdPartyRelease(ThirdPartyReleaseBase):
 
         sha_prefix = tag_match.group('sha_prefix')
         if not self.sha.startswith(sha_prefix):
-            raise ValueError(
-                f"SHA prefix {sha_prefix} extracted from tag {tag} is not a prefix of the "
-                f"SHA corresponding to the release/tag: {self.sha}.")
+            msg = (f"SHA prefix {sha_prefix} extracted from tag {tag} is not a prefix of the "
+                   f"SHA corresponding to the release/tag: {self.sha}. Skipping.")
+            raise SkipThirdPartyReleaseException(msg)
 
         self.timestamp = group_dict['timestamp']
         self.os_type = adjust_os_type(group_dict['os'])
@@ -192,6 +202,7 @@ class GitHubThirdPartyRelease(ThirdPartyReleaseBase):
         if compiler_type is None and self.is_linuxbrew:
             compiler_type = 'gcc'
         if compiler_type in NUMBER_ONLY_VERSIONS_OF_CLANG:
+            assert isinstance(compiler_type, str)
             compiler_type == 'clang' + compiler_type
 
         if compiler_type is None:
@@ -219,7 +230,7 @@ class GitHubThirdPartyRelease(ThirdPartyReleaseBase):
             return False
 
         non_checksum_urls = [url for url in asset_urls if not url.endswith('.sha256')]
-        assert(len(non_checksum_urls) == 1)
+        assert len(non_checksum_urls) == 1
         self.url = non_checksum_urls[0]
         if not self.url.startswith(DOWNLOAD_URL_PREFIX):
             logging.warning(
@@ -229,7 +240,7 @@ class GitHubThirdPartyRelease(ThirdPartyReleaseBase):
 
         url_suffix = self.url[len(DOWNLOAD_URL_PREFIX):]
         url_suffix_components = url_suffix.split('/')
-        assert(len(url_suffix_components) == 2)
+        assert len(url_suffix_components) == 2
 
         archive_basename = url_suffix_components[1]
         expected_basename = get_archive_name_from_tag(self.tag)
@@ -244,6 +255,22 @@ class GitHubThirdPartyRelease(ThirdPartyReleaseBase):
     def is_consistent_with_yb_version(self, yb_version: str) -> bool:
         return (self.branch_name is None or
                 yb_version.startswith((self.branch_name + '.', self.branch_name + '-')))
+
+    def should_skip_as_too_os_specific(self) -> bool:
+        """
+        Certain build types of specific OSes could be skipped because we can use the CentOS 7 build
+        instead. We can do that in cases we know we don't need to run ASAN/TSAN. We know that we
+        don't use ASAN/TSAN on aarch64 or for LTO builds as of 11/07/2022. Also we don't skip
+        Linuxbrew builds or GCC builds.
+        """
+        return (
+            self.os_type != 'centos7' and
+            self.compiler_type.startswith('clang') and
+            # We handle Linuxbrew builds in a special way, e.g. they could be built on AlmaLinux 8.
+            not self.is_linuxbrew and
+            # We don't run ASAN/TSAN on aarch64 or with LTO yet.
+            (self.architecture == 'aarch64' or self.lto_type is not None)
+        )
 
 
 @ruamel_yaml_object.register_class
@@ -302,7 +329,9 @@ def parse_args() -> argparse.Namespace:
         '--github-token-file',
         help='Read GitHub token from this file. Authenticated requests have a higher rate limit. '
              'If this is not specified, we will still use the GITHUB_TOKEN environment '
-             'variable.')
+             'variable. The YB_GITHUB_TOKEN_FILE_PATH environment variable, if set, will be used '
+             'as the default value of this argument.',
+        default=os.getenv('YB_GITHUB_TOKEN_FILE_PATH'))
     parser.add_argument(
         '--update', '-u', action='store_true',
         help=f'Update the third-party archive metadata in in {THIRDPARTY_ARCHIVES_REL_PATH}.')
@@ -319,11 +348,6 @@ def parse_args() -> argparse.Namespace:
         '--save-thirdparty-url-to-file',
         help='Determine the third-party archive download URL for the combination of criteria, '
              'including the compiler type, and write it to the file specified by this argument.')
-    parser.add_argument(
-        '--save-llvm-url-to-file',
-        help='Determine the LLVM toolchain archive download URL and write it to the file '
-             'specified by this argument. Similar to --save-download-url-to-file but also '
-             'takes the OS into account.')
     parser.add_argument(
         '--compiler-type',
         help='Compiler type, to help us decide which third-party archive to choose. '
@@ -359,6 +383,12 @@ def parse_args() -> argparse.Namespace:
         help='One or more Git commits in the yugabyte-db-thirdparty repository that we should '
              'find releases for, in addition to the most recent commit in that repository that is '
              'associated with any of the releases. For use with --update.')
+    parser.add_argument(
+        '--allow-older-os',
+        help='Allow using third-party archives built for an older compatible OS, such as CentOS 7.'
+             'This is typically OK, as long as no runtime libraries for e.g. ASAN or UBSAN '
+             'need to be used, which have to be built for the exact same version of OS.',
+        action='store_true')
 
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)
@@ -378,6 +408,7 @@ def get_manual_archive_metadata_file_path() -> str:
 def get_github_token(token_file_path: Optional[str]) -> Optional[str]:
     github_token: Optional[str]
     if token_file_path:
+        logging.info("Reading GitHub token from %s", token_file_path)
         github_token = read_file(token_file_path).strip()
     else:
         github_token = os.getenv('GITHUB_TOKEN')
@@ -418,6 +449,7 @@ class MetadataUpdater:
         releases_by_commit: Dict[str, ReleaseGroup] = {}
         num_skipped_old_tag_format = 0
         num_skipped_wrong_branch = 0
+        num_skipped_too_os_specific = 0
         num_releases_found = 0
 
         releases = []
@@ -435,7 +467,11 @@ class MetadataUpdater:
 
         for release in releases:
             sha: str = release.target_commitish
-            assert(isinstance(sha, str))
+            assert isinstance(sha, str)
+
+            if SHA_HASH.match(sha) is None:
+                sha = repo.get_commit(sha).sha
+
             tag_name = release.tag_name
             if len(tag_name.split('-')) <= 2:
                 logging.debug(f"Skipping release tag: {tag_name} (old format, too few components)")
@@ -445,11 +481,23 @@ class MetadataUpdater:
                 logging.info(f'Skipping tag {tag_name}, does not match the filter')
                 continue
 
-            yb_dep_release = GitHubThirdPartyRelease(release)
+            try:
+                yb_dep_release = GitHubThirdPartyRelease(release, target_commitish=sha)
+            except SkipThirdPartyReleaseException as ex:
+                logging.warning("Skipping release: %s", ex)
+                continue
+
             if not yb_dep_release.is_consistent_with_yb_version(yb_version):
-                logging.debug(
-                    f"Skipping release tag: {tag_name} (does not match version {yb_version}")
+                logging.info(
+                    f"Skipping release tag: {tag_name} (does not match version {yb_version})")
                 num_skipped_wrong_branch += 1
+                continue
+
+            if yb_dep_release.should_skip_as_too_os_specific():
+                logging.info(
+                    f"Skipping release {yb_dep_release} because it is too specific to a particular "
+                    "version of OS and we could use a build for an older OS instead.")
+                num_skipped_too_os_specific += 1
                 continue
 
             if sha not in releases_by_commit:
@@ -463,6 +511,8 @@ class MetadataUpdater:
             logging.info(f"Skipped {num_skipped_old_tag_format} releases due to old tag format")
         if num_skipped_wrong_branch > 0:
             logging.info(f"Skipped {num_skipped_wrong_branch} releases due to branch mismatch")
+        if num_skipped_too_os_specific > 0:
+            logging.info(f"Skipped {num_skipped_too_os_specific} releases as too OS-specific")
         logging.info(
             f"Found {num_releases_found} releases for {len(releases_by_commit)} different commits")
 
@@ -498,7 +548,7 @@ class MetadataUpdater:
                 groups_to_use.append(releases_by_commit[extra_commit])
 
         new_metadata: Dict[str, Any] = {
-            SHA_FOR_LOCAL_CHECKOUT_KEY: sha,
+            SHA_FOR_LOCAL_CHECKOUT_KEY: latest_release_sha,
             'archives': []
         }
         releases_to_use: List[GitHubThirdPartyRelease] = [
@@ -565,6 +615,9 @@ def filter_for_os(archive_candidates: List[MetadataItem], os_type: str) -> List[
         return filtered_exactly
     return [
         candidate for candidate in archive_candidates
+        # is_compatible_os does not take into account that some code built on CentOS 7 might run
+        # on AlmaLinux 8, etc. It only takes into account the equivalence of various flavors of RHEL
+        # compatible OSes.
         if is_compatible_os(candidate.os_type, os_type)
     ]
 
@@ -620,23 +673,21 @@ def get_third_party_release(
         os_type: Optional[str],
         architecture: Optional[str],
         is_linuxbrew: Optional[bool],
-        lto: Optional[str]) -> MetadataItem:
+        lto: Optional[str],
+        allow_older_os: bool) -> MetadataItem:
     if not os_type:
         os_type = local_sys_conf().short_os_name_and_version()
+    preferred_os_type: Optional[str] = None
+    if (allow_older_os and
+            not is_linuxbrew and
+            os_type != PREFERRED_OS_TYPE and
+            not os_type.startswith('mac')):
+        preferred_os_type = PREFERRED_OS_TYPE
+
     if not architecture:
         architecture = local_sys_conf().architecture
 
     needed_compiler_type = compiler_type
-    if compiler_type == 'gcc11' and os_type == 'almalinux8' and architecture == 'x86_64':
-        # A temporary workaround for https://github.com/yugabyte/yugabyte-db/issues/12429
-        # Strictly speaking, we don't have to build third-party dependencies with the same compiler
-        # as we build YugabyteDB code with, unless we want to use advanced features like LTO where
-        # the "bitcode" format files of object files being linked need to match, and they may differ
-        # across different compiler versions. Another potential issue is libstdc++ versioning.
-        # We don't want to end up linking two different versions of libstdc++.
-        #
-        # TODO: use a third-party archive built with GCC 10 (and ideally with GCC 11 itself).
-        needed_compiler_type = 'gcc9'
 
     candidates: List[Any] = [
         archive for archive in available_archives
@@ -654,17 +705,22 @@ def get_third_party_release(
     if is_linuxbrew is None or not is_linuxbrew or len(candidates) > 1:
         # If a Linuxbrew archive is requested, we don't have to filter by OS, because archives
         # should be OS-independent. But still do that if we have more than one candidate.
-        candidates = filter_for_os(candidates, os_type)
+        #
+        # Also, if we determine that we would rather use a "preferred OS type" (an old version of
+        # Linux that allows us to produce "universal packages"), we try to use it first.
+
+        filtered_for_os = False
+        if preferred_os_type:
+            candidates_for_preferred_os_type = filter_for_os(candidates, preferred_os_type)
+            if candidates_for_preferred_os_type:
+                candidates = candidates_for_preferred_os_type
+                filtered_for_os = True
+
+        if not filtered_for_os:
+            candidates = filter_for_os(candidates, os_type)
 
     if len(candidates) == 1:
         return candidates[0]
-
-    if not candidates:
-        if compiler_type == 'gcc' and os_type == 'ubuntu18.04':
-            logging.info(
-                "Assuming that the compiler type of 'gcc' means 'gcc7' on Ubuntu 18.04.")
-            return get_third_party_release(
-                available_archives, 'gcc7', os_type, architecture, is_linuxbrew, lto=None)
 
     if candidates:
         i = 1
@@ -673,6 +729,18 @@ def get_third_party_release(
             i += 1
         wrong_count_str = 'more than one'
     else:
+        if (is_macos() and
+                os_type == 'macos' and
+                compiler_type.startswith('clang') and
+                compiler_type != 'clang'):
+            return get_third_party_release(
+                available_archives=available_archives,
+                compiler_type='clang',
+                os_type=os_type,
+                architecture=architecture,
+                is_linuxbrew=False,
+                lto=lto,
+                allow_older_os=False)
         logging.info(f"Available release archives:\n{to_yaml_str(available_archives)}")
         wrong_count_str = 'no'
 
@@ -684,7 +752,7 @@ def get_third_party_release(
 
 def main() -> None:
     args = parse_args()
-    init_env(verbose=args.verbose)
+    init_logging(verbose=args.verbose)
     if args.update:
         updater = MetadataUpdater(
             github_token_file_path=args.github_token_file,
@@ -713,36 +781,24 @@ def main() -> None:
             print(compiler)
         return
 
-    if args.save_thirdparty_url_to_file or args.save_llvm_url_to_file:
+    if args.save_thirdparty_url_to_file:
         if not args.compiler_type:
             raise ValueError("Compiler type not specified")
-        thirdparty_release: Optional[MetadataItem] = get_third_party_release(
+
+        thirdparty_release = get_third_party_release(
             available_archives=metadata_items,
             compiler_type=args.compiler_type,
             os_type=args.os_type,
             architecture=args.architecture,
             is_linuxbrew=args.is_linuxbrew,
-            lto=args.lto)
-        if thirdparty_release is None:
-            raise RuntimeError("Could not determine third-party archive download URL")
+            lto=args.lto,
+            allow_older_os=args.allow_older_os)
+
         thirdparty_url = thirdparty_release.url()
         logging.info(f"Download URL for the third-party dependencies: {thirdparty_url}")
         if args.save_thirdparty_url_to_file:
             make_parent_dir(args.save_thirdparty_url_to_file)
             write_file(thirdparty_url, args.save_thirdparty_url_to_file)
-        if (args.save_llvm_url_to_file and
-                thirdparty_release.compiler_type.startswith('clang') and
-                thirdparty_release.is_linuxbrew):
-            llvm_url = get_llvm_url(thirdparty_release.compiler_type)
-            if llvm_url is not None:
-                logging.info(f"Download URL for the LLVM toolchain: {llvm_url}")
-                make_parent_dir(args.save_llvm_url_to_file)
-                write_file(llvm_url, args.save_llvm_url_to_file)
-            else:
-                logging.info("Could not determine LLVM URL for compiler type %s" %
-                             thirdparty_release.compiler_type)
-        else:
-            logging.info("Not a Linuxbrew URL, not saving LLVM URL to file")
 
 
 if __name__ == '__main__':

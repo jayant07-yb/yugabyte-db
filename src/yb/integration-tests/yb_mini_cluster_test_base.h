@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_INTEGRATION_TESTS_YB_MINI_CLUSTER_TEST_BASE_H_
-#define YB_INTEGRATION_TESTS_YB_MINI_CLUSTER_TEST_BASE_H_
+#pragma once
 
 #include <memory>
 
@@ -44,6 +43,7 @@ class YBMiniClusterTestBase: public YBTest {
  protected:
   std::unique_ptr<T> cluster_;
   bool verify_cluster_before_next_tear_down_;
+  bool saved_use_priority_thread_pool_for_flushes_;
 
   virtual void DoTearDown();
   virtual void DoBeforeTearDown();
@@ -63,5 +63,3 @@ class MiniClusterTestWithClient : public YBMiniClusterTestBase<T> {
 };
 
 } // namespace yb
-
-#endif // YB_INTEGRATION_TESTS_YB_MINI_CLUSTER_TEST_BASE_H_

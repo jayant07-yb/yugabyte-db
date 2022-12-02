@@ -38,12 +38,17 @@
 
 #include "yb/yql/pggate/pg_op.h"
 #include "yb/yql/pggate/pg_tabledesc.h"
+#include "yb/util/flags.h"
 
 DECLARE_bool(use_node_hostname_for_local_tserver);
 DECLARE_int32(backfill_index_client_rpc_timeout_ms);
 DECLARE_int32(yb_client_admin_operation_timeout_sec);
 
-DEFINE_uint64(pg_client_heartbeat_interval_ms, 10000, "Pg client heartbeat interval in ms.");
+DEFINE_UNKNOWN_uint64(pg_client_heartbeat_interval_ms, 10000,
+    "Pg client heartbeat interval in ms.");
+
+DECLARE_bool(TEST_index_read_multiple_partitions);
+DECLARE_bool(TEST_enable_db_catalog_version_mode);
 
 using namespace std::literals;
 
@@ -109,8 +114,8 @@ class PgClient::Impl {
   }
 
   Status Start(rpc::ProxyCache* proxy_cache,
-                       rpc::Scheduler* scheduler,
-                       const tserver::TServerSharedObject& tserver_shared_object) {
+               rpc::Scheduler* scheduler,
+               const tserver::TServerSharedObject& tserver_shared_object) {
     CHECK_NOTNULL(&tserver_shared_object);
     MonoDelta resolve_cache_timeout;
     const auto& tserver_shared_data_ = *tserver_shared_object;
@@ -186,7 +191,20 @@ class PgClient::Impl {
 
     auto partitions = std::make_shared<client::VersionedTablePartitionList>();
     partitions->version = resp.partitions().version();
-    partitions->keys.assign(resp.partitions().keys().begin(), resp.partitions().keys().end());
+    const auto& keys = resp.partitions().keys();
+    if (PREDICT_FALSE(FLAGS_TEST_index_read_multiple_partitions && keys.size() > 1)) {
+      // It is required to simulate tablet splitting. This is done by reducing number of partitions.
+      // Only middle element is used to split table into 2 partitions.
+      // DocDB partition schema like [, 12, 25, 37, 50, 62, 75, 87] will be interpret by YSQL
+      // as [, 50].
+      partitions->keys = {PartitionKey(), keys[keys.size() / 2]};
+      static auto key_printer = [](const auto& key) { return Slice(key).ToDebugHexString(); };
+      LOG(INFO) << "Partitions for " << table_id << " are joined."
+                << " source: " << ToString(keys, key_printer)
+                << " result: " << ToString(partitions->keys, key_printer);
+    } else {
+      partitions->keys.assign(keys.begin(), keys.end());
+    }
 
     auto result = make_scoped_refptr<PgTableDesc>(
         table_id, resp.info(), std::move(partitions));
@@ -231,27 +249,36 @@ class PgClient::Impl {
     return ResponseStatus(resp);
   }
 
-  Status RollbackSubTransaction(SubTransactionId id) {
-    tserver::PgRollbackSubTransactionRequestPB req;
+  Status RollbackToSubTransaction(SubTransactionId id, tserver::PgPerformOptionsPB* options) {
+    tserver::PgRollbackToSubTransactionRequestPB req;
     req.set_session_id(session_id_);
+    if (options) {
+      options->Swap(req.mutable_options());
+    }
     req.set_sub_transaction_id(id);
 
-    tserver::PgRollbackSubTransactionResponsePB resp;
+    tserver::PgRollbackToSubTransactionResponsePB resp;
 
-    RETURN_NOT_OK(proxy_->RollbackSubTransaction(req, &resp, PrepareController()));
+    RETURN_NOT_OK(proxy_->RollbackToSubTransaction(req, &resp, PrepareController()));
     return ResponseStatus(resp);
   }
 
   Status InsertSequenceTuple(int64_t db_oid,
-                                     int64_t seq_oid,
-                                     uint64_t ysql_catalog_version,
-                                     int64_t last_val,
-                                     bool is_called) {
+                             int64_t seq_oid,
+                             uint64_t ysql_catalog_version,
+                             bool is_db_catalog_version_mode,
+                             int64_t last_val,
+                             bool is_called) {
     tserver::PgInsertSequenceTupleRequestPB req;
     req.set_session_id(session_id_);
     req.set_db_oid(db_oid);
     req.set_seq_oid(seq_oid);
-    req.set_ysql_catalog_version(ysql_catalog_version);
+    if (is_db_catalog_version_mode) {
+      DCHECK(FLAGS_TEST_enable_db_catalog_version_mode);
+      req.set_ysql_db_catalog_version(ysql_catalog_version);
+    } else {
+      req.set_ysql_catalog_version(ysql_catalog_version);
+    }
     req.set_last_val(last_val);
     req.set_is_called(is_called);
 
@@ -264,15 +291,21 @@ class PgClient::Impl {
   Result<bool> UpdateSequenceTuple(int64_t db_oid,
                                    int64_t seq_oid,
                                    uint64_t ysql_catalog_version,
+                                   bool is_db_catalog_version_mode,
                                    int64_t last_val,
                                    bool is_called,
-                                   boost::optional<int64_t> expected_last_val,
-                                   boost::optional<bool> expected_is_called) {
+                                   std::optional<int64_t> expected_last_val,
+                                   std::optional<bool> expected_is_called) {
     tserver::PgUpdateSequenceTupleRequestPB req;
     req.set_session_id(session_id_);
     req.set_db_oid(db_oid);
     req.set_seq_oid(seq_oid);
-    req.set_ysql_catalog_version(ysql_catalog_version);
+    if (is_db_catalog_version_mode) {
+      DCHECK(FLAGS_TEST_enable_db_catalog_version_mode);
+      req.set_ysql_db_catalog_version(ysql_catalog_version);
+    } else {
+      req.set_ysql_catalog_version(ysql_catalog_version);
+    }
     req.set_last_val(last_val);
     req.set_is_called(is_called);
     if (expected_last_val && expected_is_called) {
@@ -290,12 +323,18 @@ class PgClient::Impl {
 
   Result<std::pair<int64_t, bool>> ReadSequenceTuple(int64_t db_oid,
                                                      int64_t seq_oid,
-                                                     uint64_t ysql_catalog_version) {
+                                                     uint64_t ysql_catalog_version,
+                                                     bool is_db_catalog_version_mode) {
     tserver::PgReadSequenceTupleRequestPB req;
     req.set_session_id(session_id_);
     req.set_db_oid(db_oid);
     req.set_seq_oid(seq_oid);
-    req.set_ysql_catalog_version(ysql_catalog_version);
+    if (is_db_catalog_version_mode) {
+      DCHECK(FLAGS_TEST_enable_db_catalog_version_mode);
+      req.set_ysql_db_catalog_version(ysql_catalog_version);
+    } else {
+      req.set_ysql_catalog_version(ysql_catalog_version);
+    }
 
     tserver::PgReadSequenceTupleResponsePB resp;
 
@@ -478,6 +517,45 @@ class PgClient::Impl {
     return ResponseStatus(resp);
   }
 
+  Result<client::TableSizeInfo> GetTableDiskSize(
+      const PgObjectId& table_oid) {
+    tserver::PgGetTableDiskSizeResponsePB resp;
+
+    tserver::PgGetTableDiskSizeRequestPB req;
+    table_oid.ToPB(req.mutable_table_id());
+
+    RETURN_NOT_OK(proxy_->GetTableDiskSize(req, &resp, PrepareController()));
+    if (resp.has_status()) {
+      return StatusFromPB(resp.status());
+    }
+
+    return client::TableSizeInfo{resp.size(), resp.num_missing_tablets()};
+  }
+
+  Result<bool> CheckIfPitrActive() {
+    tserver::PgCheckIfPitrActiveRequestPB req;
+    tserver::PgCheckIfPitrActiveResponsePB resp;
+    RETURN_NOT_OK(proxy_->CheckIfPitrActive(req, &resp, PrepareController()));
+    if (resp.has_status()) {
+      return StatusFromPB(resp.status());
+    }
+    return resp.is_pitr_active();
+  }
+
+  Result<tserver::PgGetTserverCatalogVersionInfoResponsePB> GetTserverCatalogVersionInfo(
+      bool size_only) {
+    tserver::PgGetTserverCatalogVersionInfoRequestPB req;
+    tserver::PgGetTserverCatalogVersionInfoResponsePB resp;
+    if (size_only) {
+      req.set_size_only(true);
+    }
+    RETURN_NOT_OK(proxy_->GetTserverCatalogVersionInfo(req, &resp, PrepareController()));
+    if (resp.has_status()) {
+      return StatusFromPB(resp.status());
+    }
+    return resp;
+  }
+
   #define YB_PG_CLIENT_SIMPLE_METHOD_IMPL(r, data, method) \
   Status method( \
       tserver::BOOST_PP_CAT(BOOST_PP_CAT(Pg, method), RequestPB)* req, \
@@ -608,38 +686,49 @@ Status PgClient::SetActiveSubTransaction(
   return impl_->SetActiveSubTransaction(id, options);
 }
 
-Status PgClient::RollbackSubTransaction(SubTransactionId id) {
-  return impl_->RollbackSubTransaction(id);
+Status PgClient::RollbackToSubTransaction(
+    SubTransactionId id, tserver::PgPerformOptionsPB* options) {
+  return impl_->RollbackToSubTransaction(id, options);
 }
 
 Status PgClient::ValidatePlacement(const tserver::PgValidatePlacementRequestPB* req) {
   return impl_->ValidatePlacement(req);
 }
 
+Result<client::TableSizeInfo> PgClient::GetTableDiskSize(
+    const PgObjectId& table_oid) {
+  return impl_->GetTableDiskSize(table_oid);
+}
+
 Status PgClient::InsertSequenceTuple(int64_t db_oid,
                                      int64_t seq_oid,
                                      uint64_t ysql_catalog_version,
+                                     bool is_db_catalog_version_mode,
                                      int64_t last_val,
                                      bool is_called) {
-  return impl_->InsertSequenceTuple(db_oid, seq_oid, ysql_catalog_version, last_val, is_called);
+  return impl_->InsertSequenceTuple(
+      db_oid, seq_oid, ysql_catalog_version, is_db_catalog_version_mode, last_val, is_called);
 }
 
 Result<bool> PgClient::UpdateSequenceTuple(int64_t db_oid,
                                            int64_t seq_oid,
                                            uint64_t ysql_catalog_version,
+                                           bool is_db_catalog_version_mode,
                                            int64_t last_val,
                                            bool is_called,
-                                           boost::optional<int64_t> expected_last_val,
-                                           boost::optional<bool> expected_is_called) {
+                                           std::optional<int64_t> expected_last_val,
+                                           std::optional<bool> expected_is_called) {
   return impl_->UpdateSequenceTuple(
-      db_oid, seq_oid, ysql_catalog_version, last_val, is_called, expected_last_val,
-      expected_is_called);
+      db_oid, seq_oid, ysql_catalog_version, is_db_catalog_version_mode, last_val, is_called,
+      expected_last_val, expected_is_called);
 }
 
 Result<std::pair<int64_t, bool>> PgClient::ReadSequenceTuple(int64_t db_oid,
                                                              int64_t seq_oid,
-                                                             uint64_t ysql_catalog_version) {
-  return impl_->ReadSequenceTuple(db_oid, seq_oid, ysql_catalog_version);
+                                                             uint64_t ysql_catalog_version,
+                                                             bool is_db_catalog_version_mode) {
+  return impl_->ReadSequenceTuple(
+      db_oid, seq_oid, ysql_catalog_version, is_db_catalog_version_mode);
 }
 
 Status PgClient::DeleteSequenceTuple(int64_t db_oid, int64_t seq_oid) {
@@ -655,6 +744,15 @@ void PgClient::PerformAsync(
     PgsqlOps* operations,
     const PerformCallback& callback) {
   impl_->PerformAsync(options, operations, callback);
+}
+
+Result<bool> PgClient::CheckIfPitrActive() {
+  return impl_->CheckIfPitrActive();
+}
+
+Result<tserver::PgGetTserverCatalogVersionInfoResponsePB> PgClient::GetTserverCatalogVersionInfo(
+    bool size_only) {
+  return impl_->GetTserverCatalogVersionInfo(size_only);
 }
 
 #define YB_PG_CLIENT_SIMPLE_METHOD_DEFINE(r, data, method) \

@@ -65,7 +65,7 @@
 #include "yb/util/debug/trace_event.h"
 #include "yb/util/env.h"
 #include "yb/util/env_util.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/path_util.h"
 #include "yb/util/pb_util-internal.h"
 #include "yb/util/pb_util.pb.h"
@@ -97,10 +97,14 @@ using std::shared_ptr;
 using std::string;
 using std::unordered_set;
 using std::vector;
+using std::ostream;
 using strings::Substitute;
 using strings::Utf8SafeCEscape;
 
 using yb::operator"" _MB;
+
+DEFINE_test_flag(bool, fail_write_pb_container, false,
+                 "Simulate a failure during WritePBContainer.");
 
 static const char* const kTmpTemplateSuffix = ".tmp.XXXXXX";
 
@@ -119,7 +123,7 @@ COMPILE_ASSERT((arraysize(kPBContainerMagic) - 1) == kPBContainerMagicLen,
 // To permit parsing of very large PB messages, we must use parse through a CodedInputStream and
 // bump the byte limit. The SetTotalBytesLimit() docs say that 512MB is the shortest theoretical
 // message length that may produce integer overflow warnings, so that's what we'll use.
-DEFINE_int32(
+DEFINE_UNKNOWN_int32(
     protobuf_message_total_bytes_limit, 511_MB,
     "Limits single protobuf message size for deserialization.");
 TAG_FLAG(protobuf_message_total_bytes_limit, advanced);
@@ -720,6 +724,11 @@ Status WritePBContainerToPath(Env* env, const std::string& path,
     RETURN_NOT_OK(pb_file.Sync());
   }
   RETURN_NOT_OK(pb_file.Close());
+
+  if (PREDICT_FALSE(FLAGS_TEST_fail_write_pb_container)) {
+    return STATUS(Corruption, "Test. Failure before rename.");
+  }
+
   RETURN_NOT_OK_PREPEND(env->RenameFile(tmp_path, path),
                         "Failed to rename tmp file to " + path);
   tmp_deleter.Cancel();

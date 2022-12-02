@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright (c) Yugabyte, Inc.
 #
@@ -27,7 +27,11 @@ import xml.etree.ElementTree as ET
 import json
 import signal
 import glob
+
 from typing import Any, Dict, AnyStr
+
+from yb.common_util import init_logging
+
 
 # Example test failure (from C++)
 # <?xml version="1.0" ?><testsuites disabled="0" errors="0" failures="1" name="AllTests" tests="1
@@ -82,7 +86,7 @@ SIGNALS = [name for name in dir(signal) if name.startswith('SIG') and 'SIG_' not
 SIGNAL_FORMAT_STRING = 'signal_{}'
 
 # Derived from build-support/common-test-env.sh:did_test_succeed()
-FAIL_TAG_AND_PATTERN = {
+FAIL_TAG_AND_PATTERN: Dict[str, str] = {
     'timeout': 'Timeout reached',
     'memory_leak': 'LeakSanitizer: detected memory leaks',
     'asan_heap_use_after_free': 'AddressSanitizer: heap-use-after-free',
@@ -91,10 +95,10 @@ FAIL_TAG_AND_PATTERN = {
     'tsan': 'ThreadSanitizer',
     'leak_check_failure': 'Leak check.*detected leaks',
     'segmentation_fault': 'Segmentation fault: ',
-    'gtest': '^\[  FAILED  \]',  # noqa
+    'gtest': r'^\[  FAILED  \]',
     SIGNAL_FORMAT_STRING: '|'.join(SIGNALS),
     'check_failed': 'Check failed: ',
-    'java_build': '^\[INFO\] BUILD FAILURE$'  # noqa
+    'java_build': r'^\[INFO\] BUILD FAILURE$',
 }
 
 
@@ -317,5 +321,5 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    yugabyte_pycommon.init_logging()
+    init_logging(verbose=False)
     main()

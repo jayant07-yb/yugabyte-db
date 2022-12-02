@@ -9,7 +9,7 @@
 
 import React, { FC, useMemo, useState } from 'react';
 import { Col, DropdownButton, MenuItem, OverlayTrigger, Popover, Row } from 'react-bootstrap';
-import { useInfiniteQuery, useMutation, useQueryClient } from 'react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from 'react-query';
 import { toast } from 'react-toastify';
 import cronstrue from 'cronstrue';
 
@@ -22,7 +22,7 @@ import {
   editBackupSchedule,
   getScheduledBackupList
 } from '../common/BackupScheduleAPI';
-import { TABLE_TYPE_MAP } from '../common/IBackup';
+import { TableTypeLabel } from '../../../redesign/helpers/dtos';
 import { IBackupSchedule } from '../common/IBackupSchedule';
 import { BackupCreateModal } from '../components/BackupCreateModal';
 
@@ -33,6 +33,7 @@ import { Link } from 'react-router';
 import { keyBy } from 'lodash';
 import { FormatUnixTimeStampTimeToTimezone } from '../common/BackupUtils';
 import { ScheduledBackupEmpty } from '../components/BackupEmpty';
+import { fetchTablesInUniverse } from '../../../actions/xClusterReplication';
 import './ScheduledBackupList.scss';
 
 const wrapTableName = (tablesList: string[] | undefined) => {
@@ -68,6 +69,8 @@ export const ScheduledBackupList = ({ universeUUID }: { universeUUID: string }) 
   const [editPolicyData, setEditPolicyData] = useState<Record<string, any> | undefined>(undefined);
 
   const storageConfigs = useSelector((reduxState: any) => reduxState.customer.configs);
+  const currentUniverse = useSelector((reduxState: any) => reduxState.universe.currentUniverse);
+
   const storageConfigsMap = useMemo(() => keyBy(storageConfigs?.data ?? [], 'configUUID'), [
     storageConfigs
   ]);
@@ -84,6 +87,11 @@ export const ScheduledBackupList = ({ universeUUID }: { universeUUID: string }) 
     {
       getNextPageParam: (lastPage) => lastPage.data.hasNext
     }
+  );
+
+  const { data: tablesInUniverse, isLoading: isTableListLoading } = useQuery(
+    [universeUUID, 'tables'],
+    () => fetchTablesInUniverse(universeUUID!)
   );
 
   if (isLoading) {
@@ -113,6 +121,11 @@ export const ScheduledBackupList = ({ universeUUID }: { universeUUID: string }) 
           onActionButtonClick={() => {
             setShowCreateModal(true);
           }}
+          disabled={
+            tablesInUniverse?.data.length === 0 ||
+            currentUniverse.data?.universeConfig?.takeBackups === 'false' ||
+            currentUniverse?.data?.universeDetails?.universePaused
+          }
         />
         <BackupCreateModal
           visible={showCreateModal}
@@ -138,6 +151,8 @@ export const ScheduledBackupList = ({ universeUUID }: { universeUUID: string }) 
           btnText="Create Scheduled Backup Policy"
           btnClass="btn btn-orange"
           onClick={() => setShowCreateModal(true)}
+          loading={isTableListLoading}
+          disabled={tablesInUniverse?.data.length === 0}
         />
       </div>
       <div className="schedule-backup-list" onScroll={handleScroll}>
@@ -229,7 +244,7 @@ const ScheduledBackupCard: FC<ScheduledBackupCardProps> = ({
           <span className="schedule-name">{schedule.scheduleName}</span>
           <StatusBadge
             statusType={Badge_Types.DELETED}
-            customLabel={TABLE_TYPE_MAP[schedule.backupInfo.backupType ?? '-']}
+            customLabel={TableTypeLabel[schedule.backupInfo.backupType ?? '-']}
           />
           <YBToggle
             name="Enabled"
@@ -286,13 +301,13 @@ const ScheduledBackupCard: FC<ScheduledBackupCardProps> = ({
             <Col lg={3}>
               <div className="info-title">DATABASE NAME</div>
               <div className="info-val">
-                {schedule.backupInfo?.keyspaceList[0]?.keyspace ?? '-'}
+                {wrapTableName(schedule.backupInfo?.keyspaceList?.map((k) => k.keyspace))}
               </div>
             </Col>
             <Col lg={3}>
               <div className="info-title">TABLES</div>
               <div className="info-val">
-                {wrapTableName(schedule.backupInfo?.keyspaceList[0]?.tablesList)}
+                {wrapTableName(schedule.backupInfo?.keyspaceList?.[0]?.tablesList)}
               </div>
             </Col>
           </Row>
@@ -322,9 +337,9 @@ const ScheduledBackupCard: FC<ScheduledBackupCardProps> = ({
               <div className="info-val">
                 {schedule.backupInfo?.timeBeforeDelete
                   ? convertMsecToTimeFrame(
-                      schedule.backupInfo.timeBeforeDelete,
-                      schedule.backupInfo.expiryTimeUnit ?? 'DAYS'
-                    )
+                    schedule.backupInfo.timeBeforeDelete,
+                    schedule.backupInfo.expiryTimeUnit ?? 'DAYS'
+                  )
                   : 'Indefinitely'}
               </div>
             </Col>

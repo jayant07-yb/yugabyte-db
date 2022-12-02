@@ -13,8 +13,7 @@
 //
 // This file contains QLScanSpec that implements a QL scan (SELECT) specification.
 
-#ifndef YB_COMMON_QL_SCANSPEC_H
-#define YB_COMMON_QL_SCANSPEC_H
+#pragma once
 
 #include <map>
 
@@ -57,10 +56,51 @@ class YQLScanSpec {
 class QLScanRange {
  public:
 
-  // Value range of a column
+  // Bound of a range specification
+  // This class includes information about the value
+  // and inclusiveness of a bound.
+  class QLBound {
+
+   public:
+    const QLValuePB &GetValue() const { return value_; }
+    bool IsInclusive() const { return is_inclusive_; }
+    bool operator<(const QLBound &other) const;
+    bool operator>(const QLBound &other) const;
+    bool operator==(const QLBound &other) const;
+
+   protected:
+    QLBound(const QLValuePB &value, bool is_inclusive, bool is_lower_bound);
+    QLBound(const LWQLValuePB &value, bool is_inclusive, bool is_lower_bound);
+
+    QLValuePB value_;
+    bool is_inclusive_ = true;
+    bool is_lower_bound_;
+  };
+
+  // Upper bound class
+  class QLUpperBound : public QLBound {
+   public:
+    QLUpperBound(const QLValuePB &value, bool is_inclusive)
+        : QLBound(value, is_inclusive, false) {}
+
+    QLUpperBound(const LWQLValuePB &value, bool is_inclusive)
+        : QLBound(value, is_inclusive, false) {}
+  };
+
+  // Lower bound class
+  class QLLowerBound : public QLBound {
+   public:
+    QLLowerBound(const QLValuePB &value, bool is_inclusive)
+        : QLBound(value, is_inclusive, true) {}
+
+    QLLowerBound(const LWQLValuePB &value, bool is_inclusive)
+        : QLBound(value, is_inclusive, true) {}
+  };
+
+  // Range filter specification on a column
   struct QLRange {
-    boost::optional<QLValuePB> min_value;
-    boost::optional<QLValuePB> max_value;
+    boost::optional<QLBound> min_bound;
+    boost::optional<QLBound> max_bound;
   };
 
   QLScanRange(const Schema& schema, const QLConditionPB& condition);
@@ -160,5 +200,3 @@ class PgsqlScanSpec : public YQLScanSpec {
 };
 
 } // namespace yb
-
-#endif // YB_COMMON_QL_SCANSPEC_H

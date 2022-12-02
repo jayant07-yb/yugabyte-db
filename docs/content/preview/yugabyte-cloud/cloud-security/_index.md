@@ -1,17 +1,17 @@
 ---
-title: Security architecture
-headerTitle: Security architecture
+title: Security architecture overview
+headerTitle: Security architecture overview
 linkTitle: Security architecture
-description: Security architecture of YugabyteDB Managed.
+description: Review and overview of the YugabyteDB Managed database security architecture and shared responsibility model.
 image: /images/section_icons/index/secure.png
-headcontent: Review the YugabyteDB Managed security architecture and shared responsibility model.
-section: YUGABYTEDB MANAGED
+headcontent: YugabyteDB Managed security architecture and shared responsibility model
 menu:
-  preview:
+  preview_yugabyte-cloud:
+    parent: yugabytedb-managed
     identifier: cloud-security
 weight: 800
+type: indexpage
 ---
-
 YugabyteDB Managed is a fully managed YugabyteDB-as-a-Service that allows you to run YugabyteDB clusters on public cloud providers such as Google Cloud Platform (GCP) and Amazon Web Services (AWS).
 
 YugabyteDB Managed uses a shared responsibility model, where security and compliance is a shared responsibility between public cloud providers, Yugabyte, and YugabyteDB Managed customers.

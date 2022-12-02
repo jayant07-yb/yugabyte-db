@@ -78,6 +78,8 @@
 #include "yb/util/stats/iostats_context_imp.h"
 #include "yb/util/string_util.h"
 
+using std::unique_ptr;
+
 namespace rocksdb {
 
 // Maintains state for each sub-compaction
@@ -1007,7 +1009,7 @@ Status CompactionJob::OpenCompactionOutputFile(
     auto setup_outfile = [this, sub_compact] (
         size_t preallocation_block_size, std::unique_ptr<WritableFile>* writable_file,
         std::unique_ptr<WritableFileWriter>* writer) {
-      (*writable_file)->SetIOPriority(Env::IO_LOW);
+      (*writable_file)->SetIOPriority(yb::IOPriority::kLow);
       if (preallocation_block_size > 0) {
         (*writable_file)->SetPreallocationBlockSize(preallocation_block_size);
       }
@@ -1073,7 +1075,6 @@ void CompactionJob::CleanupCompaction() {
   compact_ = nullptr;
 }
 
-#ifndef ROCKSDB_LITE
 namespace {
 void CopyPrefix(
     const Slice& src, size_t prefix_length, std::string* dst) {
@@ -1083,7 +1084,6 @@ void CopyPrefix(
 }
 }  // namespace
 
-#endif  // !ROCKSDB_LITE
 
 void CompactionJob::UpdateCompactionStats() {
   Compaction* compaction = compact_->compaction;
@@ -1141,7 +1141,6 @@ void CompactionJob::UpdateCompactionInputStatsHelper(
 
 void CompactionJob::UpdateCompactionJobStats(
     const InternalStats::CompactionStats& stats) const {
-#ifndef ROCKSDB_LITE
   if (compaction_job_stats_) {
     compaction_job_stats_->elapsed_micros = stats.micros;
 
@@ -1174,7 +1173,6 @@ void CompactionJob::UpdateCompactionJobStats(
           &compaction_job_stats_->largest_output_key_prefix);
     }
   }
-#endif  // !ROCKSDB_LITE
 }
 
 void CompactionJob::LogCompaction() {

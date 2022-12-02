@@ -13,9 +13,18 @@ const initialStateFeatureInTest = {
   enableNodeComparisonModal: false,
   enablePathStyleAccess: false,
   backupv2: false,
-  enableOIDC: false,
+  enableOIDC: true,
   supportBundle: false,
-  enableThirdpartyUpgrade: false
+  enableThirdpartyUpgrade: false,
+  enableYbc: true,
+  enableMultiRegionConfig: false,
+  enableGcpKMS: true,
+  enableAzuKMS: true,
+  enableTopKMetrics: false,
+  enableRunTimeConfig: false,
+  enablePITR: false,
+  enableDedicatedNodes: false,
+  enableNotificationTemplates: false
 };
 
 const initialStateFeatureReleased = {
@@ -30,10 +39,19 @@ const initialStateFeatureReleased = {
   enableHCVaultEAT: true,
   enableNodeComparisonModal: false,
   enablePathStyleAccess: false,
-  backupv2: false,
-  enableOIDC: false,
+  backupv2: true,
+  enableOIDC: true,
   supportBundle: true,
-  enableThirdpartyUpgrade: false
+  enableThirdpartyUpgrade: false,
+  enableYbc: true,
+  enableMultiRegionConfig: false,
+  enableGcpKMS: true,
+  enableAzuKMS: true,
+  enableTopKMetrics: false,
+  enableRunTimeConfig: false,
+  enablePITR: false,
+  enableDedicatedNodes: false,
+  enableNotificationTemplates: false
 };
 
 export const FeatureFlag = (

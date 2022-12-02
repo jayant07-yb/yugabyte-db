@@ -6,9 +6,11 @@ import static io.swagger.annotations.ApiModelProperty.AccessMode.READ_ONLY;
 import static play.mvc.Http.Status.BAD_REQUEST;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.google.api.client.util.Strings;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.yugabyte.yw.common.PlatformServiceException;
+import com.yugabyte.yw.common.logging.LogUtil;
 import io.ebean.Finder;
 import io.ebean.Model;
 import io.ebean.annotation.EnumValue;
@@ -31,6 +33,7 @@ import javax.persistence.GenerationType;
 import javax.persistence.Id;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import play.data.validation.Constraints;
 
 @Entity
@@ -112,6 +115,12 @@ public class CustomerTask extends Model {
     @EnumValue("Release")
     Release,
 
+    @EnumValue("Reboot")
+    Reboot,
+
+    @EnumValue("Hard Reboot")
+    HardReboot,
+
     @EnumValue("Edit")
     Edit,
 
@@ -127,6 +136,9 @@ public class CustomerTask extends Model {
     @EnumValue("GFlagsUpgrade")
     GFlagsUpgrade,
 
+    @EnumValue("KubernetesOverridesUpgrade")
+    KubernetesOverridesUpgrade,
+
     @EnumValue("CertsRotate")
     CertsRotate,
 
@@ -138,6 +150,9 @@ public class CustomerTask extends Model {
 
     @EnumValue("SystemdUpgrade")
     SystemdUpgrade,
+
+    @EnumValue("RebootUniverse")
+    RebootUniverse,
 
     @Deprecated
     @EnumValue("UpgradeSoftware")
@@ -174,6 +189,12 @@ public class CustomerTask extends Model {
 
     @EnumValue("Restore")
     Restore,
+
+    @EnumValue("CreatePitrConfig")
+    CreatePitrConfig,
+
+    @EnumValue("RestoreSnapshotSchedule")
+    RestoreSnapshotSchedule,
 
     @Deprecated
     @EnumValue("SetEncryptionKey")
@@ -236,7 +257,25 @@ public class CustomerTask extends Model {
     CreateTableSpaces,
 
     @EnumValue("ThirdpartySoftwareUpgrade")
-    ThirdpartySoftwareUpgrade;
+    ThirdpartySoftwareUpgrade,
+
+    @EnumValue("RotateAccessKey")
+    RotateAccessKey,
+
+    @EnumValue("CreateAndRotateAccessKey")
+    CreateAndRotateAccessKey,
+
+    @EnumValue("RunApiTriggeredHooks")
+    RunApiTriggeredHooks,
+
+    @EnumValue("InstallYbcSoftware")
+    InstallYbcSoftware,
+
+    @EnumValue("UpgradeUniverseYbc")
+    UpgradeUniverseYbc,
+
+    @EnumValue("DisableYbc")
+    DisableYbc;
 
     public String toString(boolean completed) {
       switch (this) {
@@ -248,6 +287,9 @@ public class CustomerTask extends Model {
           return completed ? "Paused " : "Pausing ";
         case Release:
           return completed ? "Released " : "Releasing ";
+        case Reboot:
+        case HardReboot:
+          return completed ? "Rebooted " : "Rebooting ";
         case Remove:
           return completed ? "Removed " : "Removing ";
         case ResizeNode:
@@ -274,6 +316,8 @@ public class CustomerTask extends Model {
           return completed ? "Upgraded to Systemd " : "Upgrading to Systemd ";
         case GFlagsUpgrade:
           return completed ? "Upgraded GFlags " : "Upgrading GFlags ";
+        case KubernetesOverridesUpgrade:
+          return completed ? "Upgraded Kubernetes Overrides " : "Upgrading Kubernetes Overrides ";
         case CertsRotate:
           return completed ? "Updated Certificates " : "Updating Certificates ";
         case TlsToggle:
@@ -295,6 +339,10 @@ public class CustomerTask extends Model {
           return completed ? "Bulk imported data" : "Bulk importing data";
         case Restore:
           return completed ? "Restored " : "Restoring ";
+        case CreatePitrConfig:
+          return completed ? "Created PITR Config" : "Creating PITR Config";
+        case RestoreSnapshotSchedule:
+          return completed ? "Restored Snapshot Schedule" : "Restoring Snapshot Schedule";
         case Restart:
           return completed ? "Restarted " : "Restarting ";
         case Backup:
@@ -339,6 +387,22 @@ public class CustomerTask extends Model {
               : "Upgrading third-party software for ";
         case CreateTableSpaces:
           return completed ? "Created tablespaces in " : "Creating tablespaces in ";
+        case RotateAccessKey:
+          return completed ? "Rotated Access Key" : "Rotating Access Key";
+        case RebootUniverse:
+          return completed ? "Rebooted " : "Rebooting ";
+        case CreateAndRotateAccessKey:
+          return completed
+              ? "Creating Access Key and Rotation Tasks"
+              : "Created New Access Key and Rotation Tasks";
+        case RunApiTriggeredHooks:
+          return completed ? "Ran API Triggered Hooks" : "Running API Triggered Hooks";
+        case InstallYbcSoftware:
+          return completed ? "Installed Ybc" : "Installing Ybc";
+        case UpgradeUniverseYbc:
+          return completed ? "Upgraded Ybc" : "Upgrading Ybc";
+        case DisableYbc:
+          return completed ? "Disabled Ybc" : "Disabling Ybc";
         default:
           return null;
       }
@@ -364,6 +428,10 @@ public class CustomerTask extends Model {
           return "Start Master Process on";
         case PrecheckNode:
           return "Precheck";
+        case RebootUniverse:
+          return "Reboot";
+        case RestartUniverse:
+          return "Restart";
         default:
           return toFriendlyTypeName();
       }
@@ -400,6 +468,12 @@ public class CustomerTask extends Model {
 
   public UUID getTaskUUID() {
     return taskUUID;
+  }
+
+  public CustomerTask setTaskUUID(UUID newTaskUUID) {
+    this.taskUUID = newTaskUUID;
+    save();
+    return this;
   }
 
   @Constraints.Required
@@ -464,12 +538,28 @@ public class CustomerTask extends Model {
     return completionTime;
   }
 
+  public void resetCompletionTime() {
+    this.completionTime = null;
+    this.save();
+  }
+
   @Column
   @ApiModelProperty(value = "Custom type name", accessMode = READ_ONLY, example = "TLS Toggle ON")
   private String customTypeName;
 
   public String getCustomTypeName() {
     return customTypeName;
+  }
+
+  @Column
+  @ApiModelProperty(
+      value = "Correlation id",
+      accessMode = READ_ONLY,
+      example = "3e6ac43a-15d9-46c0-831c-460775ce87ad")
+  private String correlationId;
+
+  public String getCorrelationId() {
+    return correlationId;
   }
 
   public void markAsCompleted() {
@@ -504,6 +594,8 @@ public class CustomerTask extends Model {
     th.targetName = targetName;
     th.createTime = new Date();
     th.customTypeName = customTypeName;
+    String correlationId = (String) MDC.get(LogUtil.CORRELATION_ID);
+    if (!Strings.isNullOrEmpty(correlationId)) th.correlationId = correlationId;
     th.save();
     return th;
   }

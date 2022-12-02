@@ -119,7 +119,7 @@ const getTag = (type) => {
   return <span className="name-tag">{type}</span>;
 };
 
-const NO_DESTINATION_MSG = <span className='no-destination-msg'><i className='fa fa-exclamation-triangle' aria-hidden='true'/> No Destination</span>
+const NO_DESTINATION_MSG = <span className='no-destination-msg'><i className='fa fa-exclamation-triangle' aria-hidden='true'/> No Destination</span>;
 
 export const AlertsList = (props) => {
   const [alertList, setAlertList] = useState([]);
@@ -182,13 +182,13 @@ export const AlertsList = (props) => {
     if(filters[FILTER_TYPE_NAME] && !isAlertListLoading){
 
       const searchText = filters[FILTER_TYPE_NAME];
-      const index = row.name.toLowerCase().indexOf(searchText.toLowerCase())
+      const index = row.name.toLowerCase().indexOf(searchText.toLowerCase());
       
-      name = <span>
+      name = (<span>
         {row?.name?.substr(0, index)}
         <span className='highlight'>{row?.name?.substr(index, searchText.length)}</span>
         {row?.name?.substr(index+searchText.length)}
-        </span>
+      </span>);
     }
     
     if (!row.active) {
@@ -306,7 +306,7 @@ export const AlertsList = (props) => {
       ALERT_TARGET_TYPE: targetType,
       ALERT_UNIVERSE_LIST: univerList,
       ALERT_METRICS_CONDITION: row.template,
-      ALERT_METRICS_DURATION: row.durationSec,
+      ALERT_METRICS_DURATION: row.durationSec ? row.durationSec : '0',
       ALERT_METRICS_CONDITION_POLICY: condition,
       ALERT_DESTINATION_LIST: currentDestination,
       thresholdUnit: row.thresholdUnit,
@@ -437,7 +437,7 @@ export const AlertsList = (props) => {
     const itemsPresentInCurrentPage = Math.min(sizePerPage ,totalRecords - (currentPage * sizePerPage));
 
     return itemsPresentInCurrentPage - rowIndex < 5;
-  }
+  };
 
   // This method will handle all the required actions for the particular row.
   const editActionLabel = isReadOnly ? 'Alert Details' : 'Edit Alert';

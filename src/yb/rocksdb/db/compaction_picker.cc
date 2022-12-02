@@ -48,8 +48,9 @@
 
 #include "yb/util/logging.h"
 #include <glog/logging.h>
+#include "yb/util/flags.h"
 
-DEFINE_bool(aggressive_compaction_for_read_amp, false,
+DEFINE_UNKNOWN_bool(aggressive_compaction_for_read_amp, false,
             "Determines if we should compact aggressively to reduce read amplification based on "
             "number of files alone, without regards to relative sizes of the SSTable files.");
 
@@ -63,9 +64,6 @@ uint64_t TotalCompensatedFileSize(const std::vector<FileMetaData*>& files) {
   }
   return sum;
 }
-
-// Universal compaction is not supported in ROCKSDB_LITE
-#ifndef ROCKSDB_LITE
 
 // Used in universal compaction when trivial move is enabled.
 // This structure is used for the construction of min heap
@@ -127,7 +125,6 @@ SmallestKeyHeap create_level_heap(Compaction* c, const Comparator* ucmp) {
   }
   return smallest_key_priority_q;
 }
-#endif  // !ROCKSDB_LITE
 }  // anonymous namespace
 
 // Determine compression type, based on user options, level of the output
@@ -668,13 +665,26 @@ std::unique_ptr<Compaction> CompactionPicker::CompactRange(
 
 // Test whether two files have overlapping key-ranges.
 bool HaveOverlappingKeyRanges(const Comparator* c,
-                              const SstFileMetaData& a,
-                              const SstFileMetaData& b) {
-  return c->Compare(a.largest.key, b.smallest.key) >= 0 &&
-         c->Compare(b.largest.key, a.smallest.key) >= 0;
+                              const SstFileMetaData::BoundaryValues& a_smallest,
+                              const SstFileMetaData::BoundaryValues& a_largest,
+                              const SstFileMetaData::BoundaryValues& b_smallest,
+                              const SstFileMetaData::BoundaryValues& b_largest) {
+  return c->Compare(a_largest.key, b_smallest.key) >= 0 &&
+         c->Compare(b_largest.key, a_smallest.key) >= 0;
 }
 
-#ifndef ROCKSDB_LITE
+bool HaveOverlappingKeyRanges(const Comparator* c,
+                              const SstFileMetaData::BoundaryValues& a_smallest,
+                              const SstFileMetaData::BoundaryValues& a_largest,
+                              const SstFileMetaData& b) {
+  return HaveOverlappingKeyRanges(c, a_smallest, a_largest, b.smallest, b.largest);
+}
+
+bool HaveOverlappingKeyRanges(
+    const Comparator* c, const SstFileMetaData& a, const SstFileMetaData& b) {
+  return HaveOverlappingKeyRanges(c, a.smallest, a.largest, b.smallest, b.largest);
+}
+
 namespace {
 
 // Updates smallest/largest keys using keys from specified file.
@@ -784,10 +794,6 @@ Status CompactionPicker::SanitizeCompactionInputFilesForAllLevels(
       UpdateBoundaryKeys(comparator, current_files[last_included], nullptr, &largest);
     }
 
-    SstFileMetaData aggregated_file_meta;
-    aggregated_file_meta.smallest = smallest;
-    aggregated_file_meta.largest = largest;
-
     // For all lower levels, include all overlapping files.
     // We need to add overlapping files from the current level too because even
     // if there no input_files in level l, we would still need to add files
@@ -797,7 +803,7 @@ Status CompactionPicker::SanitizeCompactionInputFilesForAllLevels(
     for (int m = std::max(l, 1); m <= output_level; ++m) {
       for (auto& next_lv_file : levels[m].files) {
         if (HaveOverlappingKeyRanges(
-            comparator, aggregated_file_meta, next_lv_file)) {
+            comparator, smallest, largest, next_lv_file)) {
           if (next_lv_file.being_compacted) {
             return STATUS(Aborted,
                 "File " + next_lv_file.Name() +
@@ -881,7 +887,6 @@ Status CompactionPicker::SanitizeCompactionInputFiles(
 
   return Status::OK();
 }
-#endif  // !ROCKSDB_LITE
 
 bool LevelCompactionPicker::NeedsCompaction(const VersionStorageInfo* vstorage)
     const {
@@ -1173,7 +1178,6 @@ bool LevelCompactionPicker::PickCompactionBySize(VersionStorageInfo* vstorage,
   return inputs->size() > 0;
 }
 
-#ifndef ROCKSDB_LITE
 bool UniversalCompactionPicker::NeedsCompaction(
     const VersionStorageInfo* vstorage) const {
   const int kLevel0 = 0;
@@ -2049,6 +2053,5 @@ std::unique_ptr<Compaction> FIFOCompactionPicker::CompactRange(
   return c;
 }
 
-#endif  // !ROCKSDB_LITE
 
 }  // namespace rocksdb

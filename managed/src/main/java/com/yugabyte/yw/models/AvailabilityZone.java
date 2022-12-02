@@ -65,11 +65,11 @@ public class AvailabilityZone extends Model {
     this.active = active;
   }
 
-  @Column(length = 63)
+  @Column(length = 80)
   @ApiModelProperty(value = "AZ subnet", example = "subnet id")
   public String subnet;
 
-  @Column(length = 63)
+  @Column(length = 80)
   @ApiModelProperty(value = "AZ secondary subnet", example = "secondary subnet id")
   public String secondarySubnet;
 
@@ -92,7 +92,6 @@ public class AvailabilityZone extends Model {
     Map<String, String> config = getUnmaskedConfig();
     config.putAll(configMap);
     setConfig(config);
-    save();
   }
 
   @JsonIgnore

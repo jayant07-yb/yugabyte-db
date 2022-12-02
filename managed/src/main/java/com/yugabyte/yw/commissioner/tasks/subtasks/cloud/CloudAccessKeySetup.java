@@ -16,7 +16,6 @@ import com.yugabyte.yw.commissioner.tasks.CloudBootstrap;
 import com.yugabyte.yw.commissioner.tasks.CloudTaskBase;
 import com.yugabyte.yw.common.AccessManager;
 import com.yugabyte.yw.models.AccessKey;
-import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.Region;
 import javax.inject.Inject;
 import play.api.Play;
@@ -63,6 +62,7 @@ public class CloudAccessKeySetup extends CloudTaskBase {
           false,
           taskParams().setUpChrony,
           taskParams().ntpServers,
+          taskParams().showSetUpChrony,
           taskParams().overrideKeyValidate);
     } else {
       // For add region, we should verify if the overrideKeyValidate is set, so that we don't
@@ -78,7 +78,8 @@ public class CloudAccessKeySetup extends CloudTaskBase {
             taskParams().airGapInstall,
             false,
             taskParams().setUpChrony,
-            taskParams().ntpServers);
+            taskParams().ntpServers,
+            taskParams().showSetUpChrony);
       }
     }
   }

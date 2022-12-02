@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_BACKFILL_INDEX_H
-#define YB_MASTER_BACKFILL_INDEX_H
+#pragma once
 
 #include <float.h>
 
@@ -25,7 +24,7 @@
 #include <vector>
 
 #include <boost/mpl/and.hpp>
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 
 #include "yb/common/entity_ids.h"
 #include "yb/common/index.h"
@@ -109,11 +108,11 @@ class BackfillTable : public std::enable_shared_from_this<BackfillTable> {
                 std::vector<IndexInfoPB> indexes,
                 const scoped_refptr<NamespaceInfo> &ns_info);
 
-  void Launch();
+  Status Launch();
 
   Status UpdateSafeTime(const Status& s, HybridTime ht);
 
-  void Done(const Status& s, const std::unordered_set<TableId>& failed_indexes);
+  Status Done(const Status& s, const std::unordered_set<TableId>& failed_indexes);
 
   Master* master() { return master_; }
 
@@ -155,8 +154,11 @@ class BackfillTable : public std::enable_shared_from_this<BackfillTable> {
   Status UpdateRowsProcessedForIndexTable(const uint64_t number_rows_processed);
 
  private:
-  void LaunchComputeSafeTimeForRead();
-  void LaunchBackfill();
+  void LaunchBackfillOrAbort();
+  Status WaitForTabletSplitting();
+  Status DoLaunchBackfill();
+  Status LaunchComputeSafeTimeForRead();
+  Status DoBackfill();
 
   Status MarkAllIndexesAsFailed();
   Status MarkAllIndexesAsSuccess();
@@ -165,12 +167,13 @@ class BackfillTable : public std::enable_shared_from_this<BackfillTable> {
       const std::unordered_set<TableId>& indexes, const std::string& message);
   Status MarkIndexesAsDesired(
       const std::unordered_set<TableId>& index_ids, BackfillJobPB_State state,
-      const string message);
+      const std::string message);
 
   Status AlterTableStateToAbort();
   Status AlterTableStateToSuccess();
 
-  void CheckIfDone();
+  Status Abort();
+  Status CheckIfDone();
   Status UpdateIndexPermissionsForIndexes();
   Status ClearCheckpointStateInTablets();
 
@@ -215,7 +218,9 @@ class BackfillTableJob : public server::MonitoredTask {
         backfill_table_(backfill_table),
         requested_index_names_(backfill_table_->requested_index_names()) {}
 
-  Type type() const override { return BACKFILL_TABLE; }
+  server::MonitoredTaskType type() const override {
+    return server::MonitoredTaskType::kBackfillTable;
+  }
 
   std::string type_name() const override { return "Backfill Table"; }
 
@@ -254,12 +259,12 @@ class BackfillTablet : public std::enable_shared_from_this<BackfillTablet> {
   BackfillTablet(
       std::shared_ptr<BackfillTable> backfill_table, const scoped_refptr<TabletInfo>& tablet);
 
-  void Launch() { LaunchNextChunkOrDone(); }
+  Status Launch() { return LaunchNextChunkOrDone(); }
 
-  void LaunchNextChunkOrDone();
-  void Done(
+  Status LaunchNextChunkOrDone();
+  Status Done(
       const Status& status,
-      const boost::optional<string>& backfilled_until,
+      const boost::optional<std::string>& backfilled_until,
       const uint64_t number_rows_processed,
       const std::unordered_set<TableId>& failed_indexes);
 
@@ -293,7 +298,7 @@ class BackfillTablet : public std::enable_shared_from_this<BackfillTablet> {
 
  private:
   Status UpdateBackfilledUntil(
-      const string& backfilled_until, const uint64_t number_rows_processed);
+      const std::string& backfilled_until, const uint64_t number_rows_processed);
 
   std::shared_ptr<BackfillTable> backfill_table_;
   const scoped_refptr<TabletInfo> tablet_;
@@ -315,16 +320,19 @@ class GetSafeTimeForTablet : public RetryingTSRpcTask {
       HybridTime min_cutoff)
       : RetryingTSRpcTask(
             backfill_table->master(), backfill_table->threadpool(),
-            std::unique_ptr<TSPicker>(new PickLeaderReplica(tablet)), tablet->table().get()),
+            std::unique_ptr<TSPicker>(new PickLeaderReplica(tablet)), tablet->table().get(),
+            /* async_task_throttler */ nullptr),
         backfill_table_(backfill_table),
         tablet_(tablet),
         min_cutoff_(min_cutoff) {
     deadline_ = MonoTime::Max();  // Never time out.
   }
 
-  void Launch();
+  Status Launch();
 
-  Type type() const override { return ASYNC_GET_SAFE_TIME; }
+  server::MonitoredTaskType type() const override {
+    return server::MonitoredTaskType::kGetSafeTime;
+  }
 
   std::string type_name() const override { return "Get SafeTime for Tablet"; }
 
@@ -357,9 +365,11 @@ class BackfillChunk : public RetryingTSRpcTask {
   BackfillChunk(std::shared_ptr<BackfillTablet> backfill_tablet,
                 const std::string& start_key);
 
-  void Launch();
+  Status Launch();
 
-  Type type() const override { return ASYNC_BACKFILL_TABLET_CHUNK; }
+  server::MonitoredTaskType type() const override {
+    return server::MonitoredTaskType::kBackfillTabletChunk;
+  }
 
   std::string type_name() const override { return "Backfill Index Table"; }
 
@@ -394,5 +404,3 @@ class BackfillChunk : public RetryingTSRpcTask {
 
 }  // namespace master
 }  // namespace yb
-
-#endif  // YB_MASTER_BACKFILL_INDEX_H

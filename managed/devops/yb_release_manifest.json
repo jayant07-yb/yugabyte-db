@@ -13,10 +13,14 @@
     "yb-server-provision.yml",
     "send_sudo_pass.yml",
     "yb_custom_ami_builder.yml",
-    "remote_role.yml"
+    "remote_role.yml",
+    "setup-cgroup.yml",
+    "edit_authorized_keys.yml",
+    "reinstall-package.yml",
+    "configure_ssh2.yml",
+    "install-third-party.yml"
   ],
   "bin": [
-    "bin/cluster_health.py",
     "bin/common.sh",
     "bin/install_ansible_requirements.sh",
     "bin/install_python_requirements.sh",
@@ -47,6 +51,9 @@
   "opscli": [
     "opscli/*"
   ],
+  "pex": [
+    "pex/*"
+  ],
   "plugins": [
     "plugins/*"
   ],
@@ -64,5 +71,8 @@
     "vars/cloud/azu.yml",
     "vars/cloud/gcp.yml",
     "vars/cloud/onprem.yml"
+  ],
+  "connection_plugins": [
+    "connection_plugins/node_agent_rpc.py"
   ]
 }

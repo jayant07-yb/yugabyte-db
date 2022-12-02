@@ -4,12 +4,11 @@ headerTitle: Create a multi-region universe
 linkTitle: Multi-region universe
 description: Create a YugabyteDB universe that spans multiple geographic regions.
 menu:
-  preview:
+  preview_yugabyte-platform:
     identifier: create-universe-multi-region
     parent: create-deployments
     weight: 30
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 YugabyteDB Anywhere allows you to create a universe spanning multiple geographic regions.
@@ -30,7 +29,23 @@ Before creating a universe, you need to configure a cloud provider, such as [Goo
 
 - Provide any other desired settings.
 
-- Click **Add Flags** and add the `leader_failure_max_missed_heartbeat_periods` flag with the value of `10` for Master and T-Server. Note that since the data is globally replicated, RPC latencies are higher; this flag is used for increasing the failure detection interval in a higher RPC latency deployment.<br><br>
+- Click **Add Flags** and add the following flags for Master:
+
+  ```properties
+  leader_failure_max_missed_heartbeat_periods 5
+  raft_heartbeat_interval_ms 1500
+  leader_lease_duration_ms 6000
+  ```
+
+  And add the following flags for T-Server:
+
+  ```properties
+  leader_failure_max_missed_heartbeat_periods 5
+  raft_heartbeat_interval_ms 1500
+  leader_lease_duration_ms 6000
+  ```
+
+  Note that since the data is globally replicated, RPC latencies are higher; these flags are used for increasing the failure detection interval in a higher RPC latency deployment.<br>
 
   ![Create multi-region universe on GCP](/images/ee/multi-region-create-universe3.png)
 
@@ -91,7 +106,7 @@ With the goal of starting a workload from each node, perform the following on ev
 Run the following command on each of the nodes, substituting *REGION* with the region code for each node:
 
 ```sh
-$ java -jar /home/yugabyte/tserver/java/yb-sample-apps.jar \
+java -jar /home/yugabyte/tserver/java/yb-sample-apps.jar \
             --workload CassandraKeyValue \
             --nodes $YCQL_ENDPOINTS \
             --num_threads_write 1 \

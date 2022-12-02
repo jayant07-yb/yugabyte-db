@@ -85,6 +85,7 @@ target_link_libraries(server_base_proto
 #########################################
 
 set(SERVER_PROCESS_SRCS
+  call_home.cc
   default-path-handlers.cc
   generic_service.cc
   glog_metrics.cc
@@ -116,14 +117,12 @@ target_link_libraries(server_process
   yb_util
   squeasel)
 
+if("${YB_TCMALLOC_ENABLED}" STREQUAL "1")
+  target_link_libraries(server_process profiler)
+endif()
+
 # This module depends on tcmalloc and profiler directly, so need to make
 # sure that they get linked in the right order.
-if("${YB_TCMALLOC_ENABLED}" STREQUAL "1")
-  message("Adding tcmalloc as a dependency of server_process")
-  target_link_libraries(server_process tcmalloc profiler)
-else()
-  message("Not adding tcmalloc as a dependency of server_process")
-endif()
 
 #########################################
 # server_process tests

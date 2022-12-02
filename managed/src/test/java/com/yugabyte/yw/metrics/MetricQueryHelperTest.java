@@ -9,23 +9,27 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.AllOf.allOf;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertEquals;
-import static org.mockito.Matchers.anyMap;
-import static org.mockito.Matchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static play.mvc.Http.Status.BAD_REQUEST;
-import static play.test.Helpers.contentAsString;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.typesafe.config.Config;
+import com.yugabyte.yw.common.AssertHelper;
 import com.yugabyte.yw.common.FakeDBApplication;
+import com.yugabyte.yw.common.PlatformExecutorFactory;
 import com.yugabyte.yw.common.PlatformServiceException;
 import com.yugabyte.yw.common.TestUtils;
 import com.yugabyte.yw.metrics.data.AlertData;
 import com.yugabyte.yw.metrics.data.AlertState;
 import com.yugabyte.yw.models.MetricConfig;
+import com.yugabyte.yw.models.MetricConfigDefinition;
 import java.io.IOException;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -34,6 +38,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.hamcrest.CoreMatchers;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsInstanceOf;
@@ -42,26 +48,38 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.mockito.junit.MockitoJUnitRunner;
 import play.libs.Json;
+import play.mvc.Result;
 
 @RunWith(MockitoJUnitRunner.class)
 public class MetricQueryHelperTest extends FakeDBApplication {
 
-  @InjectMocks MetricQueryHelper metricQueryHelper;
+  MetricQueryHelper metricQueryHelper;
 
-  @Mock play.Configuration mockAppConfig;
+  @Mock Config mockAppConfig;
 
-  MetricConfig validMetric;
+  @Mock PlatformExecutorFactory mockPlatformExecutorFactory;
+
+  MetricConfigDefinition validMetric;
 
   @Before
   public void setUp() {
     JsonNode configJson = Json.parse("{\"metric\": \"my_valid_metric\", \"function\": \"sum\"}");
-    validMetric = MetricConfig.create("valid_metric", configJson);
-    validMetric.save();
+    MetricConfig metricConfig = MetricConfig.create("valid_metric", configJson);
+    metricConfig.save();
+    validMetric = metricConfig.getConfig();
+    ExecutorService executor = Executors.newFixedThreadPool(1);
     when(mockAppConfig.getString("yb.metrics.url")).thenReturn("foo://bar");
+    when(mockAppConfig.getString("yb.metrics.scrape_interval")).thenReturn("1s");
+    when(mockPlatformExecutorFactory.createFixedExecutor(any(), anyInt(), any()))
+        .thenReturn(executor);
+
+    MetricUrlProvider metricUrlProvider = new MetricUrlProvider(mockAppConfig);
+    metricQueryHelper =
+        new MetricQueryHelper(
+            mockAppConfig, mockApiHelper, metricUrlProvider, mockPlatformExecutorFactory);
   }
 
   @Test
@@ -69,10 +87,7 @@ public class MetricQueryHelperTest extends FakeDBApplication {
     try {
       metricQueryHelper.query(Collections.emptyList(), Collections.emptyMap());
     } catch (PlatformServiceException re) {
-      assertEquals(BAD_REQUEST, re.getResult().status());
-      assertEquals(
-          "Empty metricsWithSettings data provided.",
-          Json.parse(contentAsString(re.getResult())).get("error").asText());
+      AssertHelper.assertBadRequest(re.buildResult(), "Empty metricsWithSettings data provided.");
     }
   }
 
@@ -85,10 +100,8 @@ public class MetricQueryHelperTest extends FakeDBApplication {
     try {
       metricQueryHelper.query(ImmutableList.of("valid_metric"), params);
     } catch (PlatformServiceException re) {
-      assertEquals(BAD_REQUEST, re.getResult().status());
-      assertEquals(
-          "Invalid filter params provided, it should be a hash.",
-          Json.parse(contentAsString(re.getResult())).get("error").asText());
+      AssertHelper.assertBadRequest(
+          re.buildResult(), "Invalid filter params provided, it should be a hash.");
     }
   }
 
@@ -102,10 +115,9 @@ public class MetricQueryHelperTest extends FakeDBApplication {
     try {
       metricQueryHelper.query(ImmutableList.of("valid_metric"), params);
     } catch (PlatformServiceException re) {
-      assertEquals(BAD_REQUEST, re.getResult().status());
-      assertEquals(
-          "Should be at least " + STEP_SIZE + " seconds between start and end time",
-          Json.parse(contentAsString(re.getResult())).get("error").asText());
+      AssertHelper.assertBadRequest(
+          re.buildResult(),
+          "Should be at least " + STEP_SIZE + " seconds between start and end time");
     }
   }
 
@@ -120,10 +132,8 @@ public class MetricQueryHelperTest extends FakeDBApplication {
     try {
       metricQueryHelper.query(ImmutableList.of("valid_metric"), params);
     } catch (PlatformServiceException re) {
-      assertEquals(BAD_REQUEST, re.getResult().status());
-      assertEquals(
-          "Step should be a valid integer",
-          Json.parse(contentAsString(re.getResult())).get("error").asText());
+      final Result result = re.buildResult();
+      AssertHelper.assertBadRequest(result, "Step should be a valid integer");
     }
   }
 
@@ -138,10 +148,8 @@ public class MetricQueryHelperTest extends FakeDBApplication {
     try {
       metricQueryHelper.query(ImmutableList.of("valid_metric"), params);
     } catch (PlatformServiceException re) {
-      assertEquals(BAD_REQUEST, re.getResult().status());
-      assertEquals(
-          "Step should not be less than 1 second",
-          Json.parse(contentAsString(re.getResult())).get("error").asText());
+      String expectedErr = "Step should not be less than 1 second";
+      AssertHelper.assertBadRequest(re.buildResult(), expectedErr);
     }
   }
 
@@ -312,8 +320,9 @@ public class MetricQueryHelperTest extends FakeDBApplication {
     params.put("end", "1481147648");
 
     JsonNode configJson = Json.parse("{\"metric\": \"my_valid_metric2\", \"function\": \"avg\"}");
-    MetricConfig validMetric2 = MetricConfig.create("valid_metric2", configJson);
-    validMetric2.save();
+    MetricConfig metricConfig = MetricConfig.create("valid_metric2", configJson);
+    metricConfig.save();
+    MetricConfigDefinition validMetric2 = metricConfig.getConfig();
 
     JsonNode responseJson =
         Json.parse(
@@ -344,7 +353,7 @@ public class MetricQueryHelperTest extends FakeDBApplication {
           allOf(notNullValue(), equalTo(1481147528)));
       assertThat(
           Integer.parseInt(capturedQueryParam.get("step").toString()),
-          allOf(notNullValue(), equalTo(1)));
+          allOf(notNullValue(), equalTo(2)));
       assertThat(
           Integer.parseInt(capturedQueryParam.get("end").toString()),
           allOf(notNullValue(), equalTo(1481147648)));

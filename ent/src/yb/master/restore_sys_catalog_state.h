@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef ENT_SRC_YB_MASTER_RESTORE_SYS_CATALOG_STATE_H
-#define ENT_SRC_YB_MASTER_RESTORE_SYS_CATALOG_STATE_H
+#pragma once
 
 #include <unordered_map>
 
@@ -32,7 +31,7 @@
 namespace yb {
 namespace master {
 
-struct PgCatalogTableData;
+YB_STRONGLY_TYPED_BOOL(DoTsRestore);
 
 // Utility class to restore sys catalog.
 // Initially we load tables and tablets into it, then match schedule filter.
@@ -104,7 +103,17 @@ class RestoreSysCatalogState {
 
   template <class PB>
   Status AddRestoringEntry(
+      const std::string& id, PB* pb, faststring* buffer, SysRowEntryType type,
+      DoTsRestore send_restore_rpc = DoTsRestore::kTrue);
+
+  template <class PB>
+  Status PatchAndAddRestoringEntry(
       const std::string& id, PB* pb, faststring* buffer);
+
+  // Adds the tablet to 'non_system_tablets_to_restore' map.
+  void AddTabletToSplitRelationshipsMap(const std::string& id, SysTabletsEntryPB* pb);
+
+  Status PatchColocatedTablet(const std::string& id, SysTabletsEntryPB* pb);
 
   Result<bool> PatchRestoringEntry(const std::string& id, SysNamespaceEntryPB* pb);
   Result<bool> PatchRestoringEntry(const std::string& id, SysTablesEntryPB* pb);
@@ -139,6 +148,10 @@ class RestoreSysCatalogState {
 
   Status PatchSequencesDataObjects(Objects* existing_objects, Objects* restoring_objects);
 
+  Status PatchAndAddRestoringTablets();
+
+  void FillHideInformation(TableId table_id, SysTabletsEntryPB* pb, bool set_hide_time = true);
+
   struct Objects {
     std::unordered_map<NamespaceId, SysNamespaceEntryPB> namespaces;
     std::unordered_map<TableId, SysTablesEntryPB> tables;
@@ -164,27 +177,5 @@ class RestoreSysCatalogState {
   RetainedExistingTables retained_existing_tables_;
 };
 
-class PgCatalogRestorePatch : public RestorePatch {
- public:
-  PgCatalogRestorePatch(
-      FetchState* existing_state, FetchState* restoring_state,
-      docdb::DocWriteBatch* doc_batch, const PgCatalogTableData& table,
-      const yb::tablet::TableInfo& pg_yb_catalog_meta)
-      : RestorePatch(existing_state, restoring_state, doc_batch),
-        table_(table), pg_yb_catalog_meta_(pg_yb_catalog_meta) {}
-
- private:
-  Status ProcessEqualEntries(
-      const Slice& existing_key, const Slice& existing_value,
-      const Slice& restoring_key, const Slice& restoring_value) override;
-
-  Result<bool> ShouldSkipEntry(const Slice& key, const Slice& value) override;
-
-  const PgCatalogTableData& table_;
-  const yb::tablet::TableInfo& pg_yb_catalog_meta_;
-};
-
 }  // namespace master
 }  // namespace yb
-
-#endif // ENT_SRC_YB_MASTER_RESTORE_SYS_CATALOG_STATE_H

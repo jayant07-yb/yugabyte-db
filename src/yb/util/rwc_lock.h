@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_RWC_LOCK_H
-#define YB_UTIL_RWC_LOCK_H
+#pragma once
 
 #ifndef NDEBUG
 #include <unordered_map>
@@ -133,6 +132,11 @@ class RWCLock {
   void UpgradeToCommitLock();
   void CommitUnlock();
 
+  // If write lock was acquired in one thread and then used in another thread the below method
+  // should be invoked in a new thread.
+  // Otherwise check will fail in debug mode.
+  void WriteLockThreadChanged();
+
  private:
   // Lock which protects reader_count_ and write_locked_.
   // Additionally, while the commit lock is held, the
@@ -145,6 +149,7 @@ class RWCLock {
 
 #ifndef NDEBUG
   int64_t last_writer_tid_;
+  ThreadIdForStack last_writer_tid_for_stack_;
   int64_t last_writelock_acquire_time_;
   StackTrace last_writer_stacktrace_;
 
@@ -160,4 +165,3 @@ class RWCLock {
 };
 
 } // namespace yb
-#endif /* YB_UTIL_RWC_LOCK_H */

@@ -20,8 +20,7 @@
  *--------------------------------------------------------------------------------------------------
  */
 
-#ifndef YBCCMDS_H
-#define YBCCMDS_H
+#pragma once
 
 #include "access/htup.h"
 #include "catalog/dependency.h"
@@ -61,9 +60,9 @@ extern void YBCCreateTable(CreateStmt *stmt,
 						   Oid tablespaceId,
 						   Oid matviewPgTableId);
 
-extern void YBCDropTable(Oid relationId);
+extern void YBCDropTable(Relation rel);
 
-extern void YBCTruncateTable(Relation rel);
+extern void YbTruncate(Relation rel);
 
 extern void YBCCreateIndex(const char *indexName,
 						   IndexInfo *indexInfo,
@@ -78,9 +77,9 @@ extern void YBCCreateIndex(const char *indexName,
 						   Oid colocationId,
 						   Oid tablespaceId);
 
-extern void YBCDropIndex(Oid relationId);
+extern void YBCDropIndex(Relation index);
 
-extern YBCPgStatement YBCPrepareAlterTable(List** subcmds,
+extern List* YBCPrepareAlterTable(List** subcmds,
 										   int subcmds_size,
 										   Oid relationId,
 										   YBCPgStatement *rollbackHandle,
@@ -98,5 +97,3 @@ extern void YbDropAndRecreateIndex(Oid indexOid, Oid relId, Relation oldRel, Att
 
 /*  System Validation -------------------------------------------------------------------------- */
 extern void YBCValidatePlacement(const char *placement_info);
-
-#endif

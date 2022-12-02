@@ -4,36 +4,41 @@ headerTitle: Install YugabyteDB Anywhere software - Airgapped
 linkTitle: Install software
 description: Install YugabyteDB Anywhere software in your on-premises, airgapped environment.
 menu:
-  preview:
+  preview_yugabyte-platform:
     parent: install-yugabyte-platform
     identifier: install-software-3-airgapped
     weight: 77
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li>
     <a href="../default/" class="nav-link">
-      <i class="fas fa-cloud"></i>Default</a>
+      <i class="fa-solid fa-cloud"></i>Default</a>
   </li>
 
   <li>
     <a href="../kubernetes/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>Kubernetes</a>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>Kubernetes</a>
   </li>
 
   <li>
     <a href="../airgapped/" class="nav-link active">
-      <i class="fas fa-unlink"></i>Airgapped</a>
+      <i class="fa-solid fa-link-slash"></i>Airgapped</a>
   </li>
 
   <li>
     <a href="../openshift/" class="nav-link">
-      <i class="fas fa-cubes"></i>OpenShift</a>
+      <i class="fa-solid fa-cubes"></i>OpenShift</a>
   </li>
 
 </ul>
+
+## Prerequisites 
+
+If Docker is not installed on the host computer, you need to install a recent version that matches the minimum requirements outlined in [Installing Docker in Airgapped Environments](https://community.replicated.com/t/installing-docker-in-airgapped-environments/81). 
+
+If access to the Docker repositories for your Linux distribution is not available on the host computer, you may have to manually transfer the necessary RPM or DEB packages whose locations are specified in [Installing Docker in Airgapped Environments](https://community.replicated.com/t/installing-docker-in-airgapped-environments/81). 
 
 ## Install Replicated
 
@@ -66,7 +71,7 @@ On a computer connected to the Internet, perform the following steps:
 - Download the `yugaware` binary and change the following number, as required:
 
   ```sh
-  wget https://downloads.yugabyte.com/releases/{{< yb-version version="preview">}}/yugaware-{{< yb-version version="preview" format="build">}}-linux-x86_64.airgap
+  wget https://downloads.yugabyte.com/releases/{{<yb-version version="preview">}}/yugaware-{{<yb-version version="preview" format="build">}}-linux-x86_64.airgap
   ```
 
 - Switch to the following directory:

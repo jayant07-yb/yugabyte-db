@@ -10,8 +10,7 @@ menu:
 aliases:
   - /preview/api/cassandra/ddl_drop_table
   - /preview/api/ycql/ddl_drop_table
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -26,7 +25,7 @@ Use the `DROP TABLE` statement to remove a table and all of its data from the da
 
 ### Grammar
 
-```
+```ebnf
 drop_table ::= DROP TABLE [ IF EXISTS ] table_name;
 ```
 

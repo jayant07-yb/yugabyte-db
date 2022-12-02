@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_CLIENT_TABLE_ALTERER_H
-#define YB_CLIENT_TABLE_ALTERER_H
+#pragma once
 
 #include <boost/optional.hpp>
 
@@ -82,6 +81,9 @@ class YBTableAlterer {
   // The altering of this table is dependent upon the success of this higher-level transaction.
   YBTableAlterer* part_of_transaction(const TransactionMetadata* txn);
 
+  // Set increment_schema_version to true.
+  YBTableAlterer* set_increment_schema_version();
+
   // Alters the table.
   //
   // The return value may indicate an error in the alter operation, or a
@@ -120,10 +122,10 @@ class YBTableAlterer {
 
   const TransactionMetadata* txn_ = nullptr;
 
+  bool increment_schema_version_ = false;
+
   DISALLOW_COPY_AND_ASSIGN(YBTableAlterer);
 };
 
 } // namespace client
 } // namespace yb
-
-#endif // YB_CLIENT_TABLE_ALTERER_H

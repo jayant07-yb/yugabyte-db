@@ -12,11 +12,9 @@
 // under the License.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_PGGATE_PG_TRUNCATE_COLOCATED_H_
-#define YB_YQL_PGGATE_PG_TRUNCATE_COLOCATED_H_
+#pragma once
 
 #include "yb/yql/pggate/pg_dml_write.h"
-#include "yb/yql/pggate/pg_env.h"
 #include "yb/yql/pggate/pg_session.h"
 #include "yb/yql/pggate/pg_statement.h"
 
@@ -46,5 +44,3 @@ class PgTruncateColocated : public PgDmlWrite {
 
 }  // namespace pggate
 }  // namespace yb
-
-#endif // YB_YQL_PGGATE_PG_TRUNCATE_COLOCATED_H_

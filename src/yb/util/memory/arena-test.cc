@@ -40,14 +40,17 @@
 #include "yb/util/memory/arena.h"
 #include "yb/util/memory/mc_types.h"
 #include "yb/util/memory/memory.h"
+#include "yb/util/flags.h"
 
-DEFINE_int32(num_threads, 16, "Number of threads to test");
-DEFINE_int32(allocs_per_thread, 10000, "Number of allocations each thread should do");
-DEFINE_int32(alloc_size, 4, "number of bytes in each allocation");
+DEFINE_UNKNOWN_int32(num_threads, 16, "Number of threads to test");
+DEFINE_UNKNOWN_int32(allocs_per_thread, 10000, "Number of allocations each thread should do");
+DEFINE_UNKNOWN_int32(alloc_size, 4, "number of bytes in each allocation");
 
 namespace yb {
 
 using std::shared_ptr;
+using std::string;
+using std::vector;
 
 namespace {
 
@@ -206,7 +209,7 @@ TEST(TestArena, TestMemoryTrackingDontEnforce) {
   // component is not cleared. In either case, after Reset()
   // consumption() should equal the size of the last component which
   // is 512 bytes.
-  arena.Reset();
+  arena.Reset(ResetMode::kKeepLast);
   ASSERT_EQ(512, mem_tracker->consumption());
 
   // Allocate beyond allowed consumption. This should still go

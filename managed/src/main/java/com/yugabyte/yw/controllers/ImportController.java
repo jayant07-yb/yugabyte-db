@@ -68,7 +68,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import lombok.extern.slf4j.Slf4j;
 import org.yb.client.ListTabletServersResponse;
@@ -505,9 +504,6 @@ public class ImportController extends AuthenticatedController {
     // ---------------------------------------------------------------------------------------------
     // Finalize universe entry in DB
     // ---------------------------------------------------------------------------------------------
-    // Add the universe to the current user account
-    customer.addUniverseUUID(universe.universeUUID);
-    customer.save();
 
     results.state = State.FINISHED;
 

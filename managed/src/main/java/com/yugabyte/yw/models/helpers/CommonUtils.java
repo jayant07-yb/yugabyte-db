@@ -20,6 +20,8 @@ import com.yugabyte.yw.common.ShellResponse;
 import com.yugabyte.yw.common.utils.Pair;
 import com.yugabyte.yw.forms.UniverseDefinitionTaskParams;
 import com.yugabyte.yw.models.Universe;
+import com.yugabyte.yw.models.Users;
+import com.yugabyte.yw.models.extended.UserWithFeatures;
 import com.yugabyte.yw.models.helpers.NodeDetails.NodeState;
 import com.yugabyte.yw.models.paging.PagedQuery;
 import com.yugabyte.yw.models.paging.PagedResponse;
@@ -34,6 +36,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
@@ -55,10 +58,12 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.security.crypto.encrypt.Encryptors;
 import org.springframework.security.crypto.encrypt.TextEncryptor;
 import play.libs.Json;
+import play.mvc.Http;
 
 @Slf4j
 public class CommonUtils {
@@ -82,6 +87,24 @@ public class CommonUtils {
           .mappingProvider(new JacksonMappingProvider())
           .build();
 
+  // Sensisitve field substrings
+  private static final List<String> sensitiveFieldSubstrings =
+      Arrays.asList(
+          "KEY", "SECRET", "CREDENTIALS", "API", "POLICY", "HC_VAULT_TOKEN", "vaultToken");
+  // Exclude following strings from being sensitive fields
+  private static final List<String> excludedFieldNames =
+      Arrays.asList(
+          // GCP KMS fields
+          "KEY_RING_ID",
+          "CRYPTO_KEY_ID",
+          // Azure KMS fields
+          "AZU_KEY_NAME",
+          "AZU_KEY_ALGORITHM",
+          "AZU_KEY_SIZE",
+          "KEYSPACETABLELIST",
+          // General API field
+          "KEYSPACE");
+
   /**
    * Checks whether the field name represents a field with a sensitive data or not.
    *
@@ -90,14 +113,18 @@ public class CommonUtils {
    */
   public static boolean isSensitiveField(String fieldname) {
     String ucFieldname = fieldname.toUpperCase();
-    return isStrictlySensitiveField(ucFieldname)
-        || ucFieldname.contains("KEY")
-        || ucFieldname.contains("SECRET")
-        || ucFieldname.contains("CREDENTIALS")
-        || ucFieldname.contains("API")
-        || ucFieldname.contains("POLICY")
-        || ucFieldname.contains("HC_VAULT_TOKEN")
-        || ucFieldname.contains("vaultToken");
+    if (isStrictlySensitiveField(ucFieldname)) {
+      return true;
+    }
+
+    // Needed for GCP KMS UI - more specifically listKMSConfigs()
+    // Can add more exclusions if required
+    if (excludedFieldNames.contains(ucFieldname)) {
+      return false;
+    }
+
+    // Check if any of sensitiveFieldSubstrings are substrings in ucFieldname and mark as sensitive
+    return sensitiveFieldSubstrings.stream().anyMatch(sfs -> ucFieldname.contains(sfs));
   }
 
   /**
@@ -131,6 +158,15 @@ public class CommonUtils {
 
   public static Map<String, String> maskConfigNew(Map<String, String> config) {
     return processDataNew(config, CommonUtils::isSensitiveField, CommonUtils::getMaskedValue);
+  }
+
+  public static Map<String, String> maskAllFields(Map<String, String> config) {
+    return processDataNew(
+        config,
+        (String s) -> {
+          return true;
+        },
+        CommonUtils::getMaskedValue);
   }
 
   public static String getMaskedValue(String key, String value) {
@@ -190,41 +226,45 @@ public class CommonUtils {
 
   public static Map<String, String> encryptProviderConfig(
       Map<String, String> config, UUID customerUUID, String providerCode) {
-    if (config.isEmpty()) return new HashMap<>();
-    try {
-      final ObjectMapper mapper = new ObjectMapper();
-      final String salt = generateSalt(customerUUID, providerCode);
-      final TextEncryptor encryptor = Encryptors.delux(customerUUID.toString(), salt);
-      final String encryptedConfig = encryptor.encrypt(mapper.writeValueAsString(config));
-      Map<String, String> encryptMap = new HashMap<>();
-      encryptMap.put("encrypted", encryptedConfig);
-      return encryptMap;
-    } catch (Exception e) {
-      final String errMsg =
-          String.format(
-              "Could not encrypt provider configuration for customer %s", customerUUID.toString());
-      log.error(errMsg, e);
-      return null;
+    if (MapUtils.isNotEmpty(config)) {
+      try {
+        final ObjectMapper mapper = new ObjectMapper();
+        final String salt = generateSalt(customerUUID, providerCode);
+        final TextEncryptor encryptor = Encryptors.delux(customerUUID.toString(), salt);
+        final String encryptedConfig = encryptor.encrypt(mapper.writeValueAsString(config));
+        Map<String, String> encryptMap = new HashMap<>();
+        encryptMap.put("encrypted", encryptedConfig);
+        return encryptMap;
+      } catch (Exception e) {
+        final String errMsg =
+            String.format(
+                "Could not encrypt provider configuration for customer %s",
+                customerUUID.toString());
+        log.error(errMsg, e);
+      }
     }
+    return new HashMap<>();
   }
 
   public static Map<String, String> decryptProviderConfig(
       Map<String, String> config, UUID customerUUID, String providerCode) {
-    if (config.isEmpty()) return config;
-    try {
-      final ObjectMapper mapper = new ObjectMapper();
-      final String encryptedConfig = config.get("encrypted");
-      final String salt = generateSalt(customerUUID, providerCode);
-      final TextEncryptor encryptor = Encryptors.delux(customerUUID.toString(), salt);
-      final String decryptedConfig = encryptor.decrypt(encryptedConfig);
-      return mapper.readValue(decryptedConfig, new TypeReference<Map<String, String>>() {});
-    } catch (Exception e) {
-      final String errMsg =
-          String.format(
-              "Could not decrypt provider configuration for customer %s", customerUUID.toString());
-      log.error(errMsg, e);
-      return null;
+    if (MapUtils.isNotEmpty(config)) {
+      try {
+        final ObjectMapper mapper = new ObjectMapper();
+        final String encryptedConfig = config.get("encrypted");
+        final String salt = generateSalt(customerUUID, providerCode);
+        final TextEncryptor encryptor = Encryptors.delux(customerUUID.toString(), salt);
+        final String decryptedConfig = encryptor.decrypt(encryptedConfig);
+        return mapper.readValue(decryptedConfig, new TypeReference<Map<String, String>>() {});
+      } catch (Exception e) {
+        final String errMsg =
+            String.format(
+                "Could not decrypt provider configuration for customer %s",
+                customerUUID.toString());
+        log.error(errMsg, e);
+      }
     }
+    return new HashMap<>();
   }
 
   public static String generateSalt(UUID customerUUID, String providerCode) {
@@ -247,7 +287,7 @@ public class CommonUtils {
     for (Iterator<Entry<String, JsonNode>> it = result.fields(); it.hasNext(); ) {
       Entry<String, JsonNode> entry = it.next();
       if (entry.getValue().isObject()) {
-        result.put(
+        result.set(
             entry.getKey(),
             processData(path + "." + entry.getKey(), entry.getValue(), selector, getter));
       }
@@ -280,7 +320,7 @@ public class CommonUtils {
   /** Recursively merges second JsonNode into first JsonNode. ArrayNodes will be overwritten. */
   public static void deepMerge(JsonNode node1, JsonNode node2) {
     if (node1 == null || node1.size() == 0 || node2 == null || node2.size() == 0) {
-      throw new PlatformServiceException(BAD_REQUEST, "Cannot merge empty nodes.");
+      return;
     }
 
     if (!node1.isObject() || !node2.isObject()) {
@@ -641,6 +681,16 @@ public class CommonUtils {
     return tserverLiveNodes.get(new Random().nextInt(tserverLiveNodes.size()));
   }
 
+  public static NodeDetails getServerToRunYsqlQuery(Universe universe) {
+    // Prefer the master leader since that will result in a faster query.
+    // If the leader does not have a tserver process though, select any random tserver.
+    NodeDetails nodeToUse = universe.getMasterLeaderNode();
+    if (nodeToUse == null || !nodeToUse.isTserver) {
+      nodeToUse = getARandomLiveTServer(universe);
+    }
+    return nodeToUse;
+  }
+
   /**
    * This method extracts the json from shell response where the shell executes a SQL Query that
    * aggregates the response as JSON e.g. select jsonb_agg() The resultant shell output has json
@@ -676,5 +726,23 @@ public class CommonUtils {
     }
 
     return ImmutableMultiset.copyOf(x).equals(ImmutableMultiset.copyOf(y));
+  }
+
+  /**
+   * Generates log message containing state information of universe and running status of scheduler.
+   */
+  public static String generateStateLogMsg(Universe universe, boolean alreadyRunning) {
+    String stateLogMsg =
+        String.format(
+            "alreadyRunning={} updateInProgress={} universePaused={}",
+            alreadyRunning,
+            universe.getUniverseDetails().updateInProgress,
+            universe.getUniverseDetails().universePaused);
+    return stateLogMsg;
+  }
+
+  /** Get the user sending the API request from the HTTP context. */
+  public static Users getUserFromContext(Http.Context ctx) {
+    return ((UserWithFeatures) ctx.args.get("user")).getUser();
   }
 }

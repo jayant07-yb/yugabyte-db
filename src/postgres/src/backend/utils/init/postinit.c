@@ -48,6 +48,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_yb_catalog_version.h"
 #include "catalog/pg_yb_tablegroup.h"
 #include "catalog/yb_catalog_version.h"
 #include "libpq/auth.h"
@@ -94,7 +95,6 @@ static void IdleInTransactionSessionTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
 static void process_settings(Oid databaseid, Oid roleid);
-
 
 /*** InitPostgres support ***/
 
@@ -684,23 +684,10 @@ InitPostgresImpl(const char *in_dbname, Oid dboid, const char *username,
 
 	if (IsYugaByteEnabled() && !bootstrap)
 	{
-		/*
-		 * In YugaByte mode initialize the catalog cache version to the latest
-		 * version from the master.
-		*/
+		const uint64_t catalog_master_version =
+			YbGetCatalogCacheVersionForTablePrefetching();
 		YBCPgResetCatalogReadTime();
-		yb_catalog_cache_version = YbGetMasterCatalogVersion();
-
-		/*
-		 * Prefetch all sys tables which will be used during further
-		 * initialization procedure.
-		 * Note: Potentially it is possible to perform the catalog version read
-		 * within this prefetching. This will save 1 RPC. But in future this
-		 * approach will block the ability to cache sys tables read request on a
-		 * local t-server (#10821) because catalog version is a part of
-		 * key in such cache.
-		 */
-		YBCStartSysTablePrefetching();
+		YBCStartSysTablePrefetching(catalog_master_version);
 		*yb_sys_table_prefetching_started = true;
 		YbRegisterSysTableForPrefetching(
 				AuthIdRelationId);        // pg_authid
@@ -710,6 +697,17 @@ InitPostgresImpl(const char *in_dbname, Oid dboid, const char *username,
 				DbRoleSettingRelationId); // pg_db_role_setting
 		YbRegisterSysTableForPrefetching(
 				AuthMemRelationId);       // pg_auth_members
+		YbTryRegisterCatalogVersionTableForPrefetching();
+
+		/*
+		 * If per database catalog version mode is enabled, this will load the
+		 * catalog version of template1. It is fine because at this time we
+		 * only read shared relations and therefore can use any database OID.
+		 * We will update yb_catalog_cache_version to match MyDatabaseId once
+		 * the latter is resolved so we will never use the catalog version of
+		 * template1 to query relations that are private to MyDatabaseId.
+		 */
+		YbUpdateCatalogCacheVersion(YbGetMasterCatalogVersion());
 	}
 	/*
 	 * Load relcache entries for the shared system catalogs.  This must create
@@ -957,6 +955,25 @@ InitPostgresImpl(const char *in_dbname, Oid dboid, const char *username,
 		return;
 	}
 
+	if (MyDatabaseId != TemplateDbOid && YBIsDBCatalogVersionMode())
+	{
+		/*
+		 * Rather than fetching the current DB catalog version for MyDatabaseId
+		 * from master which requires another RPC that can cause the connection
+		 * establishment to slow down, we just set yb_catalog_cache_version from
+		 * that in the local tserver's catalog version ver. We expect in most
+		 * cases it will be identical to what we would get from master. However
+		 * it may be stale because of the heartbeat delay between the tserver
+		 * and master. If in rare cases we have set yb_catalog_cache_version to
+		 * a stale version, a future tserver to master hearbeat response will
+		 * bring the newer version and cause a cache refresh.
+		 * TODO: It is possible that catalog cache was changed on a master
+		 *       at this point (due to concurrent DDL). Cache refresh is
+		 *       required in this case. GH #14741 is created to handle this.
+		 */
+		YbUpdateCatalogCacheVersion(YbGetSharedCatalogVersion());
+	}
+
 	/*
 	 * Now, take a writer's lock on the database we are trying to connect to.
 	 * If there is a concurrently running DROP DATABASE on that database, this
@@ -1074,11 +1091,11 @@ InitPostgresImpl(const char *in_dbname, Oid dboid, const char *username,
 	RelationCacheInitializePhase3();
 
 	/*
-	 * Also cache whather the database is colocated for optimization purposes.
+	 * Also cache whether the database is colocated for optimization purposes.
 	 */
 	if (IsYugaByteEnabled() && !IsBootstrapProcessingMode())
 	{
-		MyDatabaseColocated = YbIsDatabaseColocated(MyDatabaseId);
+		MyDatabaseColocated = YbIsDatabaseColocated(MyDatabaseId, &MyColocatedDatabaseLegacy);
 	}
 
 	/* set up ACL framework (so CheckMyDatabase can check permissions) */
@@ -1146,8 +1163,8 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	PG_TRY();
 	{
 		InitPostgresImpl(
-			in_dbname, dboid, username, useroid, out_dbname, override_allow_connections,
-			&sys_table_prefetching_started);
+			in_dbname, dboid, username, useroid, out_dbname,
+			override_allow_connections, &sys_table_prefetching_started);
 	}
 	PG_CATCH();
 	{

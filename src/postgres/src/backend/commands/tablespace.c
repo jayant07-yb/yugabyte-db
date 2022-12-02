@@ -377,7 +377,8 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to create tablespace \"%s\"",
 						stmt->tablespacename),
-				 errhint("Must be superuser or yb_db_admin role to create a tablespace.")));
+				 errhint("Must be superuser or a member of the yb_db_admin "
+				 		 "role to create a tablespace.")));
 
 	/* However, the eventual owner of the tablespace need not be */
 	if (stmt->owner)
@@ -618,6 +619,22 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 				 errdetail_log("%s", detail_log)));
 	}
 
+  /* Check if there are snapshot schedules, disallow dropping in such cases */
+	if (IsYugaByteEnabled())
+	{
+		bool is_active;
+    HandleYBStatus(YBCPgCheckIfPitrActive(&is_active));
+    if (is_active)
+    {
+      ereport(ERROR,
+			    (errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+				   errmsg("tablespace \"%s\" cannot be dropped. "
+					   "Dropping tablespaces is not allowed on clusters "
+						 "with Point in Time Restore activated.",
+             tablespacename)));
+    }
+	}
+
 	/* DROP hook for the tablespace being removed */
 	InvokeObjectDropHook(TableSpaceRelationId, tablespaceoid, 0);
 
@@ -649,7 +666,7 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	 * For YB clusters there are no directories associated with a tablespace.
 	 * Hence no need to clean up any physical infrastructure.
 	 */
-	if (IsYugaByteEnabled())
+	if (!IsYugaByteEnabled())
 	{
 		/*
 		 * Try to remove the physical infrastructure.

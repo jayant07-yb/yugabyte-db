@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_SHARED_LOCK_MANAGER_H
-#define YB_DOCDB_SHARED_LOCK_MANAGER_H
+#pragma once
 
 #include <string>
 #include <vector>
@@ -25,6 +24,8 @@
 
 namespace yb {
 namespace docdb {
+
+typedef uint64_t LockState;
 
 // This class manages six types of locks on string keys. On each key, the possibilities are:
 // - No locks
@@ -65,5 +66,3 @@ bool IntentTypeSetsConflict(IntentTypeSet lhs, IntentTypeSet rhs);
 
 }  // namespace docdb
 }  // namespace yb
-
-#endif // YB_DOCDB_SHARED_LOCK_MANAGER_H

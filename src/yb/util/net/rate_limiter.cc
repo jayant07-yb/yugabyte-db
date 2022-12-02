@@ -14,11 +14,12 @@
 
 #include "yb/util/size_literals.h"
 #include "yb/util/status.h"
+#include "yb/util/flags.h"
 
 using namespace yb::size_literals;
 
-DEFINE_int32(rate_limiter_min_size, 32_KB, "Minimum size for each transmission request");
-DEFINE_uint64(rate_limiter_min_rate, 1000, "Minimum transmission rate in bytes/sec");
+DEFINE_UNKNOWN_int32(rate_limiter_min_size, 32_KB, "Minimum size for each transmission request");
+DEFINE_UNKNOWN_uint64(rate_limiter_min_rate, 1000, "Minimum transmission rate in bytes/sec");
 
 namespace yb {
 
@@ -81,9 +82,7 @@ void RateLimiter::UpdateTimeSlotSizeAndMaybeSleep(uint64_t data_size, MonoDelta 
             << " received size=" << data_size
             << " and sleeping for=" << sleep_time;
     SleepFor(MonoDelta::FromMilliseconds(sleep_time));
-#if defined(OS_MACOSX)
     total_time_slept_ += MonoDelta::FromMilliseconds(sleep_time);
-#endif
     end_time_ = MonoTime::Now();
     // If we slept for more than 80% of time_slot_ms_, reduce the size of this time slot.
     if (sleep_time > time_slot_ms_ * 80 / 100) {

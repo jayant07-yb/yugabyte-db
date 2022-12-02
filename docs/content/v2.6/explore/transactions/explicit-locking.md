@@ -4,15 +4,14 @@ headerTitle: Explicit Locking
 linkTitle: Explicit Locking
 description: Explicit Locking in YugabyteDB.
 headcontent: Explicit Locking in YugabyteDB.
-image: <div class="icon"><i class="fas fa-file-invoice-dollar"></i></div>
+image: <div class="icon"><i class="fa-solid fa-file-invoice-dollar"></i></div>
 menu:
   v2.6:
     name: Explicit Locking
     identifier: explore-transactions-explicit-locking-1-ysql
     parent: explore-transactions
     weight: 245
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -112,10 +111,3 @@ COMMIT;
   </tr>
 
 </table>
-
-
-
-
-
-
-

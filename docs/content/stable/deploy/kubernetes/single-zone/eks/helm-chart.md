@@ -8,16 +8,14 @@ menu:
     name: Amazon EKS
     identifier: k8s-eks-1
     weight: 622
-type: page
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
   <li >
-    <a href="/preview/deploy/kubernetes/single-zone/eks/helm-chart" class="nav-link active">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+    <a href="../helm-chart/" class="nav-link active">
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       Helm chart
     </a>
   </li>

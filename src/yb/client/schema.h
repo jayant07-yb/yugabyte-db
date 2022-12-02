@@ -43,8 +43,7 @@
 // - Second API:
 //   All hash and regular primary columns can be specified together in a list.
 //   Function YBSchemaBuilder::SetPrimaryKey().
-#ifndef YB_CLIENT_SCHEMA_H
-#define YB_CLIENT_SCHEMA_H
+#pragma once
 
 #include <string>
 #include <vector>
@@ -287,21 +286,21 @@ class YBSchema {
 
   // DEPRECATED: will be removed soon.
   Status Reset(const std::vector<YBColumnSchema>& columns, size_t key_columns,
-                       const TableProperties& table_properties) WARN_UNUSED_RESULT;
+               const TableProperties& table_properties) WARN_UNUSED_RESULT;
 
   void Reset(std::unique_ptr<Schema> schema);
 
   bool Equals(const YBSchema& other) const;
 
-  bool EquivalentForDataCopy(const YBSchema& other) const;
+  bool EquivalentForDataCopy(const YBSchema& source_schema) const;
 
   Result<bool> Equals(const SchemaPB& pb_schema) const;
 
-  // Two schemas are equivalent if it's possible to copy data from one table to the
-  // other containing these two schemas.
-  // For example, columns and columns types are the same, but table properties
-  // might be different in areas that are not relevant (e.g. TTL).
-  Result<bool> EquivalentForDataCopy(const SchemaPB& pb_schema) const;
+  // Two schemas are equivalent if it's possible to copy data from the source table to the
+  // destination table containing the schema represented by this class. Not a pure Equals. Rules:
+  //  1. The source schema must have matching columns and columns types on the destination.
+  //  2. Table properties might be different in areas that are not relevant (e.g. TTL).
+  Result<bool> EquivalentForDataCopy(const SchemaPB& source_pb_schema) const;
 
   const TableProperties& table_properties() const;
 
@@ -374,5 +373,3 @@ inline std::ostream& operator<<(std::ostream& out, const YBSchema& schema) {
 
 } // namespace client
 } // namespace yb
-
-#endif // YB_CLIENT_SCHEMA_H

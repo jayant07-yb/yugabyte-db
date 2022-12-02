@@ -24,6 +24,7 @@ import static junit.framework.TestCase.assertNull;
 import static junit.framework.TestCase.assertTrue;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -37,7 +38,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.typesafe.config.Config;
 import com.yugabyte.yw.cloud.CloudAPI;
+import com.yugabyte.yw.cloud.gcp.GCPCloudImpl;
 import com.yugabyte.yw.commissioner.Common;
+import com.yugabyte.yw.commissioner.Common.CloudType;
 import com.yugabyte.yw.commissioner.tasks.CloudBootstrap;
 import com.yugabyte.yw.common.ApiUtils;
 import com.yugabyte.yw.common.ConfigHelper;
@@ -58,11 +61,15 @@ import com.yugabyte.yw.models.Users;
 import com.yugabyte.yw.models.helpers.TaskType;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import junitparams.JUnitParamsRunner;
 import junitparams.Parameters;
+import lombok.extern.slf4j.Slf4j;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -71,8 +78,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import play.libs.Json;
 import play.mvc.Result;
+import play.test.Helpers;
 
 @RunWith(JUnitParamsRunner.class)
+@Slf4j
 public class CloudProviderApiControllerTest extends FakeDBApplication {
   public static final Logger LOG = LoggerFactory.getLogger(CloudProviderApiControllerTest.class);
   private static final ImmutableList<String> REGION_CODES_FROM_CLOUD_API =
@@ -123,6 +132,13 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
         user.createAuthToken());
   }
 
+  private Result getProvider(UUID providerUUID) {
+    return FakeApiHelper.doRequestWithAuthToken(
+        "GET",
+        "/api/customers/" + customer.uuid + "/providers/" + providerUUID,
+        user.createAuthToken());
+  }
+
   private Result deleteProvider(UUID providerUUID) {
     return FakeApiHelper.doRequestWithAuthToken(
         "DELETE",
@@ -136,6 +152,24 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
         "/api/customers/" + customer.uuid + "/providers/" + providerUUID + "/edit",
         user.createAuthToken(),
         bodyJson);
+  }
+
+  private Result patchProvider(JsonNode bodyJson, UUID providerUUID) {
+    return FakeApiHelper.doRequestWithAuthTokenAndBody(
+        "PATCH",
+        "/api/customers/" + customer.uuid + "/providers/" + providerUUID,
+        user.createAuthToken(),
+        bodyJson);
+  }
+
+  private Result patchProviderWithEH(JsonNode providerJson, UUID providerUUID)
+      throws ExecutionException, InterruptedException, TimeoutException {
+    return FakeApiHelper.routeWithYWErrHandler(
+        Helpers.fakeRequest(
+                "PATCH", "/api/customers/" + customer.uuid + "/providers/" + providerUUID)
+            .header(TokenAuthenticator.AUTH_TOKEN_HEADER, user.createAuthToken())
+            .bodyJson(providerJson),
+        app);
   }
 
   private Result bootstrapProviderXX(JsonNode bodyJson, Provider provider) {
@@ -210,13 +244,42 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
 
   @Test
   public void testCreateGCPProviderSomeRegionInput() {
+    when(mockCloudQueryHelper.getCurrentHostInfo(eq(CloudType.gcp)))
+        .thenReturn(Json.newObject().put("network", "234234").put("host_project", "PROJ"));
     Provider provider = buildProviderReq("gcp", "Google");
     Region region = new Region();
     region.name = "region1";
     region.provider = provider;
     region.code = "region1";
     provider.regions = ImmutableList.of(region);
-    createProviderTest(provider, ImmutableList.of(), UUID.randomUUID());
+    provider = createProviderTest(provider, ImmutableList.of(), UUID.randomUUID());
+    assertNull(provider.destVpcId);
+    assertNull(provider.hostVpcId);
+  }
+
+  @Test
+  public void testCreateGCPProviderHostVPC() {
+    when(mockCloudQueryHelper.getCurrentHostInfo(eq(CloudType.gcp)))
+        .thenReturn(Json.newObject().put("network", "234234").put("host_project", "PROJ"));
+    Provider provider = buildProviderReq("gcp", "Google");
+    provider.setConfig(Collections.singletonMap("use_host_vpc", "true"));
+    provider = createProviderTest(provider, ImmutableList.of("region1"), UUID.randomUUID());
+    assertEquals("234234", provider.hostVpcId);
+    assertEquals("234234", provider.destVpcId);
+    assertEquals("PROJ", provider.getUnmaskedConfig().get("GCE_HOST_PROJECT"));
+    assertEquals(
+        "234234", provider.getUnmaskedConfig().get(GCPCloudImpl.CUSTOM_GCE_NETWORK_PROPERTY));
+  }
+
+  @Test
+  public void testCreateAWSProviderHostVPC() {
+    when(mockCloudQueryHelper.getCurrentHostInfo(eq(CloudType.aws)))
+        .thenReturn(Json.newObject().put("vpc-id", "234234").put("region", "VPCreg"));
+    Provider provider = buildProviderReq("aws", "AWS");
+    provider = createProviderTest(provider, ImmutableList.of("region1"), UUID.randomUUID());
+    assertEquals("234234", provider.hostVpcId);
+    assertNull(provider.destVpcId);
+    assertEquals("VPCreg", provider.hostVpcRegion);
   }
 
   @Test
@@ -237,16 +300,20 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
   private Provider createProviderTest(
       Provider provider, ImmutableList<String> regionCodesFromCloudAPI, UUID actualTaskUUID) {
     JsonNode bodyJson = Json.toJson(provider);
-    when(mockCommissioner.submit(any(TaskType.class), any(CloudBootstrap.Params.class)))
-        .thenReturn(actualTaskUUID);
-    when(mockCloudQueryHelper.getRegionCodes(provider)).thenReturn(regionCodesFromCloudAPI);
+    boolean isOnprem = CloudType.onprem.name().equals(provider.code);
+    if (!isOnprem) {
+      when(mockCommissioner.submit(any(TaskType.class), any(CloudBootstrap.Params.class)))
+          .thenReturn(actualTaskUUID);
+      when(mockCloudQueryHelper.getRegionCodes(provider)).thenReturn(regionCodesFromCloudAPI);
+    }
     Result result = createProvider(bodyJson);
-    // When regions not supplied in request then we expect a call to cloud API to get region codes
-    verify(mockCloudQueryHelper, times(provider.regions.isEmpty() ? 1 : 0)).getRegionCodes(any());
-    JsonNode json = Json.parse(contentAsString(result));
     assertOk(result);
     YBPTask ybpTask = Json.fromJson(Json.parse(contentAsString(result)), YBPTask.class);
-    assertEquals(ybpTask.taskUUID, actualTaskUUID);
+    if (!isOnprem) {
+      // When regions not supplied in request then we expect a call to cloud API to get region codes
+      verify(mockCloudQueryHelper, times(provider.regions.isEmpty() ? 1 : 0)).getRegionCodes(any());
+      assertEquals(actualTaskUUID, ybpTask.taskUUID);
+    }
     Provider createdProvider = Provider.get(customer.uuid, ybpTask.resourceUUID);
     assertEquals(provider.code, createdProvider.code);
     assertEquals(provider.name, createdProvider.name);
@@ -313,7 +380,7 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
   }
 
   @Test
-  @Parameters({"aws", "gcp"})
+  @Parameters({"aws", "gcp", "onprem"})
   public void testCreateProviderWithConfig(String code) {
     String providerName = code + "-Provider";
     Provider providerReq = buildProviderReq(code, providerName);
@@ -327,6 +394,8 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
     } else if (code.equals("aws")) {
       reqConfig.put("foo", "bar");
       reqConfig.put("foo2", "bar2");
+    } else {
+      reqConfig.put("home", "/bar");
     }
     providerReq.customerUUID = customer.uuid;
     providerReq.setConfig(reqConfig);
@@ -422,8 +491,6 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
     userIntent.regionList.add(r.uuid);
     universe =
         Universe.saveDetails(universe.universeUUID, ApiUtils.mockUniverseUpdater(userIntent));
-    customer.addUniverseUUID(universe.universeUUID);
-    customer.save();
     Result result = assertPlatformException(() -> deleteProvider(p.uuid));
     assertBadRequest(result, "Cannot delete Provider with Universes");
     assertAuditEntry(0, customer.uuid);
@@ -519,20 +586,6 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
   }
 
   @Test
-  public void testCreateProviderConfigEncryption() {
-    Map<String, String> testConfig = new HashMap<>();
-    testConfig.put("ACCOUNT_NAME", "John Doe");
-    testConfig.put("ACCOUNT_MAIL", "jdoe@yugabyte.com");
-    Provider testProvider = buildProviderReq("aws", "test-provider");
-    testProvider.setConfig(testConfig);
-    Provider createdProvider =
-        createProviderTest(testProvider, ImmutableList.of("region1", "region2"), UUID.randomUUID());
-    assertTrue(createdProvider.getConfig().containsKey("encrypted"));
-    Map<String, String> decryptedConfig = createdProvider.getUnmaskedConfig();
-    assertEquals(testConfig, decryptedConfig);
-  }
-
-  @Test
   public void testAddRegion() {
     when(mockCommissioner.submit(any(TaskType.class), any(CloudBootstrap.Params.class)))
         .thenReturn(UUID.randomUUID());
@@ -563,7 +616,7 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
 
     Result result =
         assertPlatformException(() -> editProvider(Json.parse(jsonString), provider.uuid));
-    assertBadRequest(result, "Required field hosted zone id");
+    assertBadRequest(result, "No changes to be made for provider type: aws");
   }
 
   @Test
@@ -599,5 +652,68 @@ public class CloudProviderApiControllerTest extends FakeDBApplication {
     Result result =
         assertPlatformException(() -> editProvider(Json.parse(jsonString), provider.uuid));
     assertBadRequest(result, "KeyCode not found: " + AccessKey.getDefaultKeyCode(provider));
+  }
+
+  @Test
+  public void testPatchProviderFailure() throws Exception {
+    when(mockAccessManager.createCredentialsFile(any(), any())).thenReturn("/test-path");
+    Provider provider = Provider.create(customer.uuid, Common.CloudType.gcp, "test");
+    AccessKey.create(provider.uuid, AccessKey.getDefaultKeyCode(provider), new AccessKey.KeyInfo());
+    String jsonString =
+        "{"
+            + "\"code\":\"aws\","
+            + "\"name\":\"test\","
+            + "\"config\": {"
+            + "\"project_id\": \"test-project\","
+            + "\"client_email\": \"test-email\""
+            + "}}";
+    Result result =
+        assertPlatformException(() -> patchProvider(Json.parse(jsonString), provider.uuid));
+    assertBadRequest(result, "Unknown keys found: [client_email, project_id]");
+  }
+
+  @Test
+  public void testPatchProviderSuccess() throws Exception {
+    when(mockAccessManager.createCredentialsFile(any(), any())).thenReturn("/test-path");
+    when(mockAccessManager.readCredentialsFromFile(any()))
+        .thenReturn(ImmutableMap.of("project_id", "test-project", "client_email", "test-email"));
+    Provider provider = Provider.create(customer.uuid, Common.CloudType.gcp, "test");
+    AccessKey.create(provider.uuid, AccessKey.getDefaultKeyCode(provider), new AccessKey.KeyInfo());
+
+    Result providerRes = getProvider(provider.uuid);
+    ObjectNode providerJson = (ObjectNode) Json.parse(contentAsString(providerRes));
+    providerJson.set(
+        "config", Json.toJson(Collections.singletonMap("project_id", "test-project-updated")));
+    Result result = patchProvider(providerJson, provider.uuid);
+    assertOk(result);
+    provider = Provider.get(customer.uuid, provider.uuid);
+    Map<String, String> expectedConfig =
+        ImmutableMap.of(
+            "project_id", "test-project-updated",
+            "client_email", "test-email",
+            "GCE_PROJECT", "test-project-updated",
+            "GCE_EMAIL", "test-email",
+            "GOOGLE_APPLICATION_CREDENTIALS", "/test-path");
+    Map<String, String> config = provider.getUnmaskedConfig();
+    assertEquals(expectedConfig, config);
+  }
+
+  @Test
+  public void testPatchProviderConcurrentModification() throws Exception {
+    when(mockAccessManager.createCredentialsFile(any(), any())).thenReturn("/test-path");
+    when(mockAccessManager.readCredentialsFromFile(any()))
+        .thenReturn(ImmutableMap.of("project_id", "test-project", "client_email", "test-email"));
+    Provider provider = Provider.create(customer.uuid, Common.CloudType.gcp, "test");
+    AccessKey.create(provider.uuid, AccessKey.getDefaultKeyCode(provider), new AccessKey.KeyInfo());
+    Result providerRes = getProvider(provider.uuid);
+    ObjectNode providerJson = (ObjectNode) Json.parse(contentAsString(providerRes));
+    providerJson.set(
+        "config", Json.toJson(Collections.singletonMap("project_id", "test-project-updated")));
+
+    Result result = patchProviderWithEH(providerJson, provider.uuid);
+    assertOk(result);
+    // Second request will fail as provider was already changed.
+    Result result2 = patchProviderWithEH(providerJson, provider.uuid);
+    assertBadRequest(result2, "Data has changed, please refresh and try again");
   }
 }

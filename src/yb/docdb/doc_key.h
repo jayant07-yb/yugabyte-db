@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_DOC_KEY_H_
-#define YB_DOCDB_DOC_KEY_H_
+#pragma once
 
 #include <ostream>
 #include <vector>
@@ -81,6 +80,16 @@ YB_STRONGLY_TYPED_BOOL(HybridTimeRequired)
 // Whether to allow parts of the range component of a doc key that should not be present in stored
 // doc key, but could be used during read, for instance kLowest and kHighest.
 YB_STRONGLY_TYPED_BOOL(AllowSpecial)
+
+// Key in DocDB is named - SubDocKey. It consist of DocKey (i.e. row identifier) and
+// subkeys (i.e. column id + possible sub values).
+// DocKey consists of hash part followed by range part.
+// hash_part_size - size of hash part of the key.
+// doc_key_size - size of hash part + range part of the key.
+struct DocKeySizes {
+  size_t hash_part_size;
+  size_t doc_key_size;
+};
 
 class DocKey {
  public:
@@ -205,7 +214,7 @@ class DocKey {
   static Result<std::pair<size_t, bool>> EncodedSizeAndHashPresent(Slice slice, DocKeyPart part);
 
   // Returns size of encoded hash part and whole part of DocKey.
-  static Result<std::pair<size_t, size_t>> EncodedHashPartAndDocKeySizes(
+  static Result<DocKeySizes> EncodedHashPartAndDocKeySizes(
       Slice slice, AllowSpecial allow_special = AllowSpecial::kFalse);
 
   // Decode the current document key from the given slice, but expect all bytes to be consumed, and
@@ -388,7 +397,7 @@ class DocKeyDecoder {
   Result<bool> DecodeCotableId(Uuid* uuid = nullptr);
   Result<bool> DecodeColocationId(ColocationId* colocation_id = nullptr);
 
-  Result<bool> HasPrimitiveValue();
+  Result<bool> HasPrimitiveValue(AllowSpecial allow_special = AllowSpecial::kFalse);
 
   Result<bool> DecodeHashCode(
       uint16_t* out = nullptr, AllowSpecial allow_special = AllowSpecial::kFalse);
@@ -577,8 +586,8 @@ class SubDocKey {
   //     Whether it is allowed to have special value types in slice, that are used during seek.
   //     If such value type is found, decoding is stopped w/o error.
   Status DecodeFrom(Slice* slice,
-                            HybridTimeRequired require_hybrid_time = HybridTimeRequired::kTrue,
-                            AllowSpecial allow_special = AllowSpecial::kFalse);
+                    HybridTimeRequired require_hybrid_time = HybridTimeRequired::kTrue,
+                    AllowSpecial allow_special = AllowSpecial::kFalse);
 
   // Similar to DecodeFrom, but requires that the entire slice is decoded, and thus takes a const
   // reference to a slice. This still respects the require_hybrid_time parameter, but in case a
@@ -874,5 +883,3 @@ class DocDbAwareV3FilterPolicy : public DocDbAwareFilterPolicyBase {
 
 }  // namespace docdb
 }  // namespace yb
-
-#endif  // YB_DOCDB_DOC_KEY_H_

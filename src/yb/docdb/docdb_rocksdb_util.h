@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_DOCDB_ROCKSDB_UTIL_H_
-#define YB_DOCDB_DOCDB_ROCKSDB_UTIL_H_
+#pragma once
 
 #include <boost/optional.hpp>
 
@@ -40,6 +39,14 @@ class IntentAwareIterator;
 void SeekForward(const rocksdb::Slice& slice, rocksdb::Iterator *iter);
 
 void SeekForward(const KeyBytes& key_bytes, rocksdb::Iterator *iter);
+
+struct SeekStats {
+  int next = 0;
+  int seek = 0;
+};
+
+// Seek forward using Next call.
+SeekStats SeekPossiblyUsingNext(rocksdb::Iterator* iter, const Slice& seek_key);
 
 // When we replace HybridTime::kMin in the end of seek key, next seek will skip older versions of
 // this key, but will not skip any subkeys in its subtree. If the iterator is already positioned far
@@ -108,6 +115,8 @@ rocksdb::Options TEST_AutoInitFromRocksDBFlags();
 
 rocksdb::BlockBasedTableOptions TEST_AutoInitFromRocksDbTableFlags();
 
+Result<rocksdb::CompressionType> TEST_GetConfiguredCompressionType(const std::string& flag_value);
+
 Result<rocksdb::KeyValueEncodingFormat> GetConfiguredKeyValueEncodingFormat(
     const std::string& flag_value);
 
@@ -166,5 +175,3 @@ class RocksDBPatcher {
 
 }  // namespace docdb
 }  // namespace yb
-
-#endif  // YB_DOCDB_DOCDB_ROCKSDB_UTIL_H_

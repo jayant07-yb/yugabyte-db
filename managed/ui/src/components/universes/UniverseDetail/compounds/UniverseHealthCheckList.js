@@ -229,7 +229,7 @@ const detailsFormatter = (cell, row) => {
     case 1:
       return <pre>{row.details}</pre>;
     default:
-      return <pre style={{ whiteSpace: 'pre' }}>{row.details.join('\n')}</pre>;
+      return <pre style={{ whiteSpace: 'pre', overflowY: 'auto' }}>{row.details.join('\n')}</pre>;
   }
 };
 
@@ -258,7 +258,7 @@ function prepareData(data, timezone) {
       const node = nodesByIpAddress[ipAddress];
       node.checks.push(check);
       node[check.has_error ? 'failedChecks' :
-                             (check.has_warning ? 'warningChecks' : 'passingChecks')].push(check);
+        (check.has_warning ? 'warningChecks' : 'passingChecks')].push(check);
       if (check.has_error) {
         node.hasError = true;
       }
@@ -268,7 +268,7 @@ function prepareData(data, timezone) {
     });
     values(nodesByIpAddress).forEach((node) => {
       node.checks = sortBy(node.checks,
-                           (check) => (check.has_error ? 0 : (check.has_warning ? 0 : 1)));
+        (check) => (check.has_error ? 0 : (check.has_warning ? 0 : 1)));
     });
     const nodes = sortBy(
       values(nodesByIpAddress),

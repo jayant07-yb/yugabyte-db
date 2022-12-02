@@ -11,12 +11,11 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_PRIORITY_THREAD_POOL_H
-#define YB_UTIL_PRIORITY_THREAD_POOL_H
+#pragma once
 
 #include <memory>
 
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 
 #include "yb/gutil/casts.h"
 
@@ -82,7 +81,7 @@ class PriorityThreadPoolTask {
 // Tasks submitted to this pool have assigned priority and are picked from queue using it.
 class PriorityThreadPool {
  public:
-  explicit PriorityThreadPool(size_t max_running_tasks);
+  explicit PriorityThreadPool(size_t max_running_tasks, bool use_group_no_priority = false);
   ~PriorityThreadPool();
 
   // Submit task to the pool.
@@ -145,5 +144,3 @@ class PriorityThreadPool {
 };
 
 } // namespace yb
-
-#endif // YB_UTIL_PRIORITY_THREAD_POOL_H

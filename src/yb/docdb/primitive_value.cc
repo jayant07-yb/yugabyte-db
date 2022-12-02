@@ -70,6 +70,7 @@ using yb::util::DecodeDoubleFromKey;
     case ValueEntryType::kRedisSet: FALLTHROUGH_INTENDED; \
     case ValueEntryType::kRedisSortedSet: FALLTHROUGH_INTENDED;  \
     case ValueEntryType::kRedisTS: FALLTHROUGH_INTENDED; \
+    case ValueEntryType::kRowLock: FALLTHROUGH_INTENDED; \
     case ValueEntryType::kTombstone: \
   break
 
@@ -203,6 +204,16 @@ std::string FrozenToString(const FrozenContainer& frozen) {
   return ss.str();
 }
 
+// In Postgres, character value cannot have embedded \0 byte. Both YCQL and Redis
+// allow embedded \0 byte but neither has collation concept so kCollString becomes
+// a synonym for kString. If the value is not empty and the first byte is \0, in
+// Postgres it indicates this is a collation encoded string and we use kCollString:
+// (1) in Postgres kCollString means a collation encoded string;
+// (2) in both YCQL and Redis kCollString is a synonym for kString so it is also correct;
+inline bool IsCollationEncodedString(const Slice& val) {
+  return !val.empty() && val[0] == '\0';
+}
+
 } // anonymous namespace
 
 const PrimitiveValue PrimitiveValue::kInvalid = PrimitiveValue(ValueEntryType::kInvalid);
@@ -264,6 +275,8 @@ std::string PrimitiveValue::ToString() const {
       return FormatBytesAsStr(str_val_);
     case ValueEntryType::kUuid:
       return uuid_val_.ToString();
+    case ValueEntryType::kRowLock:
+      return "l";
     case ValueEntryType::kArrayIndex:
       return Substitute("ArrayIndex($0)", int64_val_);
     case ValueEntryType::kPackedRow:
@@ -321,7 +334,6 @@ std::string PrimitiveValue::ToString() const {
     case KeyEntryType::kMaxByte: FALLTHROUGH_INTENDED; \
     case KeyEntryType::kMergeFlags: FALLTHROUGH_INTENDED; \
     case KeyEntryType::kObsoleteIntentPrefix: FALLTHROUGH_INTENDED; \
-    case KeyEntryType::kRowLock: FALLTHROUGH_INTENDED; \
     case KeyEntryType::kTtl: FALLTHROUGH_INTENDED; \
     case KeyEntryType::kUserTimestamp: \
       break
@@ -509,8 +521,30 @@ void AddValueType(
 // Indicates that the stored jsonb is the complete jsonb value and not a partial update to jsonb.
 static constexpr int64_t kCompleteJsonb = 1;
 
+class SizeCounter {
+ public:
+  size_t value() const {
+    return value_;
+  }
+
+  void push_back(char ch) {
+    ++value_;
+  }
+
+  void append(const std::string& str) {
+    value_ += str.size();
+  }
+
+  void append(const char* str, size_t size) {
+    value_ += size;
+  }
+
+ private:
+  size_t value_ = 0;
+};
+
 template <class Buffer>
-void DoAppendEncodedValue(const QLValuePB& value, CheckIsCollate check_is_collate, Buffer* out) {
+void DoAppendEncodedValue(const QLValuePB& value, Buffer* out) {
   switch (value.value_case()) {
     case QLValuePB::kInt8Value:
       out->push_back(ValueEntryTypeAsChar::kInt32);
@@ -554,18 +588,9 @@ void DoAppendEncodedValue(const QLValuePB& value, CheckIsCollate check_is_collat
       out->append(value.varint_value());
       return;
     case QLValuePB::kStringValue: {
-      const string& val = value.string_value();
-      // In both Postgres and YCQL, character value cannot have embedded \0 byte.
-      // Redis allows embedded \0 byte but it does not use QLValuePB so will not
-      // come here to pick up 'is_collate'. Therefore, if the value is not empty
-      // and the first byte is \0, it indicates this is a collation encoded string.
-      if (!val.empty() && val[0] == '\0' && check_is_collate) {
-        // An empty collation encoded string is at least 3 bytes.
-        CHECK_GE(val.size(), 3);
-        out->push_back(ValueEntryTypeAsChar::kCollString);
-      } else {
-        out->push_back(ValueEntryTypeAsChar::kString);
-      }
+      const auto& val = value.string_value();
+      out->push_back(IsCollationEncodedString(val) ? ValueEntryTypeAsChar::kCollString
+                                                   : ValueEntryTypeAsChar::kString);
       out->append(val);
       return;
     }
@@ -634,6 +659,7 @@ void DoAppendEncodedValue(const QLValuePB& value, CheckIsCollate check_is_collat
 
     case QLValuePB::kMapValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kSetValue: FALLTHROUGH_INTENDED;
+    case QLValuePB::kTupleValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kListValue:
       break;
 
@@ -652,12 +678,18 @@ void DoAppendEncodedValue(const QLValuePB& value, CheckIsCollate check_is_collat
 
 } // namespace
 
-void AppendEncodedValue(const QLValuePB& value, CheckIsCollate check_is_collate, ValueBuffer* out) {
-  DoAppendEncodedValue(value, check_is_collate, out);
+void AppendEncodedValue(const QLValuePB& value, ValueBuffer* out) {
+  DoAppendEncodedValue(value, out);
 }
 
-void AppendEncodedValue(const QLValuePB& value, CheckIsCollate check_is_collate, std::string* out) {
-  DoAppendEncodedValue(value, check_is_collate, out);
+void AppendEncodedValue(const QLValuePB& value, std::string* out) {
+  DoAppendEncodedValue(value, out);
+}
+
+size_t EncodedValueSize(const QLValuePB& value) {
+  SizeCounter counter;
+  DoAppendEncodedValue(value, &counter);
+  return counter.value();
 }
 
 Status KeyEntryValue::DecodeFromKey(Slice* slice) {
@@ -1059,10 +1091,8 @@ Status KeyEntryValue::DecodeKey(Slice* slice, KeyEntryValue* out) {
 }
 
 Status PrimitiveValue::DecodeFromValue(const Slice& rocksdb_slice) {
-  if (rocksdb_slice.empty()) {
-    return STATUS(Corruption, "Cannot decode a value from an empty slice");
-  }
-  rocksdb::Slice slice(rocksdb_slice);
+  RSTATUS_DCHECK(!rocksdb_slice.empty(), Corruption, "Cannot decode a value from an empty slice");
+  Slice slice(rocksdb_slice);
   this->~PrimitiveValue();
   // Ensure we are not leaving the object in an invalid state in case e.g. an exception is thrown
   // due to inability to allocate memory.
@@ -1231,14 +1261,244 @@ Status PrimitiveValue::DecodeFromValue(const Slice& rocksdb_slice) {
       type_ = value_type;
       return Status::OK();
     }
+    case ValueEntryType::kRowLock: {
+      type_ = value_type;
+      return Status::OK();
+    }
 
     case ValueEntryType::kInvalid: FALLTHROUGH_INTENDED;
     case ValueEntryType::kPackedRow: FALLTHROUGH_INTENDED;
     case ValueEntryType::kMaxByte:
       return STATUS_FORMAT(Corruption, "$0 is not allowed in a RocksDB PrimitiveValue", value_type);
   }
-  FATAL_INVALID_ENUM_VALUE(ValueEntryType, value_type);
-  return Status::OK();
+  RSTATUS_DCHECK(
+      false, Corruption, "Wrong value type $0 in $1", value_type, rocksdb_slice.ToDebugHexString());
+}
+
+Status PrimitiveValue::DecodeToQLValuePB(
+    const Slice& rocksdb_slice, const std::shared_ptr<QLType>& ql_type, QLValuePB* ql_value) {
+
+  RSTATUS_DCHECK(!rocksdb_slice.empty(), Corruption, "Cannot decode a value from an empty slice");
+  Slice slice(rocksdb_slice);
+
+  const auto value_type = ConsumeValueEntryType(&slice);
+  switch (value_type) {
+    case ValueEntryType::kNullHigh: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kNullLow: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kTombstone:
+      SetNull(ql_value);
+      return Status::OK();
+
+    case ValueEntryType::kFalse: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kTrue:
+      if (ql_type->main() != DataType::BOOL) {
+        break;
+      }
+      ql_value->set_bool_value(IsTrue(value_type));
+      return Status::OK();
+
+    case ValueEntryType::kInt32: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kWriteId: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kFloat: {
+      if (slice.size() != sizeof(int32_t)) {
+        return STATUS_FORMAT(Corruption, "Invalid number of bytes for a $0: $1",
+            value_type, slice.size());
+      }
+      int32_t int32_val = BigEndian::Load32(slice.data());
+      if (ql_type->main() == DataType::INT8) {
+        ql_value->set_int8_value(static_cast<int8_t>(int32_val));
+      } else if (ql_type->main() == DataType::INT16) {
+        ql_value->set_int16_value(static_cast<int16_t>(int32_val));
+      } else if (ql_type->main() == DataType::INT32) {
+        ql_value->set_int32_value(int32_val);
+      } else if (ql_type->main() == DataType::FLOAT) {
+        ql_value->set_float_value(bit_cast<float>(int32_val));
+      } else {
+        break;
+      }
+      return Status::OK();
+    }
+
+    case ValueEntryType::kColocationId: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kUInt32: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kSubTransactionId: {
+      if (slice.size() != sizeof(uint32_t)) {
+        return STATUS_FORMAT(Corruption, "Invalid number of bytes for a $0: $1",
+            value_type, slice.size());
+      }
+      uint32_t uint32_val = BigEndian::Load32(slice.data());
+      if (ql_type->main() == DataType::UINT32) {
+        ql_value->set_uint32_value(uint32_val);
+      } else if (ql_type->main() == DataType::DATE) {
+        ql_value->set_date_value(uint32_val);
+      } else {
+        break;
+      }
+      return Status::OK();
+    }
+
+    case ValueEntryType::kInt64: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kArrayIndex: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kDouble: {
+      if (slice.size() != sizeof(int64_t)) {
+        return STATUS_FORMAT(Corruption, "Invalid number of bytes for a $0: $1",
+            value_type, slice.size());
+      }
+      int64_t int64_val = BigEndian::Load64(slice.data());
+      if (ql_type->main() == DataType::INT64) {
+        ql_value->set_int64_value(int64_val);
+      } else if (ql_type->main() == DataType::TIME) {
+        ql_value->set_time_value(int64_val);
+      } else if (ql_type->main() == DataType::DOUBLE) {
+        ql_value->set_double_value(bit_cast<double>(int64_val));
+      } else {
+        break;
+      }
+      return Status::OK();
+    }
+
+    case ValueEntryType::kUInt64:
+      if (slice.size() != sizeof(uint64_t)) {
+        return STATUS_FORMAT(Corruption, "Invalid number of bytes for a $0: $1",
+            value_type, slice.size());
+      }
+      if (ql_type->main() != DataType::UINT64) {
+        break;
+      }
+
+      ql_value->set_uint64_value(BigEndian::Load64(slice.data()));
+      return Status::OK();
+
+    case ValueEntryType::kDecimal: {
+      // TODO(kpopali): check if we can simply put the slice value, instead of decoding and
+      // encoding it again.
+      util::Decimal decimal;
+      size_t num_decoded_bytes = 0;
+      RETURN_NOT_OK(decimal.DecodeFromComparable(slice.ToString(), &num_decoded_bytes));
+      if (ql_type->main() != DataType::DECIMAL) {
+        break;
+      }
+
+      ql_value->set_decimal_value(decimal.EncodeToComparable());
+      return Status::OK();
+    }
+
+    case ValueEntryType::kVarInt: {
+      // TODO(kpopali): check if we can simply put the slice value, instead of decoding and
+      // encoding it again.
+      util::VarInt varint;
+      size_t num_decoded_bytes = 0;
+      RETURN_NOT_OK(varint.DecodeFromComparable(slice.ToString(), &num_decoded_bytes));
+      if (ql_type->main() != DataType::VARINT) {
+        break;
+      }
+
+      ql_value->set_varint_value(varint.EncodeToComparable());
+      return Status::OK();
+    }
+
+    case ValueEntryType::kTimestamp: {
+      if (slice.size() != sizeof(Timestamp)) {
+        return STATUS_FORMAT(Corruption, "Invalid number of bytes for a $0: $1",
+            value_type, slice.size());
+      }
+      Timestamp timestamp_val = Timestamp(BigEndian::Load64(slice.data()));
+      if (ql_type->main() == DataType::TIMESTAMP) {
+        ql_value->set_timestamp_value(timestamp_val.ToInt64());
+      } else {
+        break;
+      }
+      return Status::OK();
+    }
+
+    case ValueEntryType::kCollString: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kString:
+      if (ql_type->main() == DataType::STRING) {
+        ql_value->set_string_value(slice.cdata(), slice.size());
+      } else if (ql_type->main() == DataType::BINARY) {
+        ql_value->set_binary_value(slice.cdata(), slice.size());
+      } else {
+        break;
+      }
+      return Status::OK();
+
+    case ValueEntryType::kInetaddress: {
+      if (slice.size() != kInetAddressV4Size && slice.size() != kInetAddressV6Size) {
+        return STATUS_FORMAT(Corruption,
+                             "Invalid number of bytes to decode IPv4/IPv6: $0, need $1 or $2",
+                             slice.size(), kInetAddressV4Size, kInetAddressV6Size);
+      }
+      // Need to use a non-rocksdb slice for InetAddress.
+      Slice slice_temp(slice.data(), slice.size());
+      InetAddress inetaddress_val;
+      RETURN_NOT_OK(inetaddress_val.FromSlice(slice_temp));
+      if (ql_type->main() != DataType::INET) {
+        break;
+      }
+
+      QLValue::set_inetaddress_value(inetaddress_val, ql_value);
+      return Status::OK();
+    }
+
+    case ValueEntryType::kTransactionId: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kTableId: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kUuid: {
+      if (slice.size() != kUuidSize) {
+        return STATUS_FORMAT(Corruption, "Invalid number of bytes to decode Uuid: $0, need $1",
+            slice.size(), kUuidSize);
+      }
+      Uuid uuid = VERIFY_RESULT(Uuid::FromComparable(slice));
+      if (ql_type->main() == DataType::UUID) {
+        QLValue::set_uuid_value(uuid, ql_value);
+      } else if (ql_type->main() == DataType::TIMEUUID) {
+        QLValue::set_timeuuid_value(uuid, ql_value);
+      } else {
+        break;
+      }
+      return Status::OK();
+    }
+
+    case ValueEntryType::kJsonb: {
+      if (slice.size() < sizeof(int64_t)) {
+        return STATUS_FORMAT(Corruption, "Invalid number of bytes for a $0: $1",
+                             value_type, slice.size());
+      }
+      // Read the jsonb flags.
+      int64_t jsonb_flags = BigEndian::Load64(slice.data());
+      slice.remove_prefix(sizeof(jsonb_flags));
+
+      if (ql_type->main() != DataType::JSONB) {
+        break;
+      }
+
+      ql_value->set_jsonb_value(slice.data(), slice.size());
+      return Status::OK();
+    }
+
+    case ValueEntryType::kFrozen: {
+      // TODO(kpopali): make sure that PGSQL doesn't use PGSQL type.
+      break;
+    }
+
+    case ValueEntryType::kObject: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kArray: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kRedisList: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kRedisSet: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kRedisTS: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kRedisSortedSet: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kGinNull:
+      break;
+
+    case ValueEntryType::kInvalid: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kPackedRow: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kRowLock: FALLTHROUGH_INTENDED;
+    case ValueEntryType::kMaxByte:
+      return STATUS_FORMAT(Corruption, "$0 is not allowed in a RocksDB PrimitiveValue", value_type);
+  }
+
+  RSTATUS_DCHECK(
+      false, Corruption, "Wrong value type $0 in $1 OR unsupported datatype $2",
+      value_type, rocksdb_slice.ToDebugHexString(), ql_type->main());
 }
 
 POD_FACTORY(Double, double);
@@ -1548,8 +1808,12 @@ bool PrimitiveValue::IsPrimitive() const {
   return IsPrimitiveValueType(type_);
 }
 
+bool PrimitiveValue::IsTombstone() const {
+  return type_ == ValueEntryType::kTombstone;
+}
+
 bool PrimitiveValue::IsTombstoneOrPrimitive() const {
-  return IsPrimitiveValueType(type_) || type_ == ValueEntryType::kTombstone;
+  return IsPrimitive() || IsTombstone();
 }
 
 bool KeyEntryValue::IsInfinity() const {
@@ -1687,18 +1951,16 @@ SortOrder SortOrderFromColumnSchemaSortingType(SortingType sorting_type) {
   return SortOrder::kAscending;
 }
 
-PrimitiveValue PrimitiveValue::FromQLValuePB(
-    const LWQLValuePB& value, CheckIsCollate check_is_collate) {
-  return DoFromQLValuePB(value, check_is_collate);
+PrimitiveValue PrimitiveValue::FromQLValuePB(const LWQLValuePB& value) {
+  return DoFromQLValuePB(value);
 }
 
-PrimitiveValue PrimitiveValue::FromQLValuePB(
-    const QLValuePB& value, CheckIsCollate check_is_collate) {
-  return DoFromQLValuePB(value, check_is_collate);
+PrimitiveValue PrimitiveValue::FromQLValuePB(const QLValuePB& value) {
+  return DoFromQLValuePB(value);
 }
 
 template <class PB>
-PrimitiveValue PrimitiveValue::DoFromQLValuePB(const PB& value, CheckIsCollate check_is_collate) {
+PrimitiveValue PrimitiveValue::DoFromQLValuePB(const PB& value) {
   switch (value.value_case()) {
     case QLValuePB::kInt8Value:
       return PrimitiveValue::Int32(value.int8_value());
@@ -1722,16 +1984,7 @@ PrimitiveValue PrimitiveValue::DoFromQLValuePB(const PB& value, CheckIsCollate c
       return PrimitiveValue::VarInt(value.varint_value());
     case QLValuePB::kStringValue: {
       const auto& val = value.string_value();
-      // In both Postgres and YCQL, character value cannot have embedded \0 byte.
-      // Redis allows embedded \0 byte but it does not use QLValuePB so will not
-      // come here to pick up 'is_collate'. Therefore, if the value is not empty
-      // and the first byte is \0, it indicates this is a collation encoded string.
-      if (!val.empty() && val[0] == '\0' && check_is_collate) {
-        // An empty collation encoded string is at least 3 bytes.
-        CHECK_GE(val.size(), 3);
-        return PrimitiveValue(val, true /* is_collate */);
-      }
-      return PrimitiveValue(val);
+      return PrimitiveValue(val, IsCollationEncodedString(val));
     }
     case QLValuePB::kBinaryValue:
       // TODO consider using dedicated encoding for binary (not string) to avoid overhead of
@@ -1772,6 +2025,7 @@ PrimitiveValue PrimitiveValue::DoFromQLValuePB(const PB& value, CheckIsCollate c
 
     case QLValuePB::kMapValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kSetValue: FALLTHROUGH_INTENDED;
+    case QLValuePB::kTupleValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kListValue:
       break;
 
@@ -2197,13 +2451,7 @@ KeyEntryValue KeyEntryValue::DoFromQLValuePB(const PB& value, SortingType sortin
       return KeyEntryValue::VarInt(value.varint_value(), sort_order);
     case QLValuePB::kStringValue: {
       const auto& val = value.string_value();
-      // In both Postgres and YCQL, character value cannot have embedded \0 byte.
-      // Redis allows embedded \0 byte but it does not use QLValuePB so will not
-      // come here to pick up 'is_collate'. Therefore, if the value is not empty
-      // and the first byte is \0, it indicates this is a collation encoded string.
-      if (!val.empty() && val[0] == '\0' && sorting_type != SortingType::kNotSpecified) {
-        // An empty collation encoded string is at least 3 bytes.
-        CHECK_GE(val.size(), 3);
+      if (sorting_type != SortingType::kNotSpecified && IsCollationEncodedString(val)) {
         return KeyEntryValue(val, sort_order, true /* is_collate */);
       }
       return KeyEntryValue(val, sort_order);
@@ -2248,7 +2496,7 @@ KeyEntryValue KeyEntryValue::DoFromQLValuePB(const PB& value, SortingType sortin
     }
 
     case QLValuePB::kVirtualValue:
-      return KeyEntryValue(VirtualValueToKeyEntryType(value.virtual_value()));
+      return FromQLVirtualValue(value.virtual_value());
     case QLValuePB::kGinNullValue:
       return KeyEntryValue::GinNull(value.gin_null_value());
 
@@ -2256,6 +2504,7 @@ KeyEntryValue KeyEntryValue::DoFromQLValuePB(const PB& value, SortingType sortin
     case QLValuePB::kMapValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kSetValue: FALLTHROUGH_INTENDED;
     case QLValuePB::kListValue: FALLTHROUGH_INTENDED;
+    case QLValuePB::kTupleValue: FALLTHROUGH_INTENDED;
     case QLValuePB::VALUE_NOT_SET:
       break;
     // default: fall through
@@ -2286,6 +2535,10 @@ KeyEntryValue KeyEntryValue::FromQLValuePBForKey(
     return KeyEntryValue::NullValue(sorting_type);
   }
   return DoFromQLValuePB(value, sorting_type);
+}
+
+KeyEntryValue KeyEntryValue::FromQLVirtualValue(QLVirtualValuePB value) {
+  return KeyEntryValue(VirtualValueToKeyEntryType(value));
 }
 
 std::string KeyEntryValue::ToString(AutoDecodeKeys auto_decode_keys) const {
@@ -2397,7 +2650,6 @@ std::string KeyEntryValue::ToString(AutoDecodeKeys auto_decode_keys) const {
     case KeyEntryType::kObsoleteIntentType:
       return Format("Intent($0)", uint16_val_);
     case KeyEntryType::kMergeFlags: FALLTHROUGH_INTENDED;
-    case KeyEntryType::kRowLock: FALLTHROUGH_INTENDED;
     case KeyEntryType::kBitSet: FALLTHROUGH_INTENDED;
     case KeyEntryType::kGroupEnd: FALLTHROUGH_INTENDED;
     case KeyEntryType::kGroupEndDescending: FALLTHROUGH_INTENDED;

@@ -40,10 +40,11 @@
 #include "lib/stringinfo.h"
 #include "nodes/parsenodes.h"
 
+#define DEFAULT_TABLEGROUP_NAME	"default"
+
 extern Oid	CreateTableGroup(CreateTableGroupStmt *stmt);
 
 extern Oid	get_tablegroup_oid(const char *tablegroupname, bool missing_ok);
-extern Oid  get_tablegroup_oid_by_table_oid(Oid table_oid);
 extern char *get_tablegroup_name(Oid grp_oid);
 
 extern void RemoveTablegroupById(Oid grp_oid);

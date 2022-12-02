@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_INTEGRATION_TESTS_BACKFILL_TEST_UTIL_H
-#define YB_INTEGRATION_TESTS_BACKFILL_TEST_UTIL_H
+#pragma once
 
 #include <algorithm>
 #include <string>
@@ -25,8 +24,8 @@
 
 #include "yb/rpc/rpc_controller.h"
 
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/result.h"
-#include "yb/util/test_util.h"
 
 namespace yb {
 
@@ -55,8 +54,7 @@ Result<master::BackfillJobPB> GetBackfillJobs(
     const client::YBTableName& table_name) {
   master::TableIdentifierPB table_identifier;
   table_name.SetIntoTableIdentifierPB(&table_identifier);
-  return GetBackfillJobs(
-      cluster->GetMasterProxy<master::MasterDdlProxy>(), table_identifier);
+  return GetBackfillJobs(cluster->GetLeaderMasterProxy<master::MasterDdlProxy>(), table_identifier);
 }
 
 Result<master::BackfillJobPB> GetBackfillJobs(
@@ -66,8 +64,7 @@ Result<master::BackfillJobPB> GetBackfillJobs(
   if (!table_id.empty()) {
     table_identifier.set_table_id(table_id);
   }
-  return GetBackfillJobs(
-      cluster->GetMasterProxy<master::MasterDdlProxy>(), table_identifier);
+  return GetBackfillJobs(cluster->GetLeaderMasterProxy<master::MasterDdlProxy>(), table_identifier);
 }
 
 Status WaitForBackfillSatisfyCondition(
@@ -142,7 +139,7 @@ Status WaitForBackfillSafeTimeOn(
     const client::YBTableName& table_name,
     MonoDelta max_wait = MonoDelta::FromSeconds(60)) {
   return WaitForBackfillSafeTimeOn(
-      cluster->GetMasterProxy<master::MasterDdlProxy>(), table_name, max_wait);
+      cluster->GetLeaderMasterProxy<master::MasterDdlProxy>(), table_name, max_wait);
 }
 
 Status WaitForBackfillSafeTimeOn(
@@ -150,9 +147,7 @@ Status WaitForBackfillSafeTimeOn(
     const TableId& table_id,
     MonoDelta max_wait = MonoDelta::FromSeconds(60)) {
   return WaitForBackfillSafeTimeOn(
-      cluster->GetMasterProxy<master::MasterDdlProxy>(), table_id, max_wait);
+      cluster->GetLeaderMasterProxy<master::MasterDdlProxy>(), table_id, max_wait);
 }
 
 }  // namespace yb
-
-#endif  // YB_INTEGRATION_TESTS_BACKFILL_TEST_UTIL_H

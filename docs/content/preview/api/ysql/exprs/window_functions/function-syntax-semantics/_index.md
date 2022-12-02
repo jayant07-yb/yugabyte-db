@@ -11,14 +11,9 @@ menu:
     weight: 30
 aliases:
   - /preview/api/ysql/exprs/window_functions
-isTocNested: true
-showAsideToc: true
+type: indexpage
+showRightNav: true
 ---
-**On this page**<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Aggregate function variants](./#aggregate-function-variants)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[`frame_clause` sensitivity](./#frame-clause-sensitivity)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Window functions that return an `int` or `double precision` value as a "classifier" of the position of the row within the window](./#window-functions-that-return-an-int-or-double-precision-value-as-a-classifier-of-the-rank-of-the-row-within-its-window)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Window functions that return columns of another row within the window](./#window-functions-that-return-column-s-of-another-row-within-the-window)
 
 The two tables at the end classify the eleven built-in window functions into two groups according to their general common characteristics.
 

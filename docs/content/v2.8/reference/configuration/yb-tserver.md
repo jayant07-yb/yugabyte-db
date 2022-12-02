@@ -8,8 +8,7 @@ menu:
     identifier: yb-tserver
     parent: configuration
     weight: 2440
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Use the `yb-tserver` binary and its flags to configure the [YB-TServer](../../../architecture/concepts/yb-tserver/) server. The `yb-tserver` executable file is located in the `bin` directory of YugabyteDB home.
@@ -26,7 +25,7 @@ yb-tserver [ flags ]
 $ ./bin/yb-tserver \
 --tserver_master_addrs 172.151.17.130:7100,172.151.17.220:7100,172.151.17.140:7100 \
 --rpc_bind_addresses 172.151.17.130 \
---start_pgsql_proxy \
+--enable_ysql \
 --fs_data_dirs "/home/centos/disk1,/home/centos/disk2" &
 ```
 
@@ -174,6 +173,24 @@ The monitoring web server home directory..
 
 Default: The `www` directory in the YugabyteDB home directory.
 
+##### --webserver_certificate_file
+
+Location of the SSL certificate file (in .pem format) to use for the web server. If empty, SSL is not enabled for the web server.
+
+Default: `""`
+
+##### --webserver_authentication_domain
+
+Domain used for .htpasswd authentication. This should be used in conjunction with [`--webserver_password_file`](#webserver-password-file).
+
+Default: `""`
+
+##### --webserver_password_file
+
+Location of .htpasswd file containing usernames and hashed passwords, for authentication to the web server.
+
+Default: `""`
+
 ---
 
 ### Logging flags
@@ -183,18 +200,6 @@ Default: The `www` directory in the YugabyteDB home directory.
 The directory to write `yb-tserver` log files.
 
 Default: Same as [`--fs_data_dirs`](#fs-data-dirs)
-
-##### --logemaillevel
-
-Email log messages logged at this level, or higher. Values: `0` (all), 1, 2, `3` (FATAL), `999` (none)
-
-Default: `999`
-
-##### --logmailer
-
-The mailer used to send logging email messages.
-
-Default: `"/bin/mail"`
 
 ##### --logtostderr
 
@@ -230,11 +235,7 @@ Default: `false`
 
 ### Raft flags
 
-{{< note title="Note" >}}
-
-Ensure that values used for Raft and the write ahead log (WAL) in `yb-tserver` configurations match the values in `yb-master` configurations.
-
-{{< /note >}}
+For a typical deployment, values used for Raft and the write ahead log (WAL) flags in `yb-tserver` configurations should match the values in [yb-master](../yb-master/#raft-flags) configurations.
 
 ##### --follower_unavailable_considered_failed_sec
 
@@ -255,6 +256,16 @@ The maximum heartbeat periods that the leader can fail to heartbeat in before th
 For read replica clusters, set the value to `10` in all `yb-tserver` and `yb-master` configurations.  Because the data is globally replicated, RPC latencies are higher. Use this flag to increase the failure detection interval in such a higher RPC latency deployment.
 
 Default: `6`
+
+##### --leader_lease_duration_ms
+
+The leader lease duration, in milliseconds. A leader keeps establishing a new lease or extending the existing one with every consensus update. A new server is not allowed to serve as a leader (that is, serve up-to-date read requests or acknowledge write requests) until a lease of this duration has definitely expired on the old leader's side, or the old leader has explicitly acknowledged the new leader's lease.
+
+This lease allows the leader to safely serve reads for the duration of its lease, even during a network partition. For more information, refer to [Leader leases](../../../architecture/transactions/single-row-transactions/#leader-leases-reading-the-latest-data-in-case-of-a-network-partition).
+
+Leader lease duration should be longer than the heartbeat interval, and less than the multiple of `--leader_failure_max_missed_heartbeat_periods` multiplied by `--raft_heartbeat_interval_ms`.
+
+Default: `2000`
 
 ##### --max_stale_read_bound_time_ms
 
@@ -397,7 +408,7 @@ The following flags support the use of the [YSQL API](../../../api/ysql/).
 
 ##### --enable_ysql
 
-Enables the YSQL API. Replaces the deprecated `--start_pgsql_proxy` flag.
+Enables the YSQL API.
 
 Default: `true`
 
@@ -473,7 +484,19 @@ To see the current values in the `ysql_hba.conf` file, run the `SHOW hba_file;` 
 
 ##### --ysql_pg_conf
 
-Comma-separated list of PostgreSQL setting assignments.
+Deprecated. Use `--ysql_pg_conf_csv` instead.
+
+##### --ysql_pg_conf_csv
+
+Comma-separated list of PostgreSQL server configuration parameters that is appended to the `postgresql.conf` file.
+
+For example:
+
+```sh
+--ysql_pg_conf_csv="suppress_nonpg_logs=true,log_connections=on"
+```
+
+For information on available PostgreSQL server configuration parameters, refer to [Server Configuration](https://www.postgresql.org/docs/11/runtime-config.html) in the PostgreSQL documentation.
 
 ##### --ysql_timezone
 
@@ -615,11 +638,29 @@ Default: `11000`
 
 ### Performance flags
 
+Use the following two flags to select the SSTable compression type.
+
 ##### --enable_ondisk_compression
 
-Enable Snappy compression at the cluster level.
+Enable SSTable compression at the cluster level.
 
 Default: `true`
+
+##### --compression_type
+
+Change the SSTable compression type. The valid compression types are `Snappy`, `Zlib`, `LZ4`, and `NoCompression`.
+
+Default: `Snappy`
+
+{{< note title="Note" >}}
+
+If you select an invalid option, the cluster will not come up.
+
+If you change this flag, the change takes effect after you restart the cluster nodes.
+
+{{< /note >}}
+
+Changing this flag on an existing database is supported; a tablet can validly have SSTs with different compression types. Eventually, compaction will remove the old compression type files.
 
 ##### --regular_tablets_data_block_key_value_encoding
 
@@ -667,15 +708,17 @@ Default: `256MB`
 
 ### Network compression
 
-Use the following two gflags to configure RPC compression:
+Use the following two gflags to configure RPC compression.
 
 ##### --enable_stream_compression
 
-Controls whether YugabyteDB uses RPC compression. Valid values are `true` or `false`.
+Controls whether YugabyteDB uses RPC compression.
+
+Default: `true`
 
 ##### --stream_compression_algo
 
-Specifies which compression algorithm to use. Requires `enable_stream_compression` to be set to true. Valid values are:
+Specifies which RPC compression algorithm to use. Requires `enable_stream_compression` to be set to true. Valid values are:
 
 - 0: No compression (default value)
 - 1: Gzip
@@ -772,6 +815,32 @@ This flag requires a restart or rolling restart.
 Default: `DEFAULTS`
 
 For more information, refer to [SSL_CTX_set_cipher_list](https://www.openssl.org/docs/man1.1.1/man3/SSL_CTX_set_cipher_list.html) in the OpenSSL documentation.
+
+##### --ssl_protocols
+
+Specifies an explicit allow-list of TLS protocols for YugabyteDB's internal RPC communication.
+
+Default: An empty string, which is equivalent to allowing all protocols except "ssl2" and "ssl3".
+
+You can pass a comma-separated list of strings, where the strings can be one of "ssl2", "ssl3", "tls10", "tls11", "tls12", and "tls13".
+
+You can set the TLS version for node-to-node and client-node communication. To enforce TLS 1.2, set the flag to tls12 as follows:
+
+```sh
+--ssl_protocols = tls12
+```
+
+To specify a _minimum_ TLS version of 1.2, for example, the flag needs to be set to tls12, tls13, and all available subsequent versions.
+
+```sh
+--ssl_protocols = tls12,tls13
+```
+
+In addition, as this setting does not propagate to PostgreSQL, it is recommended that you specify the minimum TLS version (`ssl_min_protocol_version`) for PostgreSQL by setting the [`ysql_pg_conf_csv`](#ysql-pg-conf-csv) flag as follows:
+
+```sh
+--ysql_pg_conf_csv="ssl_min_protocol_version=TLSv1.2"
+```
 
 ---
 

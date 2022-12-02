@@ -6,13 +6,13 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2065
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`FLUSHDB`</b><br>
+**`FLUSHDB`**
+
 This command deletes all keys from a database.
 
 This functionality can be disabled by setting the yb-tserver `--yedis_enable_flush` flag to `false`.

@@ -6,13 +6,13 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2061
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`EXPIRE key timeout`</b><br>
+**`EXPIRE key timeout`**
+
 Set a timeout on key (in seconds). After the timeout has expired, the key will automatically be deleted.
 
 ## Return value

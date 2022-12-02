@@ -41,7 +41,6 @@ public class CloudBootstrap extends CloudTaskBase {
     public static Params fromProvider(Provider provider) {
       Params taskParams = new Params();
       taskParams.airGapInstall = provider.airGapInstall;
-      taskParams.customHostCidrs = provider.customHostCidrs;
       taskParams.destVpcId = provider.destVpcId;
       taskParams.hostVpcId = provider.hostVpcId;
       taskParams.hostVpcRegion = provider.hostVpcRegion;
@@ -53,7 +52,7 @@ public class CloudBootstrap extends CloudTaskBase {
       taskParams.overrideKeyValidate = provider.overrideKeyValidate;
       taskParams.setUpChrony = provider.setUpChrony;
       taskParams.ntpServers = provider.ntpServers;
-      taskParams.showSetUpChrony = true; // For all new providers, we should show setUpChrony
+      taskParams.showSetUpChrony = provider.showSetUpChrony;
       taskParams.perRegionMetadata =
           provider
               .regions
@@ -72,7 +71,6 @@ public class CloudBootstrap extends CloudTaskBase {
       // Custom CIDR to use for the VPC, if YB is creating it.
       // Default: chosen by YB.
       // Required: False.
-      // TODO: Remove. This is not used currently.
       public String vpcCidr;
 
       // Custom map from AZ name to Subnet ID for AWS.
@@ -158,7 +156,7 @@ public class CloudBootstrap extends CloudTaskBase {
     public boolean airGapInstall = false;
 
     // Port to open for connections on the instance.
-    public Integer sshPort = 54422;
+    public Integer sshPort = 22;
 
     // Whether provider should validate a custom KeyPair
     // Default: false.
@@ -166,16 +164,18 @@ public class CloudBootstrap extends CloudTaskBase {
 
     public String hostVpcId = null;
     public String hostVpcRegion = null;
-    public List<String> customHostCidrs = new ArrayList<>();
-    // TODO(bogdan): only used/needed for GCP.
     public String destVpcId = null;
 
+    // Dictates whether or not NTP should be configured on newly provisioned nodes.
     public boolean setUpChrony = false;
+
+    // Dictates which NTP servers should be configured on newly provisioned nodes.
     public List<String> ntpServers = new ArrayList<>();
 
-    // Dictates whether or not to show the set up NTP option in the provider UI
-    // False by default so the old providers can continue to show useTimeSync
-    public boolean showSetUpChrony = false;
+    // Indicates whether the provider was created before or after PLAT-3009.
+    // True if it was created after, else it was created before.
+    // Dictates whether or not to show the set up NTP option in the provider UI.
+    public boolean showSetUpChrony = true;
 
     // Whether or not task is a pure region add.
     // This dictates whether the task skips the initialization and bootstrapping of the cloud.

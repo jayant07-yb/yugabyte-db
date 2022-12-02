@@ -32,20 +32,20 @@
 
 #include "yb/consensus/replica_state.h"
 
-#include <gflags/gflags.h>
-
 #include "yb/consensus/consensus.h"
+#include "yb/consensus/consensus.messages.h"
 #include "yb/consensus/consensus_context.h"
 #include "yb/consensus/consensus_round.h"
 #include "yb/consensus/log_util.h"
 #include "yb/consensus/quorum_util.h"
 
 #include "yb/gutil/strings/substitute.h"
+#include "yb/gutil/casts.h"
 
 #include "yb/util/atomic.h"
 #include "yb/util/debug/trace_event.h"
 #include "yb/util/enums.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/format.h"
 #include "yb/util/logging.h"
 #include "yb/util/opid.h"
@@ -59,7 +59,7 @@
 
 using namespace std::literals;
 
-DEFINE_int32(inject_delay_commit_pre_voter_to_voter_secs, 0,
+DEFINE_UNKNOWN_int32(inject_delay_commit_pre_voter_to_voter_secs, 0,
              "Amount of time to delay commit of a PRE_VOTER to VOTER transition. To be used for "
              "unit testing purposes only.");
 TAG_FLAG(inject_delay_commit_pre_voter_to_voter_secs, unsafe);
@@ -193,17 +193,31 @@ LeaderState ReplicaState::GetLeaderState(bool allow_stale) const {
     }
   }
 
-  LeaderState result = {cache.status()};
-  if (result.status == LeaderStatus::LEADER_AND_READY) {
-    result.term = cache.extra_value();
-  } else {
-    if (result.status == LeaderStatus::LEADER_BUT_OLD_LEADER_MAY_HAVE_LEASE) {
-      result.remaining_old_leader_lease = MonoDelta::FromMicroseconds(cache.extra_value());
-    }
-    result.MakeNotReadyLeader(result.status);
+  switch (cache.status()) {
+    case LeaderStatus::LEADER_AND_READY:
+      return LeaderState {
+        .status = cache.status(),
+        .term = static_cast<int64_t>(cache.extra_value()),
+        .remaining_old_leader_lease = MonoDelta(),
+      };
+    case LeaderStatus::LEADER_BUT_OLD_LEADER_MAY_HAVE_LEASE:
+      return LeaderState {
+        .status = cache.status(),
+        .term = OpId::kUnknownTerm,
+        .remaining_old_leader_lease = MonoDelta::FromMicroseconds(cache.extra_value()),
+      };
+    case LeaderStatus::LEADER_BUT_NO_MAJORITY_REPLICATED_LEASE:
+      FALLTHROUGH_INTENDED;
+    case LeaderStatus::LEADER_BUT_NO_OP_NOT_COMMITTED:
+      FALLTHROUGH_INTENDED;
+    case LeaderStatus::NOT_LEADER:
+      return LeaderState {
+        .status = cache.status(),
+        .term = OpId::kUnknownTerm,
+        .remaining_old_leader_lease = MonoDelta(),
+      };
   }
-
-  return result;
+  FATAL_INVALID_ENUM_VALUE(LeaderStatus, cache.status());
 }
 
 LeaderState ReplicaState::GetLeaderStateUnlocked(
@@ -325,7 +339,8 @@ Status ReplicaState::CheckNoConfigChangePendingUnlocked() const {
   return Status::OK();
 }
 
-Status ReplicaState::SetPendingConfigUnlocked(const RaftConfigPB& new_config) {
+Status ReplicaState::SetPendingConfigUnlocked(
+    const RaftConfigPB& new_config, const OpId& config_op_id) {
   DCHECK(IsLocked());
   RETURN_NOT_OK_PREPEND(VerifyRaftConfig(new_config, UNCOMMITTED_QUORUM),
                         "Invalid config to set as pending");
@@ -340,10 +355,15 @@ Status ReplicaState::SetPendingConfigUnlocked(const RaftConfigPB& new_config) {
                           << cmeta_->pending_config().ShortDebugString() << "; "
                           << "New pending config: " << new_config.ShortDebugString();
   }
-  cmeta_->set_pending_config(new_config);
+  cmeta_->set_pending_config(new_config, config_op_id);
   CoarseTimePoint now;
   RefreshLeaderStateCacheUnlocked(&now);
   return Status::OK();
+}
+
+Status ReplicaState::SetPendingConfigOpIdUnlocked(const OpId& config_op_id) {
+  DCHECK(IsLocked());
+  return cmeta_->set_pending_config_op_id(config_op_id);
 }
 
 Status ReplicaState::ClearPendingConfigUnlocked() {
@@ -372,25 +392,26 @@ Status ReplicaState::SetCommittedConfigUnlocked(const RaftConfigPB& config_to_co
   RETURN_NOT_OK_PREPEND(
       VerifyRaftConfig(config_to_commit, COMMITTED_QUORUM), "Invalid config to set as committed");
 
+  // Only allow to have no pending config here when we want to do unsafe config change, see
+  // https://github.com/yugabyte/yugabyte-db/commit/9305a202b59eb805f80492c1b7412b0fbfd1ce76.
+  DCHECK(cmeta_->has_pending_config() || config_to_commit.unsafe_config_change());
   // Compare committed with pending configuration, ensure they are the same.
   // In the event of an unsafe config change triggered by an administrator,
   // it is possible that the config being committed may not match the pending config
   // because unsafe config change allows multiple pending configs to exist.
   // Therefore we only need to validate that 'config_to_commit' matches the pending config
   // if the pending config does not have its 'unsafe_config_change' flag set.
-  if (IsConfigChangePendingUnlocked()) {
+  if (!config_to_commit.unsafe_config_change()) {
     const RaftConfigPB& pending_config = GetPendingConfigUnlocked();
-    if (!pending_config.unsafe_config_change()) {
-      // Pending will not have an opid_index, so ignore that field.
-      RaftConfigPB config_no_opid = config_to_commit;
-      config_no_opid.clear_opid_index();
-      // Quorums must be exactly equal, even w.r.t. peer ordering.
-      CHECK_EQ(GetPendingConfigUnlocked().SerializeAsString(), config_no_opid.SerializeAsString())
-          << Substitute(
-                 "New committed config must equal pending config, but does not. "
-                 "Pending config: $0, committed config: $1",
-                 pending_config.ShortDebugString(), config_to_commit.ShortDebugString());
-    }
+    // Pending will not have an opid_index, so ignore that field.
+    RaftConfigPB config_no_opid = config_to_commit;
+    config_no_opid.clear_opid_index();
+    // Quorums must be exactly equal, even w.r.t. peer ordering.
+    CHECK_EQ(GetPendingConfigUnlocked().SerializeAsString(), config_no_opid.SerializeAsString())
+        << Substitute(
+               "New committed config must equal pending config, but does not. "
+               "Pending config: $0, committed config: $1",
+               pending_config.ShortDebugString(), config_to_commit.ShortDebugString());
   }
   cmeta_->set_committed_config(config_to_commit);
   cmeta_->clear_pending_config();
@@ -645,13 +666,14 @@ Status ReplicaState::AddPendingOperation(const ConsensusRoundPtr& round, Operati
 
   // Mark pending configuration.
   if (PREDICT_FALSE(op_type == CHANGE_CONFIG_OP)) {
-    DCHECK(round->replicate_msg()->change_config_record().has_old_config());
-    DCHECK(round->replicate_msg()->change_config_record().old_config().has_opid_index());
-    DCHECK(round->replicate_msg()->change_config_record().has_new_config());
-    DCHECK(!round->replicate_msg()->change_config_record().new_config().has_opid_index());
+    const auto& change_config_record = round->replicate_msg()->change_config_record();
+    DCHECK(change_config_record.has_old_config());
+    DCHECK(change_config_record.old_config().has_opid_index());
+    DCHECK(change_config_record.has_new_config());
+    DCHECK(!change_config_record.new_config().has_opid_index());
     if (mode == OperationMode::kFollower) {
-      const RaftConfigPB& old_config = round->replicate_msg()->change_config_record().old_config();
-      const RaftConfigPB& new_config = round->replicate_msg()->change_config_record().new_config();
+      const auto& old_config = change_config_record.old_config();
+      const auto& new_config = change_config_record.new_config();
       // The leader has to mark the configuration as pending before it gets here
       // because the active configuration affects the replication queue.
       // Do one last sanity check.
@@ -666,14 +688,15 @@ Status ReplicaState::AddPendingOperation(const ConsensusRoundPtr& round, Operati
       // messages were delayed.
       const RaftConfigPB& committed_config = GetCommittedConfigUnlocked();
       if (round->replicate_msg()->id().index() > committed_config.opid_index()) {
-        CHECK_OK(SetPendingConfigUnlocked(new_config));
+        CHECK_OK(SetPendingConfigUnlocked(new_config.ToGoogleProtobuf(), round->id()));
       } else {
         LOG_WITH_PREFIX(INFO)
             << "Ignoring setting pending config change with OpId "
-            << round->replicate_msg()->id() << " because the committed config has OpId index "
-            << committed_config.opid_index() << ". The config change we are ignoring is: "
-            << "Old config: { " << old_config.ShortDebugString() << " }. "
-            << "New config: { " << new_config.ShortDebugString() << " }";
+            << OpId::FromPB(round->replicate_msg()->id())
+            << " because the committed config has OpId index " << committed_config.opid_index()
+            << ". The config change we are ignoring is: Old config: { "
+            << old_config.ShortDebugString() << " }. New config: { "
+            << new_config.ShortDebugString() << " }";
       }
     }
   } else if (op_type == WRITE_OP) {
@@ -942,10 +965,11 @@ Status ReplicaState::ApplyPendingOperationsUnlocked(
 }
 
 void ReplicaState::ApplyConfigChangeUnlocked(const ConsensusRoundPtr& round) {
-  DCHECK(round->replicate_msg()->change_config_record().has_old_config());
-  DCHECK(round->replicate_msg()->change_config_record().has_new_config());
-  RaftConfigPB old_config = round->replicate_msg()->change_config_record().old_config();
-  RaftConfigPB new_config = round->replicate_msg()->change_config_record().new_config();
+  const auto& change_config_record = round->replicate_msg()->change_config_record();
+  DCHECK(change_config_record.has_old_config());
+  DCHECK(change_config_record.has_new_config());
+  auto old_config = change_config_record.old_config().ToGoogleProtobuf();
+  auto new_config = change_config_record.new_config().ToGoogleProtobuf();
   DCHECK(old_config.has_opid_index());
   DCHECK(!new_config.has_opid_index());
 
@@ -1008,18 +1032,18 @@ bool ReplicaState::AreCommittedAndCurrentTermsSameUnlocked() const {
   return true;
 }
 
-void ReplicaState::UpdateLastReceivedOpIdUnlocked(const OpIdPB& op_id) {
+void ReplicaState::UpdateLastReceivedOpIdUnlocked(const OpId& op_id) {
   DCHECK(IsLocked());
   auto* trace = Trace::CurrentTrace();
-  DCHECK(last_received_op_id_.term <= op_id.term() && last_received_op_id_.index <= op_id.index())
+  DCHECK(last_received_op_id_.term <= op_id.term && last_received_op_id_.index <= op_id.index)
       << LogPrefix() << ": "
       << "Previously received OpId: " << last_received_op_id_
-      << ", updated OpId: " << op_id.ShortDebugString()
+      << ", updated OpId: " << op_id
       << ", Trace:" << std::endl << (trace ? trace->DumpToString(true) : "No trace found");
 
-  last_received_op_id_ = yb::OpId::FromPB(op_id);
-  last_received_op_id_current_leader_ = last_received_op_id_;
-  next_index_ = op_id.index() + 1;
+  last_received_op_id_ = op_id;
+  last_received_op_id_current_leader_ = op_id;
+  next_index_ = op_id.index + 1;
 }
 
 const yb::OpId& ReplicaState::GetLastReceivedOpIdUnlocked() const {
@@ -1307,9 +1331,21 @@ Result<MicrosTime> ReplicaState::MajorityReplicatedHtLeaseExpiration(
   return result;
 }
 
-void ReplicaState::SetMajorityReplicatedLeaseExpirationUnlocked(
+Status ReplicaState::SetMajorityReplicatedLeaseExpirationUnlocked(
     const MajorityReplicatedData& majority_replicated_data,
     EnumBitSet<SetMajorityReplicatedLeaseExpirationFlag> flags) {
+  if (!leader_no_op_committed_) {
+    // Don't setting leader lease until NoOp at current term is committed.
+    // If the older leader containing old, unreplicated operations is elected as leader again,
+    // when replicating old operations to current node, might have a too low hybrid time.
+    // See https://github.com/yugabyte/yugabyte-db/issues/14225 for more details.
+    return STATUS_FORMAT(IllegalState,
+                         "NoOp of current term is not committed "
+                         "(majority_replicated_lease_expiration_ = $0, "
+                         "majority_replicated_ht_lease_expiration_ = $1)",
+                         majority_replicated_lease_expiration_,
+                         majority_replicated_ht_lease_expiration_.load(std::memory_order_acquire));
+  }
   majority_replicated_lease_expiration_ = majority_replicated_data.leader_lease_expiration;
   majority_replicated_ht_lease_expiration_.store(majority_replicated_data.ht_lease_expiration,
                                                  std::memory_order_release);
@@ -1331,6 +1367,7 @@ void ReplicaState::SetMajorityReplicatedLeaseExpirationUnlocked(
   CoarseTimePoint now;
   RefreshLeaderStateCacheUnlocked(&now);
   cond_.notify_all();
+  return Status::OK();
 }
 
 uint64_t ReplicaState::OnDiskSize() const {

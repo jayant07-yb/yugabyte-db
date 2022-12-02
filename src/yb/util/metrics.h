@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_METRICS_H
-#define YB_UTIL_METRICS_H
+#pragma once
 
 /////////////////////////////////////////////////////
 // YB Metrics
@@ -247,7 +246,7 @@
 
 #include <boost/preprocessor/cat.hpp>
 #include <boost/preprocessor/stringize.hpp>
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 
 #include <gtest/gtest_prod.h>
 
@@ -497,15 +496,9 @@ class MetricRegistry {
   // See the MetricJsonOptions struct definition above for options changing the
   // output of this function.
   Status WriteAsJson(JsonWriter* writer,
-                     const std::vector<std::string>& requested_metrics,
+                     const MetricEntityOptions& entity_options,
                      const MetricJsonOptions& opts) const;
 
-  // Writes metrics in this registry to 'writer'.
-  //
-  // See the MetricPrometheusOptions struct definition above for options changing the
-  // output of this function.
-  Status WriteForPrometheus(PrometheusWriter* writer,
-                     const MetricPrometheusOptions& opts) const;
   // Writes metrics in this registry to 'writer'.
   //
   // 'requested_metrics' is a set of substrings to match metric names against,
@@ -517,8 +510,8 @@ class MetricRegistry {
   // See the MetricPrometheusOptions struct definition above for options changing the
   // output of this function.
   Status WriteForPrometheus(PrometheusWriter* writer,
-                     const std::vector<std::string>& requested_metrics,
-                     const MetricPrometheusOptions& opts) const;
+                            const MetricEntityOptions& entity_options,
+                            const MetricPrometheusOptions& opts) const;
 
   // For each registered entity, retires orphaned metrics. If an entity has no more
   // metrics and there are no external references, entities are removed as well.
@@ -546,6 +539,8 @@ class MetricRegistry {
     SharedLock<std::shared_timed_mutex> l(tablets_shutdown_lock_);
     return tablets_shutdown_.find(id) != tablets_shutdown_.end();
   }
+
+  void get_all_prototypes(std::set<std::string>&) const;
 
  private:
   typedef std::unordered_map<std::string, scoped_refptr<MetricEntity> > EntityMap;
@@ -965,7 +960,7 @@ class AtomicMillisLag : public MillisLag {
   }
 
   Status WriteAsJson(JsonWriter* w,
-                             const MetricJsonOptions& opts) const override;
+                     const MetricJsonOptions& opts) const override;
 
   Status WriteForPrometheus(
       PrometheusWriter* writer, const MetricEntity::AttributeMap& attr,
@@ -1219,5 +1214,3 @@ class OwningHistogramPrototype : public OwningMetricCtorArgs, public HistogramPr
 void EscapeMetricNameForPrometheus(std::string *id);
 
 } // namespace yb
-
-#endif // YB_UTIL_METRICS_H

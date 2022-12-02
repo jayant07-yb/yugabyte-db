@@ -12,15 +12,19 @@
 // under the License.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_PGGATE_PG_DML_H_
-#define YB_YQL_PGGATE_PG_DML_H_
+#pragma once
 
-#include <boost/unordered_map.hpp>
+#include <optional>
+#include <unordered_map>
+
+#include "yb/gutil/stl_util.h"
 
 #include "yb/yql/pggate/pg_doc_op.h"
 #include "yb/yql/pggate/pg_session.h"
 #include "yb/yql/pggate/pg_statement.h"
 #include "yb/yql/pggate/pg_table.h"
+
+DECLARE_bool(TEST_enable_db_catalog_version_mode);
 
 namespace yb {
 namespace pggate {
@@ -39,13 +43,13 @@ class PgDml : public PgStatement {
 
   // Append a filter condition.
   // Supported expression kind is serialized Postgres expression
-  Status AppendQual(PgExpr *qual);
+  Status AppendQual(PgExpr *qual, bool is_primary);
 
   // Append a column reference.
   // If any serialized Postgres expressions appended to other lists require explicit addition
   // of their column references. Those column references should have Postgres type information.
   // Other PgExpr kinds are automatically scanned and their column references are appended.
-  Status AppendColumnRef(PgExpr *colref);
+  Status AppendColumnRef(PgExpr *colref, bool is_primary);
 
   // Prepare column for both ends.
   // - Prepare protobuf to communicate with DocDB.
@@ -70,10 +74,10 @@ class PgDml : public PgStatement {
 
   // Fetch a row and return it to Postgres layer.
   Status Fetch(int32_t natts,
-                       uint64_t *values,
-                       bool *isnulls,
-                       PgSysColumns *syscols,
-                       bool *has_data);
+               uint64_t *values,
+               bool *isnulls,
+               PgSysColumns *syscols,
+               bool *has_data);
 
   // Returns TRUE if docdb replies with more data.
   Result<bool> FetchDataFromServer();
@@ -81,7 +85,7 @@ class PgDml : public PgStatement {
   // Returns TRUE if desired row is found.
   Result<bool> GetNextRow(PgTuple *pg_tuple);
 
-  virtual void SetCatalogCacheVersion(uint64_t catalog_cache_version) = 0;
+  virtual void SetCatalogCacheVersion(std::optional<PgOid> db_oid, uint64_t version) = 0;
 
   // Get column info on whether the column 'attr_num' is a hash key, a range
   // key, or neither.
@@ -92,6 +96,12 @@ class PgDml : public PgStatement {
   bool has_doc_op() const {
     return doc_op_ != nullptr;
   }
+
+  // RPC stats for EXPLAIN ANALYZE
+  void GetAndResetReadRpcStats(uint64_t* reads, uint64_t* read_wait);
+
+  void GetAndResetReadRpcStats(uint64_t* reads, uint64_t* read_wait,
+                               uint64_t* tbl_reads, uint64_t* tbl_read_wait);
 
  protected:
   // Method members.
@@ -146,6 +156,19 @@ class PgDml : public PgStatement {
 
   // Allocate a PgsqlColRefPB entriy in the protobuf request
   virtual LWPgsqlColRefPB *AllocColRefPB() = 0;
+
+  template<class Request>
+  static void DoSetCatalogCacheVersion(
+      Request* req, std::optional<PgOid> db_oid, uint64_t version) {
+    auto& request = *DCHECK_NOTNULL(req);
+    if (db_oid) {
+      DCHECK(FLAGS_TEST_enable_db_catalog_version_mode);
+      request.set_ysql_db_catalog_version(version);
+      request.set_ysql_db_oid(*db_oid);
+    } else {
+      request.set_ysql_catalog_version(version);
+    }
+  }
 
   // -----------------------------------------------------------------------------------------------
   // Data members that define the DML statement.
@@ -220,7 +243,11 @@ class PgDml : public PgStatement {
   // * Bind values are used to identify the selected rows to be operated on.
   // * Set values are used to hold columns' new values in the selected rows.
   bool ybctid_bind_ = false;
-  boost::unordered_map<LWPgsqlExpressionPB*, PgExpr*> expr_binds_;
+
+  template<class K, class V>
+  using PointerMap = std::unordered_map<K*, V, PointerHash<K>, PointerEqual<K>>;
+
+  PointerMap<LWPgsqlExpressionPB, PgExpr*> expr_binds_;
   std::unordered_map<LWPgsqlExpressionPB*, PgExpr*> expr_assigns_;
 
   // Used for colocated TRUNCATE that doesn't bind any columns.
@@ -250,5 +277,3 @@ class PgDml : public PgStatement {
 
 }  // namespace pggate
 }  // namespace yb
-
-#endif // YB_YQL_PGGATE_PG_DML_H_

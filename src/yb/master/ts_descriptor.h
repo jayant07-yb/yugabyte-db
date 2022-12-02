@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_MASTER_TS_DESCRIPTOR_H
-#define YB_MASTER_TS_DESCRIPTOR_H
+#pragma once
 
 #include <shared_mutex>
 
@@ -98,26 +97,28 @@ class TSDescriptor {
 
   static std::string generate_placement_id(const CloudInfoPB& ci);
 
-  virtual ~TSDescriptor();
+  virtual ~TSDescriptor() = default;
 
   // Set the last-heartbeat time to now.
   void UpdateHeartbeat(const TSHeartbeatRequestPB* req);
 
-  // Return the amount of time since the last heartbeat received
-  // from this TS.
+  // Return the amount of time since the last heartbeat received from this TS.
   MonoDelta TimeSinceHeartbeat() const;
+  MonoTime LastHeartbeatTime() const;
 
   // Register this tablet server.
   Status Register(const NodeInstancePB& instance,
-                          const TSRegistrationPB& registration,
-                          CloudInfoPB local_cloud_info,
-                          rpc::ProxyCache* proxy_cache);
+                  const TSRegistrationPB& registration,
+                  CloudInfoPB local_cloud_info,
+                  rpc::ProxyCache* proxy_cache);
 
   const std::string &permanent_uuid() const { return permanent_uuid_; }
   int64_t latest_seqno() const;
 
   bool has_tablet_report() const;
   void set_has_tablet_report(bool has_report);
+
+  bool has_faulty_drive() const;
 
   bool registered_through_heartbeat() const;
 
@@ -284,7 +285,9 @@ class TSDescriptor {
     removed_.store(removed, std::memory_order_release);
   }
 
-  explicit TSDescriptor(std::string perm_id);
+  explicit TSDescriptor(
+      std::string perm_id,
+      RegisteredThroughHeartbeat registered_through_heartbeat = RegisteredThroughHeartbeat::kTrue);
 
   std::size_t NumTasks() const;
 
@@ -306,7 +309,7 @@ class TSDescriptor {
  private:
   template <class TProxy>
   Status GetOrCreateProxy(std::shared_ptr<TProxy>* result,
-                                  std::shared_ptr<TProxy>* result_cache);
+                          std::shared_ptr<TProxy>* result_cache);
 
   FRIEND_TEST(TestTSDescriptor, TestReplicaCreationsDecay);
   template<class ClusterLoadBalancerClass> friend class TestLoadBalancerBase;
@@ -369,6 +372,9 @@ class TSDescriptor {
   // Set to true once this instance has reported all of its tablets.
   bool has_tablet_report_;
 
+  // Tablet server has at least one faulty drive.
+  bool has_faulty_drive_;
+
   // The number of times this tablet server has recently been selected to create a
   // tablet replica. This value decays back to 0 over time.
   double recent_replica_creations_;
@@ -402,7 +408,7 @@ class TSDescriptor {
 
   // Did this tserver register by heartbeating through master. If false, we registered through
   // peer's Raft config.
-  RegisteredThroughHeartbeat registered_through_heartbeat_ = RegisteredThroughHeartbeat::kTrue;
+  const RegisteredThroughHeartbeat registered_through_heartbeat_;
 
   DISALLOW_COPY_AND_ASSIGN(TSDescriptor);
 };
@@ -439,5 +445,3 @@ struct cloud_hash {
 };
 } // namespace master
 } // namespace yb
-
-#endif // YB_MASTER_TS_DESCRIPTOR_H

@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_TABLET_RUNNING_TRANSACTION_H
-#define YB_TABLET_RUNNING_TRANSACTION_H
+#pragma once
 
 #include <memory>
 
@@ -82,8 +81,12 @@ class RunningTransaction : public std::enable_shared_from_this<RunningTransactio
     return local_commit_time_;
   }
 
-  const AbortedSubTransactionSet& local_commit_aborted_subtxn_set() const {
-    return local_commit_aborted_subtxn_set_;
+  const AbortedSubTransactionSet& last_known_aborted_subtxn_set() const {
+    return last_known_aborted_subtxn_set_;
+  }
+
+  const bool external_transaction() const {
+    return metadata_.external_transaction;
   }
 
   void SetLocalCommitData(HybridTime time, const AbortedSubTransactionSet& aborted_subtxn_set);
@@ -101,7 +104,7 @@ class RunningTransaction : public std::enable_shared_from_this<RunningTransactio
              std::unique_lock<std::mutex>* lock);
 
   std::string ToString() const;
-  void ScheduleRemoveIntents(const RunningTransactionPtr& shared_self);
+  void ScheduleRemoveIntents(const RunningTransactionPtr& shared_self, RemoveReason reason);
 
   // Sets apply state for this transaction.
   // If data is not null, then apply intents task will be initiated if was not previously started.
@@ -109,10 +112,10 @@ class RunningTransaction : public std::enable_shared_from_this<RunningTransactio
                     const TransactionApplyData* data = nullptr,
                     ScopedRWOperation* operation = nullptr);
 
-  void SetOpId(const OpId& id);
+  void SetApplyOpId(const OpId& id);
 
-  OpId GetOpId() {
-    return opId;
+  const OpId& GetApplyOpId() {
+    return apply_record_op_id_;
   }
 
   // Whether this transactions is currently applying intents.
@@ -122,11 +125,14 @@ class RunningTransaction : public std::enable_shared_from_this<RunningTransactio
 
   std::string LogPrefix() const;
 
+  const TabletId& status_tablet() const;
+
  private:
   static boost::optional<TransactionStatus> GetStatusAt(
       HybridTime time,
       HybridTime last_known_status_hybrid_time,
-      TransactionStatus last_known_status);
+      TransactionStatus last_known_status,
+      bool external_transaction);
 
   void SendStatusRequest(int64_t serial_no, const RunningTransactionPtr& shared_self);
 
@@ -165,17 +171,17 @@ class RunningTransaction : public std::enable_shared_from_this<RunningTransactio
   RunningTransactionContext& context_;
   RemoveIntentsTask remove_intents_task_;
   HybridTime local_commit_time_ = HybridTime::kInvalid;
-  AbortedSubTransactionSet local_commit_aborted_subtxn_set_;
 
   TransactionStatus last_known_status_ = TransactionStatus::CREATED;
   HybridTime last_known_status_hybrid_time_ = HybridTime::kMin;
+  AbortedSubTransactionSet last_known_aborted_subtxn_set_;
   std::vector<StatusRequest> status_waiters_;
   rpc::Rpcs::Handle get_status_handle_;
   rpc::Rpcs::Handle abort_handle_;
   std::vector<TransactionStatusCallback> abort_waiters_;
 
   TransactionApplyData apply_data_;
-  OpId opId;
+  OpId apply_record_op_id_;
   docdb::ApplyTransactionState apply_state_;
   // Atomic that reflects active state, required to provide concurrent access to ProcessingApply.
   std::atomic<bool> processing_apply_{false};
@@ -189,5 +195,3 @@ Status MakeAbortedStatus(const TransactionId& id);
 
 } // namespace tablet
 } // namespace yb
-
-#endif // YB_TABLET_RUNNING_TRANSACTION_H

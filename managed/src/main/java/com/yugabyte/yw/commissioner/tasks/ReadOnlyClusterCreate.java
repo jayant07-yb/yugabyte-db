@@ -10,8 +10,6 @@
 
 package com.yugabyte.yw.commissioner.tasks;
 
-import static com.yugabyte.yw.forms.UniverseTaskParams.isFirstTryForTask;
-
 import com.google.common.collect.ImmutableMap;
 import com.yugabyte.yw.commissioner.BaseTaskDependencies;
 import com.yugabyte.yw.commissioner.ITask.Abortable;
@@ -48,7 +46,10 @@ public class ReadOnlyClusterCreate extends UniverseDefinitionTaskBase {
           lockUniverseForUpdate(
               taskParams().expectedUniverseVersion,
               u -> {
-                if (isFirstTryForTask(taskParams())) {
+                if (isFirstTry()) {
+                  // Fetch the task params from the DB to start from fresh on retry.
+                  // Otherwise, some operations like name assignment can fail.
+                  fetchTaskDetailsFromDB();
                   preTaskActions(u);
                   // Set all the in-memory node names.
                   setNodeNames(u);
@@ -103,6 +104,14 @@ public class ReadOnlyClusterCreate extends UniverseDefinitionTaskBase {
       // Start the tservers in the clusters.
       createStartTserverProcessTasks(newTservers);
 
+      // Start ybc process on all the nodes
+      if (taskParams().enableYbc) {
+        createStartYbcProcessTasks(
+            newTservers, universe.getUniverseDetails().getPrimaryCluster().userIntent.useSystemd);
+        createUpdateYbcTask(taskParams().ybcSoftwareVersion)
+            .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
+      }
+
       // Set the node state to live.
       createSetNodeStateTasks(newTservers, NodeDetails.NodeState.Live)
           .setSubTaskGroupType(SubTaskGroupType.ConfigureUniverse);
@@ -137,6 +146,7 @@ public class ReadOnlyClusterCreate extends UniverseDefinitionTaskBase {
                         .nodeDetailsSet
                         .stream()
                         .allMatch(n -> n.ybPrebuiltAmi))));
+        universe.save();
       }
     }
     log.info("Finished {} task.", getName());

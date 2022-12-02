@@ -551,6 +551,8 @@ CREATE TABLE tab_with_unique (i int, UNIQUE (i));
 COMMIT;
 
 -- Test temp table/view are automatically dropped.
+-- TODO: Remove DISCARD TEMP after the fix of #14519
+DISCARD TEMP;
 \c yugabyte
 create temporary table temp_tab(a int);
 create temporary view temp_view as select * from temp_tab;
@@ -569,3 +571,26 @@ BEGIN
 END$$;
 
 SELECT * FROM tbl_as_1;
+
+-- Test EXPLAIN ANALYZE on a table containing secondary index with a wide column.
+-- Use EXECUTE to hide the output since it won't be stable.
+CREATE TABLE wide_table (id INT, data TEXT);
+CREATE INDEX wide_table_idx ON wide_table(id, data);
+INSERT INTO wide_table (id, data) VALUES (10, REPEAT('1234567890', 1000000));
+DO $$
+BEGIN
+	EXECUTE 'EXPLAIN ANALYZE SELECT data FROM wide_table WHERE id = 10';
+END$$;
+
+DROP TABLE wide_table;
+
+-- Apply the same check for varchar column
+CREATE TABLE wide_table (id INT, data VARCHAR);
+CREATE INDEX wide_table_idx ON wide_table(id, data);
+INSERT INTO wide_table (id, data) VALUES (10, REPEAT('1234567890', 1000000));
+DO $$
+BEGIN
+	EXECUTE 'EXPLAIN ANALYZE SELECT data FROM wide_table WHERE id = 10';
+END$$;
+
+DROP TABLE wide_table;

@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_CLIENT_TABLE_CREATOR_H
-#define YB_CLIENT_TABLE_CREATOR_H
+#pragma once
 
 #include <boost/optional/optional.hpp>
 
@@ -69,6 +68,8 @@ class YBTableCreator {
   YBTableCreator& colocation_id(ColocationId colocation_id);
 
   YBTableCreator& tablespace_id(const std::string& tablespace_id);
+
+  YBTableCreator& is_matview(bool is_matview);
 
   YBTableCreator& matview_pg_table_id(const std::string& matview_pg_table_id);
 
@@ -218,6 +219,8 @@ class YBTableCreator {
   // The id of the tablespace to which this table is to be associated with.
   std::string tablespace_id_;
 
+  boost::optional<bool> is_matview_;
+
   std::string matview_pg_table_id_;
 
   const TransactionMetadata* txn_ = nullptr;
@@ -227,5 +230,3 @@ class YBTableCreator {
 
 } // namespace client
 } // namespace yb
-
-#endif // YB_CLIENT_TABLE_CREATOR_H

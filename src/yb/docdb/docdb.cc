@@ -28,7 +28,7 @@
 #include "yb/docdb/conflict_resolution.h"
 #include "yb/docdb/cql_operation.h"
 #include "yb/docdb/docdb-internal.h"
-#include "yb/docdb/docdb.pb.h"
+#include "yb/docdb/docdb.messages.h"
 #include "yb/docdb/docdb_debug.h"
 #include "yb/docdb/doc_kv_util.h"
 #include "yb/docdb/docdb_rocksdb_util.h"
@@ -52,7 +52,7 @@
 #include "yb/util/bytes_formatter.h"
 #include "yb/util/enums.h"
 #include "yb/util/fast_varint.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/logging.h"
 #include "yb/util/metrics.h"
 #include "yb/util/pb_util.h"
@@ -78,7 +78,7 @@ using strings::Substitute;
 
 using namespace std::placeholders;
 
-DEFINE_int32(cdc_max_stream_intent_records, 1000,
+DEFINE_UNKNOWN_int32(cdc_max_stream_intent_records, 1680,
              "Max number of intent records allowed in single cdc batch. ");
 
 namespace yb {
@@ -88,8 +88,8 @@ namespace {
 
 // key should be valid prefix of doc key, ending with some complete pritimive value or group end.
 Status ApplyIntent(RefCntPrefix key,
-                           const IntentTypeSet intent_types,
-                           LockBatchEntries *keys_locked) {
+                   const IntentTypeSet intent_types,
+                   LockBatchEntries *keys_locked) {
   // Have to strip kGroupEnd from end of key, because when only hash key is specified, we will
   // get two kGroupEnd at end of strong intent.
   size_t size = key.size();
@@ -122,7 +122,7 @@ struct DetermineKeysToLockResult {
 
 Result<DetermineKeysToLockResult> DetermineKeysToLock(
     const std::vector<std::unique_ptr<DocOperation>>& doc_write_ops,
-    const google::protobuf::RepeatedPtrField<KeyValuePairPB>& read_pairs,
+    const ArenaList<LWKeyValuePairPB>& read_pairs,
     const IsolationLevel isolation_level,
     const OperationKind operation_kind,
     const RowMarkType row_mark_type,
@@ -155,7 +155,7 @@ Result<DetermineKeysToLockResult> DetermineKeysToLock(
         return STATUS_FORMAT(Corruption, "Unable to decode key prefixes from: $0",
                              doc_path.as_slice().ToDebugHexString());
       }
-      // We will acquire strong lock on entire doc_path, so remove it from list of weak locks.
+      // We will acquire strong lock on the full doc_path, so remove it from list of weak locks.
       key_prefix_lengths.pop_back();
       auto partial_key = doc_path;
       // Acquire weak lock on empty key for transactional tables,
@@ -242,7 +242,7 @@ void FilterKeysToLock(LockBatchEntries *keys_locked) {
 
 Result<PrepareDocWriteOperationResult> PrepareDocWriteOperation(
     const std::vector<std::unique_ptr<DocOperation>>& doc_write_ops,
-    const google::protobuf::RepeatedPtrField<KeyValuePairPB>& read_pairs,
+    const ArenaList<LWKeyValuePairPB>& read_pairs,
     const scoped_refptr<Histogram>& write_lock_latency,
     const IsolationLevel isolation_level,
     const OperationKind operation_kind,
@@ -260,7 +260,7 @@ Result<PrepareDocWriteOperationResult> PrepareDocWriteOperation(
   VLOG_WITH_FUNC(4) << "determine_keys_to_lock_result=" << determine_keys_to_lock_result.ToString();
   if (determine_keys_to_lock_result.lock_batch.empty() && !write_transaction_metadata) {
     LOG(ERROR) << "Empty lock batch, doc_write_ops: " << yb::ToString(doc_write_ops)
-               << ", read pairs: " << yb::ToString(read_pairs);
+               << ", read pairs: " << AsString(read_pairs);
     return STATUS(Corruption, "Empty lock batch");
   }
   result.need_read_snapshot = determine_keys_to_lock_result.need_read_snapshot;
@@ -304,14 +304,14 @@ Status SetDocOpQLErrorResponse(DocOperation* doc_op, string err_msg) {
 }
 
 Status AssembleDocWriteBatch(const vector<unique_ptr<DocOperation>>& doc_write_ops,
-                                CoarseTimePoint deadline,
-                                const ReadHybridTime& read_time,
-                                const DocDB& doc_db,
-                                KeyValueWriteBatchPB* write_batch,
-                                InitMarkerBehavior init_marker_behavior,
-                                std::atomic<int64_t>* monotonic_counter,
-                                HybridTime* restart_read_ht,
-                                const string& table_name) {
+                             CoarseTimePoint deadline,
+                             const ReadHybridTime& read_time,
+                             const DocDB& doc_db,
+                             LWKeyValueWriteBatchPB* write_batch,
+                             InitMarkerBehavior init_marker_behavior,
+                             std::atomic<int64_t>* monotonic_counter,
+                             HybridTime* restart_read_ht,
+                             const string& table_name) {
   DCHECK_ONLY_NOTNULL(restart_read_ht);
   DocWriteBatch doc_write_batch(doc_db, init_marker_behavior, monotonic_counter);
   DocOperationApplyData data = {&doc_write_batch, deadline, read_time, restart_read_ht};
@@ -441,7 +441,7 @@ Status PrepareApplyExternalIntents(
   return Status::OK();
 }
 
-ExternalTxnApplyState ProcessApplyExternalTransactions(const KeyValueWriteBatchPB& put_batch) {
+ExternalTxnApplyState ProcessApplyExternalTransactions(const LWKeyValueWriteBatchPB& put_batch) {
   ExternalTxnApplyState result;
   for (const auto& apply : put_batch.apply_external_transactions()) {
     auto txn_id = CHECK_RESULT(FullyDecodeTransactionId(apply.transaction_id()));
@@ -458,13 +458,23 @@ ExternalTxnApplyState ProcessApplyExternalTransactions(const KeyValueWriteBatchP
 
 } // namespace
 
+IntraTxnWriteId ExternalTxnIntentsState::GetWriteIdAndIncrement(const TransactionId& txn_id) {
+  std::lock_guard<decltype(mutex_)> lock(mutex_);
+  return map_[txn_id]++;
+}
+
+void ExternalTxnIntentsState::EraseEntry(const TransactionId& txn_id) {
+  std::lock_guard<decltype(mutex_)> lock(mutex_);
+  map_.erase(txn_id);
+}
+
 bool AddExternalPairToWriteBatch(
-    const KeyValuePairPB& kv_pair,
+    const LWKeyValuePairPB& kv_pair,
     HybridTime hybrid_time,
-    int write_id,
     ExternalTxnApplyState* apply_external_transactions,
     rocksdb::WriteBatch* regular_write_batch,
-    rocksdb::WriteBatch* intents_write_batch) {
+    rocksdb::WriteBatch* intents_write_batch,
+    ExternalTxnIntentsState* external_txns_intents_state) {
   DocHybridTimeBuffer doc_ht_buffer;
   DocHybridTimeWordBuffer inverted_doc_ht_buffer;
 
@@ -484,13 +494,6 @@ bool AddExternalPairToWriteBatch(
   // DocHybridTime encoding) that helps disambiguate between different updates to the
   // same key (row/column) within a transaction. We set it based on the position of the write
   // operation in its write batch.
-
-  hybrid_time = kv_pair.has_external_hybrid_time() ?
-      HybridTime(kv_pair.external_hybrid_time()) : hybrid_time;
-  std::array<Slice, 2> key_parts = {{
-      Slice(kv_pair.key()),
-      doc_ht_buffer.EncodeWithValueType(hybrid_time, write_id),
-  }};
   Slice key_value = kv_pair.value();
   // This entry contains external intents.
   Slice key = kv_pair.key();
@@ -501,8 +504,23 @@ bool AddExternalPairToWriteBatch(
     // The same write operation could contain external intents and instruct us to apply them.
     CHECK_OK(PrepareApplyExternalIntentsBatch(
         it->second.commit_ht, key_value, regular_write_batch, &it->second.write_id));
+    if (external_txns_intents_state) {
+      external_txns_intents_state->EraseEntry(txn_id);
+    }
     return false;
   }
+
+  int write_id = 0;
+  if (external_txns_intents_state) {
+    write_id = external_txns_intents_state->GetWriteIdAndIncrement(txn_id);
+  }
+
+  hybrid_time = kv_pair.has_external_hybrid_time() ?
+      HybridTime(kv_pair.external_hybrid_time()) : hybrid_time;
+  std::array<Slice, 2> key_parts = {{
+      Slice(kv_pair.key()),
+      doc_ht_buffer.EncodeWithValueType(hybrid_time, write_id),
+  }};
   key_parts[1] = InvertEncodedDocHT(key_parts[1], &inverted_doc_ht_buffer);
   constexpr size_t kNumValueParts = 1;
   intents_write_batch->Put(key_parts, { &key_value, kNumValueParts });
@@ -528,11 +546,12 @@ bool AddExternalPairToWriteBatch(
 //   those intents will be applied directly to regular DB, avoiding unnecessary write to intents DB.
 //   This case is very common for short running transactions.
 bool PrepareExternalWriteBatch(
-    const KeyValueWriteBatchPB& put_batch,
+    const LWKeyValueWriteBatchPB& put_batch,
     HybridTime hybrid_time,
     rocksdb::DB* intents_db,
     rocksdb::WriteBatch* regular_write_batch,
-    rocksdb::WriteBatch* intents_write_batch) {
+    rocksdb::WriteBatch* intents_write_batch,
+    ExternalTxnIntentsState* external_txns_intents_state) {
   CHECK(put_batch.read_pairs().empty());
 
   auto apply_external_transactions = ProcessApplyExternalTransactions(put_batch);
@@ -541,10 +560,10 @@ bool PrepareExternalWriteBatch(
       &apply_external_transactions, regular_write_batch, intents_db, intents_write_batch));
 
   bool has_non_external_kvs = false;
-  for (int write_id = 0; write_id < put_batch.write_pairs_size(); ++write_id) {
+  for (const auto& write_pair : put_batch.write_pairs()) {
     has_non_external_kvs = AddExternalPairToWriteBatch(
-        put_batch.write_pairs(write_id), hybrid_time, write_id, &apply_external_transactions,
-        regular_write_batch, intents_write_batch) || has_non_external_kvs;
+        write_pair, hybrid_time, &apply_external_transactions, regular_write_batch,
+        intents_write_batch, external_txns_intents_state) || has_non_external_kvs;
   }
   return has_non_external_kvs;
 }
@@ -728,18 +747,25 @@ Status EnumerateIntents(
 }
 
 Status EnumerateIntents(
-    const google::protobuf::RepeatedPtrField<KeyValuePairPB> &kv_pairs,
+    const ArenaList<docdb::LWKeyValuePairPB>& kv_pairs,
     const EnumerateIntentsCallback& functor, PartialRangeKeyIntents partial_range_key_intents) {
+  if (kv_pairs.empty()) {
+    return Status::OK();
+  }
   KeyBytes encoded_key;
 
-  for (int index = 0; index < kv_pairs.size(); ) {
-    const auto &kv_pair = kv_pairs.Get(index);
-    ++index;
+  auto it = kv_pairs.begin();
+  for (;;) {
+    const auto& kv_pair = *it;
+    LastKey last_key(++it == kv_pairs.end());
     CHECK(!kv_pair.key().empty());
     CHECK(!kv_pair.value().empty());
     RETURN_NOT_OK(EnumerateIntents(
         kv_pair.key(), kv_pair.value(), functor, &encoded_key, partial_range_key_intents,
-        LastKey(index == kv_pairs.size())));
+        last_key));
+    if (last_key) {
+      break;
+    }
   }
 
   return Status::OK();
@@ -785,8 +811,8 @@ Result<ApplyTransactionState> GetIntentsBatch(
     write_id = stream_state->write_id;
     reverse_index_iter.Next();
   }
-  const uint64_t max_records = FLAGS_cdc_max_stream_intent_records;
-  const uint64_t write_id_limit = write_id + max_records;
+  const uint64_t& max_records = FLAGS_cdc_max_stream_intent_records;
+  uint64_t cur_records = 0;
 
   while (reverse_index_iter.Valid()) {
     const Slice key_slice(reverse_index_iter.key());
@@ -805,17 +831,16 @@ Result<ApplyTransactionState> GetIntentsBatch(
       // Value of reverse index is a key of original intent record, so seek it and check match.
       if ((!key_bounds || key_bounds->IsWithinBounds(reverse_index_iter.value()))) {
         // return when we have reached the batch limit.
-        if (write_id >= write_id_limit) {
+        if (cur_records >= max_records) {
           return ApplyTransactionState{
-              .key = key_slice.ToBuffer(),
-              .write_id = write_id,
-          };
+              .key = key_slice.ToBuffer(), .write_id = write_id, .aborted = {}};
         }
         {
           intent_iter.Seek(reverse_index_value);
           if (!intent_iter.Valid() || intent_iter.key() != reverse_index_value) {
             LOG(WARNING) << "Unable to find intent: " << reverse_index_value.ToDebugHexString()
-                        << " for " << key_slice.ToDebugHexString();
+                         << " for " << key_slice.ToDebugHexString()
+                         << ", transactionId: " << transaction_id;
             return ApplyTransactionState{};
           }
 
@@ -826,7 +851,7 @@ Result<ApplyTransactionState> GetIntentsBatch(
                 VERIFY_RESULT(DecodeIntentValue(intent_iter.value(), &transaction_id_slice));
             write_id = decoded_value.write_id;
 
-            if (decoded_value.body.starts_with(KeyEntryTypeAsChar::kRowLock)) {
+            if (decoded_value.body.starts_with(ValueEntryTypeAsChar::kRowLock)) {
               continue;
             }
 
@@ -834,18 +859,29 @@ Result<ApplyTransactionState> GetIntentsBatch(
                 intent.doc_path,
             }};
             std::array<Slice, 1> value_parts = {{
-                decoded_value.body,
+                  decoded_value.body,
+            }};
+            std::array<Slice, 1> ht_parts = {{
+                intent.doc_ht,
             }};
 
+            auto doc_ht = VERIFY_RESULT(DocHybridTime::DecodeFromEnd(intent.doc_ht));
+
             IntentKeyValueForCDC intent_metadata;
-            intent_metadata.key = Slice(key_parts, &(intent_metadata.key_buf));
-            intent_metadata.value = Slice(value_parts, &(intent_metadata.value_buf));
+            Slice(key_parts, &(intent_metadata.key_buf));
+            intent_metadata.key = intent.doc_path;
+            Slice(value_parts, &(intent_metadata.value_buf));
+            intent_metadata.value = decoded_value.body;
             intent_metadata.reverse_index_key = key_slice.ToBuffer();
             intent_metadata.write_id = write_id;
+            intent_metadata.intent_ht = doc_ht;
+            intent_metadata.ht = Slice(ht_parts, &intent_metadata.ht_buf);
+
             (*key_value_intents).push_back(intent_metadata);
 
             VLOG(4) << "The size of intentKeyValues in GetIntentList "
-                      << (*key_value_intents).size();
+                    << (*key_value_intents).size();
+            ++cur_records;
             ++write_id;
           }
         }

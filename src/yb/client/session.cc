@@ -31,11 +31,13 @@
 #include "yb/util/logging.h"
 #include "yb/util/metrics.h"
 #include "yb/util/status_log.h"
+#include "yb/util/flags.h"
 
 using namespace std::literals;
 using namespace std::placeholders;
 
-DEFINE_int32(client_read_write_timeout_ms, 60000, "Timeout for client read and write operations.");
+DEFINE_UNKNOWN_int32(client_read_write_timeout_ms, 60000,
+    "Timeout for client read and write operations.");
 
 namespace yb {
 namespace client {
@@ -53,7 +55,7 @@ YBSession::YBSession(YBClient* client, const scoped_refptr<ClockBase>& clock) {
   async_rpc_metrics_ = metric_entity ? std::make_shared<AsyncRpcMetrics>(metric_entity) : nullptr;
 }
 
-void YBSession::SetReadPoint(const Restart restart) {
+void YBSession::RestartNonTxnReadPoint(const Restart restart) {
   const auto& read_point = batcher_config_.non_transactional_read_point;
   DCHECK_NOTNULL(read_point.get());
   if (restart && read_point->IsRestartRequired()) {
@@ -64,7 +66,7 @@ void YBSession::SetReadPoint(const Restart restart) {
 }
 
 void YBSession::SetReadPoint(const ReadHybridTime& read_time) {
-  batcher_config_.non_transactional_read_point->SetReadTime(read_time, {} /* local_limits */);
+  read_point()->SetReadTime(read_time, {} /* local_limits */);
 }
 
 bool YBSession::IsRestartRequired() {
@@ -187,6 +189,11 @@ void BatcherFlushDone(
                       << " due to: " << error->status();
     const auto op = error->shared_failed_op();
     op->ResetTablet();
+    // Transmit failed request id to retry_batcher.
+    if (op->request_id().has_value()) {
+      done_batcher->RemoveRequest(op->request_id().value());
+      retry_batcher->RegisterRequest(op->request_id().value());
+    }
     retry_batcher->Add(op);
   }
   FlushBatcherAsync(retry_batcher, std::move(callback), batcher_config,
@@ -342,6 +349,34 @@ Status YBSession::TEST_ApplyAndFlush(YBOperationPtr yb_op) {
 Status YBSession::TEST_ApplyAndFlush(const std::vector<YBOperationPtr>& ops) {
   Apply(ops);
   return FlushFuture().get().status;
+}
+
+Status YBSession::ApplyAndFlushSync(const std::vector<YBOperationPtr>& ops) {
+  Apply(ops);
+  auto future = FlushFuture();
+
+  auto deadline = deadline_;
+  if (deadline == CoarseTimePoint()) {
+    if (timeout_.Initialized()) {
+      deadline = CoarseMonoClock::Now() + timeout_;
+    } else {
+      // Client writing with no deadline set, using 60 seconds.
+      deadline = CoarseMonoClock::Now() + 60s;
+    }
+  }
+
+  auto future_status = future.wait_until(deadline);
+  SCHECK(future_status == std::future_status::ready, TimedOut, "Timed out waiting for Flush");
+  return future.get().status;
+}
+
+Status YBSession::ApplyAndFlushSync(YBOperationPtr ops) {
+  return ApplyAndFlushSync(std::vector<YBOperationPtr>{ops});
+}
+
+Status YBSession::ReadSync(std::shared_ptr<YBOperation> yb_op) {
+  CHECK(yb_op->read_only());
+  return ApplyAndFlushSync(std::move(yb_op));
 }
 
 Status YBSession::TEST_ReadSync(std::shared_ptr<YBOperation> yb_op) {

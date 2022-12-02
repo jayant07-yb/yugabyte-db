@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_CONSENSUS_LOG_H_
-#define YB_CONSENSUS_LOG_H_
+#pragma once
 
 #include <pthread.h>
 #include <sys/types.h>
@@ -80,6 +79,13 @@ class CDCServiceTestMinSpace_TestLogRetentionByOpId_MinSpace_Test;
 
 namespace log {
 
+YB_DEFINE_ENUM(
+    SyncType,
+    (kNoSync)
+    (kAsyncFsync)
+    (kForceFsync)
+);
+
 YB_STRONGLY_TYPED_BOOL(CreateNewSegment);
 YB_DEFINE_ENUM(
     SegmentAllocationState,
@@ -101,6 +107,8 @@ YB_DEFINE_ENUM(
     // OpId is after the segment
     (kOpIdAfterSegment)
 );
+
+YB_STRONGLY_TYPED_BOOL(SkipWalWrite);
 
 // Log interface, inspired by Raft's (logcabin) Log. Provides durability to YugaByte as a normal
 // Write Ahead Log and also plays the role of persistent storage for the consensus state machine.
@@ -140,43 +148,30 @@ class Log : public RefCountedThreadSafe<Log> {
                              const scoped_refptr<MetricEntity>& tablet_metric_entity,
                              ThreadPool *append_thread_pool,
                              ThreadPool* allocation_thread_pool,
+                             ThreadPool* background_sync_threadpool,
                              int64_t cdc_min_replicated_index,
                              scoped_refptr<Log> *log,
                              CreateNewSegment create_new_segment = CreateNewSegment::kTrue);
 
   ~Log();
 
-  // Reserves a spot in the log's queue for 'entry_batch'.
-  //
-  // 'reserved_entry' is initialized by this method and any resources associated with it will be
-  // released in AsyncAppend().  In order to ensure correct ordering of operations across multiple
-  // threads, calls to this method must be externally synchronized.
-  //
-  // WARNING: the caller _must_ call AsyncAppend() or else the log will "stall" and will never be
-  // able to make forward progress.
-  void Reserve(LogEntryTypePB type, LogEntryBatchPB* entry_batch, LogEntryBatch** reserved_entry);
-
-  // Asynchronously appends 'entry' to the log. Once the append completes and is synced, 'callback'
-  // will be invoked.
-  Status AsyncAppend(LogEntryBatch* entry,
-                             const StatusCallback& callback);
-
-  Status TEST_AsyncAppendWithReplicates(
-      LogEntryBatch* entry, const ReplicateMsgs& replicates, const StatusCallback& callback);
+  Status TEST_ReserveAndAppend(
+      std::shared_ptr<LWLogEntryBatchPB> batch, const ReplicateMsgs& replicates,
+      const StatusCallback& callback);
 
   // Synchronously append a new entry to the log.  Log does not take ownership of the passed
   // 'entry'. If skip_wal_write is true, only update consensus metadata and LogIndex, skip write
   // to wal.
   // TODO get rid of this method, transition to the asynchronous API.
-  Status Append(LogEntryPB* entry,
-                        LogEntryMetadata entry_metadata,
-                        bool skip_wal_write = false);
+  Status Append(
+      const std::shared_ptr<LWLogEntryPB>& entry, LogEntryMetadata entry_metadata,
+      SkipWalWrite skip_wal_write = SkipWalWrite::kFalse);
 
   // Append the given set of replicate messages, asynchronously.  This requires that the replicates
   // have already been assigned OpIds.
   Status AsyncAppendReplicates(const ReplicateMsgs& replicates, const OpId& committed_op_id,
-                                       RestartSafeCoarseTimePoint batch_mono_time,
-                                       const StatusCallback& callback);
+                               RestartSafeCoarseTimePoint batch_mono_time,
+                               const StatusCallback& callback);
 
   // Blocks the current thread until all the entries in the log queue are flushed and fsynced (if
   // fsync of log entries is enabled).
@@ -226,7 +221,7 @@ class Log : public RefCountedThreadSafe<Log> {
 
   // Gets the last-used OpId written to the log.  If no entry has ever been written to the log,
   // returns (0, 0)
-  yb::OpId GetLatestEntryOpId() const;
+  OpId GetLatestEntryOpId() const;
 
   int64_t GetMinReplicateIndex() const;
 
@@ -243,7 +238,7 @@ class Log : public RefCountedThreadSafe<Log> {
   Status GetGCableDataSize(int64_t min_op_idx, int64_t* total_size) const;
 
   // Returns the file system location of the currently active WAL segment.
-  const WritableLogSegment* ActiveSegmentForTests() const {
+  const WritableLogSegment* TEST_ActiveSegment() const {
     return active_segment_.get();
   }
 
@@ -273,11 +268,11 @@ class Log : public RefCountedThreadSafe<Log> {
   // Returns current op id after waiting, which could be greater than or equal to specified op id.
   //
   // On timeout returns default constructed OpId.
-  yb::OpId WaitForSafeOpIdToApply(const yb::OpId& op_id, MonoDelta duration = MonoDelta());
+  OpId WaitForSafeOpIdToApply(const OpId& op_id, MonoDelta duration = MonoDelta());
 
-  // Return a readable segment with the given sequence number, or nullptr if it
+  // Return a readable segment with the given sequence number, or NotFound error if it
   // cannot be found (e.g. if it has already been GCed).
-  scoped_refptr<ReadableLogSegment> GetSegmentBySequenceNumber(int64_t seq) const;
+  Result<scoped_refptr<ReadableLogSegment>> GetSegmentBySequenceNumber(int64_t seq) const;
 
   void TEST_SetSleepDuration(const std::chrono::nanoseconds& duration) {
     sleep_duration_.store(duration, std::memory_order_release);
@@ -311,25 +306,11 @@ class Log : public RefCountedThreadSafe<Log> {
     return cdc_min_replicated_index_.load(std::memory_order_acquire);
   }
 
-  Status FlushIndex();
-
-  // Copies log to a new dir.
-  // If up_to_op_id is specified - only part of the log up to up_to_op_id is copied.
+  // Copies log to a new dir. Expects dest_wal_dir to be absent.
+  // If max_included_op_id is specified - only part of the log up to and including
+  // max_included_op_id is copied.
   // Flushes necessary files and uses hard links where it is safe.
-  //
-  // Until https://github.com/yugabyte/yugabyte-db/issues/10960 is fixed, destination LogIndex
-  // might point to an operation that we've not copied, but it rewrites some operation that we've
-  // copied and there is no way to fix it without full rebuild of LogIndex.
-  // But that should be OK, because:
-  // 1) That can only happen for indexes of operations that are not yet committed, so only
-  //    for indexes > last_commited_op.index.
-  // 2) We use CopyTo for tablet splitting and pass up_to_op_id = split_op_id that is committed.
-  // 3) We only use LogIndex for ops on leader that are in log Raft log, so
-  //    a) Either this is committed operation copied from parent tablet and log index is correct
-  //       for it.
-  //    b) Or this is operation added by the leader, so log index is also correct for it, because
-  //       we updated it as we added this operation to the Raft log.
-  Status CopyTo(const std::string& dest_wal_dir, OpId up_to_op_id = OpId());
+  Status CopyTo(const std::string& dest_wal_dir, OpId max_included_op_id = OpId());
 
   // Waits until all entries flushed, then reset last received op id to specified one.
   Status ResetLastSyncedEntryOpId(const OpId& op_id);
@@ -347,6 +328,7 @@ class Log : public RefCountedThreadSafe<Log> {
   FRIEND_TEST(cdc::CDCServiceTestMinSpace, TestLogRetentionByOpId_MinSpace);
 
   class Appender;
+  class LogEntryBatch;
 
   // Log state.
   enum LogState {
@@ -365,6 +347,7 @@ class Log : public RefCountedThreadSafe<Log> {
       const scoped_refptr<MetricEntity>& tablet_metric_entity,
       ThreadPool* append_thread_pool,
       ThreadPool* allocation_thread_pool,
+      ThreadPool* background_sync_threadpool,
       CreateNewSegment create_new_segment = CreateNewSegment::kTrue);
 
   Env* get_env() {
@@ -379,18 +362,18 @@ class Log : public RefCountedThreadSafe<Log> {
   Status RollOver();
 
   // Writes the footer and closes the current segment.
-  Status CloseCurrentSegment();
+  Status CloseCurrentSegment() EXCLUDES(active_segment_mutex_);
 
   // Sets 'out' to a newly created temporary file (see Env::NewTempWritableFile()) for a placeholder
   // segment. Sets 'result_path' to the fully qualified path to the unique filename created for the
   // segment.
   Status CreatePlaceholderSegment(const WritableFileOptions& opts,
-                                          std::string* result_path,
-                                          std::shared_ptr<WritableFile>* out);
+                                  std::string* result_path,
+                                  std::shared_ptr<WritableFile>* out);
 
   // Creates a new WAL segment on disk, writes the next_segment_header_ to disk as the header, and
   // sets active_segment_ to point to this new segment.
-  Status SwitchToAllocatedSegment();
+  Status SwitchToAllocatedSegment() EXCLUDES(active_segment_mutex_);
 
   // Preallocates the space for a new segment.
   Status PreAllocateNewSegment();
@@ -405,8 +388,7 @@ class Log : public RefCountedThreadSafe<Log> {
   //
   // TODO once Append() is removed, 'caller_owns_operation' and associated logic will no longer be
   // needed.
-  Status DoAppend(
-      LogEntryBatch* entry, bool caller_owns_operation = true, bool skip_wal_write = false);
+  Status DoAppend(LogEntryBatch* entry, SkipWalWrite skip_wal_write = SkipWalWrite::kFalse);
 
   // Update footer_builder_ to reflect the log indexes seen in 'batch'.
   void UpdateFooterForBatch(LogEntryBatch* batch);
@@ -419,10 +401,37 @@ class Log : public RefCountedThreadSafe<Log> {
   // the same segment once properly closed.
   Status ReplaceSegmentInReaderUnlocked();
 
-  Status Sync();
+  // Returns the type of sync required to perform now based on time interval since last sync AND
+  // current unsynced data. Return value is one among kNoSync, kAsyncFsync, kForceFsync.
+  SyncType FindSyncType();
+
+  // DoSync flushes the dirty log segment data to disk by executing fsync on the current active log
+  // segment file. It is called either from the background log-sync threadpool maintained at tserver
+  // level or in-line with the critical path from ::Sync() function.
+  // fsync tasks are pushed to the background threadpool when [using ::DoSyncAndResetTaskInQueue]
+  // - time interval/unsynced data exceeds lower limits and FLAGS_log_enable_background_sync is set
+  //   time lower limit: (interval_durable_wal_write_ * FLAGS_log_background_sync_interval_fraction
+  //   data lower limit: bytes_durable_wal_write_mb_ * FLAGS_log_background_sync_data_fraction (MB)
+  // DoSync fn is called in-line when
+  // - when durable_wal_write_ is set to true
+  // - time interval/unsynced data exceeds upper limits
+  //   time upper limit: interval_durable_wal_write_
+  //   data upper limit: bytes_durable_wal_write_mb_ (MB)
+  Status DoSync() EXCLUDES(active_segment_mutex_);
+
+  // Calls ::DoSync and resets fsync_task_in_queue_.
+  void DoSyncAndResetTaskInQueue() EXCLUDES(active_segment_mutex_);
+
+  Status Sync() EXCLUDES(active_segment_mutex_);
+
+  // Updates the reader on how far it can read the active segment. Called from ::Sync()
+  Status UpdateSegmentReadableOffset() EXCLUDES(active_segment_mutex_);
 
   // Helper method to get the segment sequence to GC based on the provided min_op_idx.
   Status GetSegmentsToGCUnlocked(int64_t min_op_idx, SegmentSequence* segments_to_gc) const;
+
+  // Discards segments from 'segments_to_gc' if they have not yet met the minimim retention time.
+  void ApplyTimeRetentionPolicy(SegmentSequence* segments_to_gc) const;
 
   // Kick off an asynchronous task that pre-allocates a new log-segment, setting
   // 'allocation_status_'. To wait for the result of the task, use allocation_status_.Get().
@@ -432,18 +441,42 @@ class Log : public RefCountedThreadSafe<Log> {
     return allocation_state_.load(std::memory_order_acquire);
   }
 
-  LogEntryBatch* ReserveMarker(LogEntryTypePB type);
+  std::unique_ptr<LogEntryBatch> ReserveMarker(LogEntryTypePB type);
 
   // Returns WritableFileOptions for a new segment writable file.
   WritableFileOptions GetNewSegmentWritableFileOptions();
 
   // See SegmentOpIdRelation comments.
+  // Returns SegmentOpIdRelation::kOpIdAfterSegment if op_id is not valid or empty.
+  // Note: this function can potentially read all entries from WAL segment that might a large amount
+  // of data.
   Result<SegmentOpIdRelation> GetSegmentOpIdRelation(
       ReadableLogSegment* segment, const OpId& op_id);
 
-  // Returns whether operation with up_to_op_id itself has been copied.
+  // Copies (can use hardlink as an optimization) log segment up to and including
+  // max_included_op_id.
+  // If max_included_op_id is not in this log segment - copies (using hardlink) the whole
+  // segment.
+  // Returns true if max_included_op_id is before or inside the segment and false otherwise.
+
   Result<bool> CopySegmentUpTo(
-      ReadableLogSegment* segment, const std::string& dest_wal_dir, const OpId& up_to_op_id);
+      ReadableLogSegment* segment, const std::string& dest_wal_dir,
+      const OpId& max_included_op_id);
+
+  // Asynchronously appends 'entry' to the log. Once the append completes and is synced, 'callback'
+  // will be invoked.
+  Status AsyncAppend(std::unique_ptr<LogEntryBatch> entry, const StatusCallback& callback);
+
+  // Reserves a spot in the log's queue for 'entry_batch'.
+  //
+  // 'reserved_entry' is initialized by this method and any resources associated with it will be
+  // released in AsyncAppend().  In order to ensure correct ordering of operations across multiple
+  // threads, calls to this method must be externally synchronized.
+  //
+  // WARNING: the caller _must_ call AsyncAppend() or else the log will "stall" and will never be
+  // able to make forward progress.
+  std::unique_ptr<LogEntryBatch> Reserve(
+      LogEntryTypePB type, std::shared_ptr<LWLogEntryBatchPB> entry_batch);
 
   LogOptions options_;
 
@@ -465,7 +498,15 @@ class Log : public RefCountedThreadSafe<Log> {
   // The schema version
   uint32_t schema_version_;
 
-  // The currently active segment being written.
+  // Mutex used to ensure mutual exclusion among the following
+  // 1. Between conucrrent fsync calls.
+  // 2. Between log segment rollover/switch and fsync call.
+  std::mutex active_segment_mutex_;
+
+  // The currently active segment being written. WritableLogSegment is not threadsafe.
+  // We are performing Sync() and WriteEntryBatch() from different threads which is safe
+  // as underlying system calls to 'fsync' and 'writev' are atomic. This assumption is
+  // true as long as append/truncate are being performed by the same thread.
   std::unique_ptr<WritableLogSegment> active_segment_;
 
   // The current (active) segment sequence number. Initialized in the Log constructor based on
@@ -495,13 +536,13 @@ class Log : public RefCountedThreadSafe<Log> {
 
   // The last known OpId for a REPLICATE message appended and synced to this log (any segment).
   // NOTE: this op is not necessarily durable unless gflag durable_wal_write is true.
-  boost::atomic<yb::OpId> last_synced_entry_op_id_{yb::OpId()};
+  boost::atomic<OpId> last_synced_entry_op_id_{OpId()};
 
   // The last know OpId for a REPLICATE message appended to this log (any segment).
   // This variable is not accessed concurrently.
-  yb::OpId last_appended_entry_op_id_;
+  OpId last_appended_entry_op_id_;
 
-  yb::OpId last_submitted_op_id_;
+  OpId last_submitted_op_id_;
 
   // A footer being prepared for the current segment.  When the segment is closed, it will be
   // written.
@@ -520,6 +561,9 @@ class Log : public RefCountedThreadSafe<Log> {
   // A thread pool for asynchronously pre-allocating new log segments.
   std::unique_ptr<ThreadPoolToken> allocation_token_;
 
+  // A thread pool for performing log fsync operations.
+  std::unique_ptr<ThreadPoolToken> background_sync_threadpool_token_;
+
   // If true, sync on all appends.
   bool durable_wal_write_;
 
@@ -535,8 +579,13 @@ class Log : public RefCountedThreadSafe<Log> {
   // For periodic sync, indicates if there are entries to be sync'ed.
   std::atomic<bool> periodic_sync_needed_ = {false};
 
+  // If true, implies that there is a enqueued/running ::DoSyncAndResetTaskInQueue task
+  std::atomic<bool> fsync_task_in_queue_ = false;
+
   // For periodic sync, indicates number of bytes which need to be sync'ed.
-  size_t periodic_sync_unsynced_bytes_ = 0;
+  // Needs to be atomic since it might be operated by concurrent threads
+  // when gflag log_enable_background_sync is set to true.
+  std::atomic<size_t> periodic_sync_unsynced_bytes_ = 0;
 
   // If true, ignore the 'durable_wal_write_' flags above.  This is used to disable fsync during
   // bootstrap.
@@ -585,4 +634,3 @@ class Log : public RefCountedThreadSafe<Log> {
 
 }  // namespace log
 }  // namespace yb
-#endif /* YB_CONSENSUS_LOG_H_ */

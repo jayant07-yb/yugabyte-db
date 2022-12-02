@@ -28,7 +28,8 @@ from ybops.cloud.aws.utils import (AwsBootstrapClient, YbVpcComponents,
                                    query_vpc, update_disk, get_image_arch, get_root_label)
 from ybops.cloud.common.cloud import AbstractCloud
 from ybops.common.exceptions import YBOpsRuntimeError
-from ybops.utils import (format_rsa_key, is_valid_ip_address, validated_key_file)
+from ybops.utils import is_valid_ip_address
+from ybops.utils.ssh import (format_rsa_key, validated_key_file)
 
 
 class AwsCloud(AbstractCloud):
@@ -336,7 +337,8 @@ class AwsCloud(AbstractCloud):
             filters = [
                 {
                     "Name": "instance-state-name",
-                    "Values": ["running"]
+                    # Include all non-terminating states.
+                    "Values": ["rebooting", "pending", "running", "stopping", "stopped"]
                 }
             ]
 
@@ -391,7 +393,8 @@ class AwsCloud(AbstractCloud):
                 elif interface.get("Attachment").get("DeviceIndex") == 1:
                     secondary_private_ip = interface.get("PrivateIpAddress")
                     secondary_subnet = interface.get("SubnetId")
-
+            instance_state = data["State"].get("Name") if data.get("State") is not None else None
+            logging.info("VM state {}".format(instance_state))
             result = dict(
                 id=data.get("InstanceId", None),
                 name=name_tags[0] if name_tags else None,
@@ -411,14 +414,16 @@ class AwsCloud(AbstractCloud):
                 node_uuid=node_uuid_tags[0] if node_uuid_tags else None,
                 universe_uuid=universe_uuid_tags[0] if universe_uuid_tags else None,
                 vpc=data["VpcId"],
-                ami=data.get("ImageId", None)
+                ami=data.get("ImageId", None),
+                instance_state=instance_state,
+                is_running=True if instance_state == "running" else False
             )
-
             disks = data.get("BlockDeviceMappings")
-            root_vol = next(d for d in disks if
-                            d.get("DeviceName") == get_root_label(result["region"], result["ami"]))
-            result["root_volume"] = root_vol["Ebs"]["VolumeId"]
-
+            root_vol = next((d for d in disks if
+                            d.get("DeviceName") == get_root_label(
+                                result["region"], result["ami"])), None)
+            ebs = root_vol.get("Ebs") if root_vol else None
+            result["root_volume"] = ebs.get("VolumeId") if ebs else None
             if not get_all:
                 return result
             results.append(result)
@@ -439,10 +444,12 @@ class AwsCloud(AbstractCloud):
         # If we are configuring second NIC, ensure that this only happens for a
         # centOS AMI right now.
         if args.cloud_subnet_secondary:
+            supported_os = ['centos', 'almalinux']
             ec2 = boto3.resource('ec2', args.region)
             image = ec2.Image(args.machine_image)
-            if 'centos' not in image.name.lower():
-                raise YBOpsRuntimeError("Second NIC can only be configured for CentOS right now")
+            if not any(os_type in image.name.lower() for os_type in supported_os):
+                raise YBOpsRuntimeError(
+                    "Second NIC can only be configured for CentOS/Alma right now")
         create_instance(args)
 
     def delete_instance(self, region, instance_id, has_elastic_ip=False):
@@ -470,6 +477,12 @@ class AwsCloud(AbstractCloud):
                 logging.info("[app] Deleted elastic ip {}".format(public_ip_address))
         instance.terminate()
         instance.wait_until_terminated()
+
+    def reboot_instance(self, host_info, ssh_ports):
+        boto3.client('ec2', region_name=host_info['region']).reboot_instances(
+            InstanceIds=[host_info["id"]]
+        )
+        self.wait_for_ssh_ports(host_info['private_ip'], host_info['name'], ssh_ports)
 
     def mount_disk(self, host_info, vol_id, label):
         ec2 = boto3.client('ec2', region_name=host_info['region'])
@@ -546,8 +559,10 @@ class AwsCloud(AbstractCloud):
         ec2 = boto3.resource('ec2', host_info["region"])
         try:
             instance = ec2.Instance(id=host_info["id"])
-            instance.stop()
-            instance.wait_until_stopped()
+            if instance.state['Name'] != 'stopped':
+                if instance.state['Name'] != 'stopping':
+                    instance.stop()
+                instance.wait_until_stopped()
         except ClientError as e:
             logging.error(e)
 
@@ -556,8 +571,16 @@ class AwsCloud(AbstractCloud):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             instance = ec2.Instance(id=host_info["id"])
-            instance.start()
-            instance.wait_until_running()
+            if instance.state['Name'] != 'running':
+                if instance.state['Name'] != 'pending':
+                    instance.start()
+                # Increase wait timeout to 15 * 80 = 1200 seconds
+                # to work around failures in provisioning instances.
+                wait_config = {
+                    'Delay': 15,
+                    'MaxAttempts': 80
+                }
+                instance.wait_until_running(WaiterConfig=wait_config)
             # The OS boot up may take some time,
             # so retry until the instance allows SSH connection.
             self.wait_for_ssh_ports(host_info["private_ip"], host_info["id"], ssh_ports)
@@ -602,10 +625,16 @@ class AwsCloud(AbstractCloud):
                 'Name': "tag:{}".format(tag),
                 'Values': [value]
             })
+        filters.append({
+            'Name': 'status',
+            'Values': ['available']
+        })
         volume_ids = []
         describe_volumes_args = {
             'Filters': filters
         }
+        if args.volume_id:
+            describe_volumes_args.update('VolumeIds', args.volume_id)
         client = boto3.client('ec2', args.region)
         while True:
             response = client.describe_volumes(**describe_volumes_args)
@@ -613,6 +642,7 @@ class AwsCloud(AbstractCloud):
                 status = volume['State']
                 volume_id = volume['VolumeId']
                 present_tags = volume['Tags']
+                logging.info('[app] Volume {} is in state {}'.format(volume_id, status))
                 if status.lower() != 'available':
                     continue
                 tag_match_count = 0

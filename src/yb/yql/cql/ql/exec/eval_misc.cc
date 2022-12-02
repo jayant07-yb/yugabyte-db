@@ -32,7 +32,7 @@ using std::shared_ptr;
 //--------------------------------------------------------------------------------------------------
 
 Status Executor::PTExprToPBValidated(const PTExprPtr& expr,
-                                             QLExpressionPB *expr_pb) {
+                                     QLExpressionPB *expr_pb) {
   RETURN_NOT_OK(PTExprToPB(expr, expr_pb));
   if (expr_pb->has_value() && IsNull(expr_pb->value())) {
     return exec_context_->Error(expr, "Value cannot be null.", ErrorCode::INVALID_ARGUMENTS);
@@ -50,7 +50,7 @@ Status Executor::TimestampToPB(const PTDmlStmt *tnode, QLWriteRequestPB *req) {
         << "Integer constant expected for USING TIMESTAMP clause";
 
     UserTimeMicros user_timestamp = timestamp_pb.value().int64_value();
-    if (user_timestamp == common::kInvalidUserTimestamp) {
+    if (user_timestamp == common::kInvalidTimestamp) {
       return exec_context_->Error(tnode->user_timestamp_usec(), "Invalid timestamp",
                                   ErrorCode::INVALID_ARGUMENTS);
     }

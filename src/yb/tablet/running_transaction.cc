@@ -22,7 +22,7 @@
 
 #include "yb/tserver/tserver_service.pb.h"
 
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/logging.h"
 #include "yb/util/trace.h"
 #include "yb/util/tsan_util.h"
@@ -34,10 +34,10 @@ using namespace std::literals;
 DEFINE_test_flag(uint64, transaction_delay_status_reply_usec_in_tests, 0,
                  "For tests only. Delay handling status reply by specified amount of usec.");
 
-DEFINE_int64(transaction_abort_check_interval_ms, 5000 * yb::kTimeMultiplier,
+DEFINE_UNKNOWN_int64(transaction_abort_check_interval_ms, 5000 * yb::kTimeMultiplier,
              "Interval to check whether running transaction was aborted.");
 
-DEFINE_int64(transaction_abort_check_timeout_ms, 30000 * yb::kTimeMultiplier,
+DEFINE_UNKNOWN_int64(transaction_abort_check_timeout_ms, 30000 * yb::kTimeMultiplier,
              "Timeout used when checking for aborted transactions.");
 
 namespace yb {
@@ -80,7 +80,7 @@ void RunningTransaction::BatchReplicated(const TransactionalBatchData& value) {
 
 void RunningTransaction::SetLocalCommitData(
     HybridTime time, const AbortedSubTransactionSet& aborted_subtxn_set) {
-  local_commit_aborted_subtxn_set_ = aborted_subtxn_set;
+  last_known_aborted_subtxn_set_ = aborted_subtxn_set;
   local_commit_time_ = time;
   last_known_status_hybrid_time_ = local_commit_time_;
   last_known_status_ = TransactionStatus::COMMITTED;
@@ -100,13 +100,15 @@ void RunningTransaction::RequestStatusAt(const StatusRequest& request,
 
   if (last_known_status_hybrid_time_ > HybridTime::kMin) {
     auto transaction_status =
-        GetStatusAt(request.global_limit_ht, last_known_status_hybrid_time_, last_known_status_);
+        GetStatusAt(request.global_limit_ht, last_known_status_hybrid_time_, last_known_status_,
+                    external_transaction());
     // If we don't have status at global_limit_ht, then we should request updated status.
     if (transaction_status) {
       HybridTime last_known_status_hybrid_time = last_known_status_hybrid_time_;
       AbortedSubTransactionSet local_commit_aborted_subtxn_set;
-      if (transaction_status == TransactionStatus::COMMITTED) {
-        local_commit_aborted_subtxn_set = local_commit_aborted_subtxn_set_;
+      if (transaction_status == TransactionStatus::COMMITTED ||
+          transaction_status == TransactionStatus::PENDING) {
+        local_commit_aborted_subtxn_set = last_known_aborted_subtxn_set_;
       }
       lock->unlock();
       request.callback(TransactionStatusResult{
@@ -182,8 +184,9 @@ std::string RunningTransaction::ToString() const {
                 TransactionStatus_Name(last_known_status_), last_known_status_hybrid_time_);
 }
 
-void RunningTransaction::ScheduleRemoveIntents(const RunningTransactionPtr& shared_self) {
-  if (remove_intents_task_.Prepare(shared_self)) {
+void RunningTransaction::ScheduleRemoveIntents(
+    const RunningTransactionPtr& shared_self, RemoveReason reason) {
+  if (remove_intents_task_.Prepare(shared_self, reason)) {
     context_.participant_context_.StrandEnqueue(&remove_intents_task_);
     VLOG_WITH_PREFIX(1) << "Intents should be removed asynchronously";
   }
@@ -192,10 +195,15 @@ void RunningTransaction::ScheduleRemoveIntents(const RunningTransactionPtr& shar
 boost::optional<TransactionStatus> RunningTransaction::GetStatusAt(
     HybridTime time,
     HybridTime last_known_status_hybrid_time,
-    TransactionStatus last_known_status) {
+    TransactionStatus last_known_status,
+    bool external_transaction) {
   switch (last_known_status) {
-    case TransactionStatus::ABORTED:
-      return TransactionStatus::ABORTED;
+    case TransactionStatus::ABORTED: {
+      if (!external_transaction || last_known_status_hybrid_time >= time) {
+        return TransactionStatus::ABORTED;
+      }
+      return boost::none;
+    }
     case TransactionStatus::COMMITTED:
       return last_known_status_hybrid_time > time
           ? TransactionStatus::PENDING
@@ -248,14 +256,16 @@ void RunningTransaction::StatusReceived(
 bool RunningTransaction::UpdateStatus(
     TransactionStatus transaction_status, HybridTime time_of_status,
     HybridTime coordinator_safe_time, AbortedSubTransactionSet aborted_subtxn_set) {
+  if (!local_commit_time_ && transaction_status != TransactionStatus::ABORTED) {
+    // If we've already committed locally, then last_known_aborted_subtxn_set_ is already set
+    // properly. Otherwise, we should update it here.
+    last_known_aborted_subtxn_set_ = aborted_subtxn_set;
+  }
+
   // Check for local_commit_time_ is not required for correctness, but useful for optimization.
   // So we could avoid unnecessary actions.
   if (local_commit_time_) {
     return false;
-  }
-
-  if (transaction_status == TransactionStatus::COMMITTED) {
-    local_commit_aborted_subtxn_set_ = aborted_subtxn_set;
   }
 
   if (transaction_status == TransactionStatus::ABORTED && coordinator_safe_time) {
@@ -342,7 +352,7 @@ void RunningTransaction::DoStatusReceived(const Status& status,
 
     time_of_status = last_known_status_hybrid_time_;
     transaction_status = last_known_status_;
-    aborted_subtxn_set = local_commit_aborted_subtxn_set_;
+    aborted_subtxn_set = last_known_aborted_subtxn_set_;
 
     status_waiters = ExtractFinishedStatusWaitersUnlocked(
         serial_no, time_of_status, transaction_status);
@@ -367,7 +377,8 @@ std::vector<StatusRequest> RunningTransaction::ExtractFinishedStatusWaitersUnloc
   auto w = status_waiters_.begin();
   for (auto it = status_waiters_.begin(); it != status_waiters_.end(); ++it) {
     if (it->serial_no <= serial_no ||
-        GetStatusAt(it->global_limit_ht, time_of_status, transaction_status) ||
+        GetStatusAt(
+            it->global_limit_ht, time_of_status, transaction_status, external_transaction()) ||
         time_of_status < it->read_ht) {
       result.push_back(std::move(*it));
     } else {
@@ -387,14 +398,22 @@ void RunningTransaction::NotifyWaiters(int64_t serial_no, HybridTime time_of_sta
                                        const std::vector<StatusRequest>& status_waiters) {
   for (const auto& waiter : status_waiters) {
     auto status_for_waiter = GetStatusAt(
-        waiter.global_limit_ht, time_of_status, transaction_status);
+        waiter.global_limit_ht, time_of_status, transaction_status, external_transaction());
     if (status_for_waiter) {
-      // We know status at global_limit_ht, so could notify waiter.
-      auto result = TransactionStatusResult{*status_for_waiter, time_of_status};
-      if (result.status == TransactionStatus::COMMITTED) {
-        result.aborted_subtxn_set = aborted_subtxn_set;
+      if (external_transaction() && *status_for_waiter == TransactionStatus::PENDING) {
+        last_known_status_hybrid_time_ = waiter.read_ht;
+        last_known_status_ = TransactionStatus::PENDING;
+        waiter.callback(TransactionStatusResult{
+            TransactionStatus::PENDING, waiter.read_ht, aborted_subtxn_set});
+      } else {
+        // We know status at global_limit_ht, so could notify waiter.
+        auto result = TransactionStatusResult{*status_for_waiter, time_of_status};
+        if (result.status == TransactionStatus::COMMITTED ||
+            result.status == TransactionStatus::PENDING) {
+          result.aborted_subtxn_set = aborted_subtxn_set;
+        }
+        waiter.callback(std::move(result));
       }
-      waiter.callback(std::move(result));
     } else if (time_of_status >= waiter.read_ht) {
       // It means that between read_ht and global_limit_ht transaction was pending.
       // It implies that transaction was not committed before request was sent.
@@ -402,7 +421,8 @@ void RunningTransaction::NotifyWaiters(int64_t serial_no, HybridTime time_of_sta
       LOG_IF_WITH_PREFIX(DFATAL, waiter.serial_no > serial_no)
           << "Notify waiter with request id greater than id of status request: "
           << waiter.serial_no << " vs " << serial_no;
-      waiter.callback(TransactionStatusResult{TransactionStatus::PENDING, time_of_status});
+      waiter.callback(TransactionStatusResult{
+          TransactionStatus::PENDING, time_of_status, aborted_subtxn_set});
     } else {
       waiter.callback(STATUS(TryAgain,
           Format("Cannot determine transaction status with read_ht $0, and global_limit_ht $1, "
@@ -512,13 +532,16 @@ void RunningTransaction::SetApplyData(const docdb::ApplyTransactionState& apply_
   }
 }
 
-void RunningTransaction::SetOpId(const OpId& id) {
-  opId.index = id.index;
-  opId.term = id.term;
+void RunningTransaction::SetApplyOpId(const OpId& op_id) {
+  apply_record_op_id_ = op_id;
 }
 
 bool RunningTransaction::ProcessingApply() const {
   return processing_apply_.load(std::memory_order_acquire);
+}
+
+const TabletId& RunningTransaction::status_tablet() const {
+  return metadata_.status_tablet;
 }
 
 void RunningTransaction::UpdateTransactionStatusLocation(const TabletId& new_status_tablet) {

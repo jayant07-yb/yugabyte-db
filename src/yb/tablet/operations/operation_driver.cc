@@ -42,7 +42,7 @@
 
 #include "yb/consensus/consensus_fwd.h"
 #include "yb/consensus/consensus.h"
-#include "yb/consensus/consensus.pb.h"
+#include "yb/consensus/consensus.messages.h"
 
 #include "yb/gutil/callback.h"
 #include "yb/gutil/ref_counted.h"
@@ -62,10 +62,12 @@
 #include "yb/util/atomic.h"
 #include "yb/util/debug-util.h"
 #include "yb/util/debug/trace_event.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/logging.h"
 #include "yb/util/threadpool.h"
 #include "yb/util/trace.h"
+
+using std::string;
 
 using namespace std::literals;
 
@@ -92,14 +94,11 @@ OperationDriver::OperationDriver(OperationTracker *operation_tracker,
     : operation_tracker_(operation_tracker),
       consensus_(consensus),
       preparer_(preparer),
-      trace_(new Trace()),
+      trace_(Trace::NewTraceForParent(Trace::CurrentTrace())),
       start_time_(MonoTime::Now()),
       replication_state_(NOT_REPLICATING),
       prepare_state_(NOT_PREPARED),
       table_type_(table_type) {
-  if (Trace::CurrentTrace()) {
-    Trace::CurrentTrace()->AddChildTrace(trace_.get());
-  }
   DCHECK(IsAcceptableAtomicImpl(op_id_copy_));
 }
 
@@ -395,7 +394,7 @@ void OperationDriver::ApplyTask(int64_t leader_term, OpIds* applied_op_ids) {
   scoped_refptr<OperationDriver> ref(this);
 
   {
-    auto status = operation_->Replicated(leader_term);
+    auto status = operation_->Replicated(leader_term, WasPending::kTrue);
     LOG_IF_WITH_PREFIX(FATAL, !status.ok())
         << "Apply failed: " << status
         << ", request: " << operation_->request()->ShortDebugString();
@@ -469,6 +468,12 @@ int64_t OperationDriver::SpaceUsed() {
     return consensus_round->replicate_msg()->SpaceUsedLong();
   }
   return operation()->request()->SpaceUsedLong();
+}
+
+size_t OperationDriver::ReplicateMsgSize() {
+  return consensus_round() && consensus_round()->replicate_msg()
+             ? consensus_round()->replicate_msg()->SerializedSize()
+             : 0;
 }
 
 }  // namespace tablet

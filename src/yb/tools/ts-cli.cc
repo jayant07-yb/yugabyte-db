@@ -33,7 +33,6 @@
 
 #include <memory>
 
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "yb/common/partition.h"
@@ -91,6 +90,10 @@ using yb::tserver::ListTabletsRequestPB;
 using yb::tserver::ListTabletsResponsePB;
 using yb::tserver::TabletServerAdminServiceProxy;
 using yb::tserver::TabletServerServiceProxy;
+using yb::tserver::ListMasterServersRequestPB;
+using yb::tserver::ListMasterServersResponsePB;
+using yb::consensus::StartRemoteBootstrapRequestPB;
+using yb::consensus::StartRemoteBootstrapResponsePB;
 
 const char* const kListTabletsOp = "list_tablets";
 const char* const kVerifyTabletOp = "verify_tablet";
@@ -110,22 +113,25 @@ const char* const kFlushAllTabletsOp = "flush_all_tablets";
 const char* const kCompactTabletOp = "compact_tablet";
 const char* const kCompactAllTabletsOp = "compact_all_tablets";
 const char* const kReloadCertificatesOp = "reload_certificates";
+const char* const kRemoteBootstrapOp = "remote_bootstrap";
+const char* const kListMasterServersOp = "list_master_servers";
 
-DEFINE_string(server_address, "localhost",
+
+DEFINE_UNKNOWN_string(server_address, "localhost",
               "Address of server to run against");
-DEFINE_int64(timeout_ms, 1000 * 60, "RPC timeout in milliseconds");
+DEFINE_UNKNOWN_int64(timeout_ms, 1000 * 60, "RPC timeout in milliseconds");
 
-DEFINE_bool(force, false, "set_flag: If true, allows command to set a flag "
+DEFINE_UNKNOWN_bool(force, false, "set_flag: If true, allows command to set a flag "
             "which is not explicitly marked as runtime-settable. Such flag changes may be "
             "simply ignored on the server, or may cause the server to crash.\n"
             "delete_tablet: If true, command will delete the tablet and remove the tablet "
             "from the memory, otherwise tablet metadata will be kept in memory with state "
             "TOMBSTONED.");
 
-DEFINE_string(certs_dir_name, "",
+DEFINE_UNKNOWN_string(certs_dir_name, "",
               "Directory with certificates to use for secure server connection.");
 
-DEFINE_string(client_node_name, "", "Client node name.");
+DEFINE_UNKNOWN_string(client_node_name, "", "Client node name.");
 
 PB_ENUM_FORMATTERS(yb::consensus::LeaderLeaseStatus);
 
@@ -159,6 +165,7 @@ namespace yb {
 namespace tools {
 
 typedef ListTabletsResponsePB::StatusAndSchemaPB StatusAndSchemaPB;
+typedef ListMasterServersResponsePB::MasterServerAndTypePB MasterServerAndTypePB;
 
 class TsAdminClient {
  public:
@@ -171,6 +178,11 @@ class TsAdminClient {
   // Initialized the client and connects to the specified tablet
   // server.
   Status Init();
+
+  // Make a generic proxy to the given address. Use generic_proxy_ instead for connections
+  // to the address this client is pointed at.
+  Result<std::shared_ptr<server::GenericServiceProxy>> MakeGenericServiceProxy(
+      const std::string& addr);
 
   // Sets 'tablets' a list of status information for all tablets on a
   // given tablet server.
@@ -211,7 +223,7 @@ class TsAdminClient {
   Status CurrentHybridTime(uint64_t* hybrid_time);
 
   // Get the server status
-  Status GetStatus(ServerStatusPB* pb);
+  Status GetStatus(ServerStatusPB* pb, const std::string& addr = "");
 
   // Count write intents on all tablets.
   Status CountIntents(int64_t* num_intents);
@@ -230,6 +242,13 @@ class TsAdminClient {
 
   // Trigger a reload of TLS certificates.
   Status ReloadCertificates();
+
+  // Performs a manual remote bootstrap onto `target_server` for a given tablet.
+  Status RemoteBootstrap(const std::string& target_server, const std::string& tablet_id);
+
+  // List information for all master servers.
+  Status ListMasterServers();
+
  private:
   std::string addr_;
   MonoDelta timeout_;
@@ -280,6 +299,20 @@ Status TsAdminClient::Init() {
   VLOG(1) << "Connected to " << addr_;
 
   return Status::OK();
+}
+
+Result<std::shared_ptr<server::GenericServiceProxy>> TsAdminClient::MakeGenericServiceProxy(
+    const std::string& addr) {
+  HostPort host_port;
+  RETURN_NOT_OK(host_port.ParseString(addr, tserver::TabletServer::kDefaultPort));
+
+  rpc::ProxyCache proxy_cache(messenger_.get());
+
+  auto proxy = std::make_shared<server::GenericServiceProxy>(&proxy_cache, host_port);
+
+  VLOG(1) << "Connected to " << addr;
+
+  return proxy;
 }
 
 Status TsAdminClient::ListTablets(vector<StatusAndSchemaPB>* tablets) {
@@ -439,7 +472,9 @@ Status TsAdminClient::DumpTablet(const std::string& tablet_id) {
   }
 
   QLRowBlock row_block(schema);
-  Slice data = VERIFY_RESULT(rpc.GetSidecar(0));
+  std::string data_str;
+  RETURN_NOT_OK(rpc.AssignSidecarTo(0, &data_str));
+  Slice data(data_str);
   if (!data.empty()) {
     RETURN_NOT_OK(row_block.Deserialize(YQL_CLIENT_CQL, &data));
   }
@@ -518,12 +553,16 @@ Status TsAdminClient::CurrentHybridTime(uint64_t* hybrid_time) {
   return Status::OK();
 }
 
-Status TsAdminClient::GetStatus(ServerStatusPB* pb) {
+Status TsAdminClient::GetStatus(ServerStatusPB* pb, const std::string& addr) {
+  auto proxy = addr.empty() || addr == addr_
+      ? generic_proxy_
+      : VERIFY_RESULT(MakeGenericServiceProxy(addr));
+
   server::GetStatusRequestPB req;
   server::GetStatusResponsePB resp;
   RpcController rpc;
   rpc.set_timeout(timeout_);
-  RETURN_NOT_OK(generic_proxy_->GetStatus(req, &resp, &rpc));
+  RETURN_NOT_OK(proxy->GetStatus(req, &resp, &rpc));
   CHECK(resp.has_status()) << resp.DebugString();
   pb->Swap(resp.mutable_status());
   return Status::OK();
@@ -583,6 +622,68 @@ Status TsAdminClient::ReloadCertificates() {
   return Status::OK();
 }
 
+Status TsAdminClient::RemoteBootstrap(const std::string& source_server,
+                                      const std::string& tablet_id) {
+  ServerStatusPB status_pb;
+  RETURN_NOT_OK(GetStatus(&status_pb));
+
+  ServerStatusPB source_server_status_pb;
+  RETURN_NOT_OK(GetStatus(&source_server_status_pb, source_server));
+
+  StartRemoteBootstrapRequestPB req;
+  StartRemoteBootstrapResponsePB resp;
+  RpcController rpc;
+
+  HostPort host_port;
+  RETURN_NOT_OK(host_port.ParseString(source_server, tserver::TabletServer::kDefaultPort));
+
+  req.set_dest_uuid(status_pb.node_instance().permanent_uuid());
+  req.set_tablet_id(tablet_id);
+  req.set_caller_term(std::numeric_limits<int64_t>::max());
+  req.set_bootstrap_source_peer_uuid(source_server_status_pb.node_instance().permanent_uuid());
+  HostPortToPB(host_port, req.mutable_bootstrap_source_private_addr()->Add());
+  rpc.set_timeout(timeout_);
+  RETURN_NOT_OK_PREPEND(cons_proxy_->StartRemoteBootstrap(req, &resp, &rpc),
+                        "StartRemoteBootstrap() failed");
+
+  if (resp.has_error()) {
+    return STATUS(IOError, "Failed to start remote bootstrap: ",
+                           resp.error().ShortDebugString());
+  }
+
+  std::cout << "Successfully started remote bootstrap for "
+            << "tablet <" + tablet_id + ">"
+            << " from server <" << source_server << ">"
+            << std::endl;
+  return Status::OK();
+}
+
+Status TsAdminClient::ListMasterServers() {
+  CHECK(initted_);
+  std::vector<MasterServerAndTypePB> master_servers;
+  ListMasterServersRequestPB req;
+  ListMasterServersResponsePB resp;
+  RpcController rpc;
+
+  rpc.set_timeout(timeout_);
+  RETURN_NOT_OK(ts_proxy_->ListMasterServers(req, &resp, &rpc));
+  if (resp.has_error()) {
+    return StatusFromPB(resp.error().status());
+  }
+
+  master_servers.assign(resp.master_server_and_type().begin(),
+                          resp.master_server_and_type().end());
+
+  std::cout << "RPC Host/Port\t\tRole" << std::endl;
+  for (const auto &master_server_and_type : master_servers) {
+    std::string leader_string = master_server_and_type.is_leader() ? "Leader" : "Follower";
+    std::cout << master_server_and_type.master_server() << "\t\t" << leader_string << std::endl;
+  }
+
+  return Status::OK();
+}
+
+
 namespace {
 
 void SetUsage(const char* argv0) {
@@ -608,7 +709,9 @@ void SetUsage(const char* argv0) {
       << "  " << kCompactAllTabletsOp << "\n"
       << "  " << kVerifyTabletOp
       << " <tablet_id> <number of indexes> <index list> <start_key> <number of rows>\n"
-      << "  " << kReloadCertificatesOp << "\n";
+      << "  " << kReloadCertificatesOp << "\n"
+      << "  " << kRemoteBootstrapOp << " <server address to bootstrap from> <tablet_id>\n"
+      << "  " << kListMasterServersOp << "\n";
   google::SetUsageMessage(str.str());
 }
 
@@ -811,6 +914,18 @@ static int TsCliMain(int argc, char** argv) {
 
     RETURN_NOT_OK_PREPEND_FROM_MAIN(client.ReloadCertificates(),
                                     "Unable to reload TLS certificates");
+  } else if (op == kRemoteBootstrapOp) {
+    CHECK_ARGC_OR_RETURN_WITH_USAGE(op, 4);
+
+    string target_server = argv[2];
+    string tablet_id = argv[3];
+    RETURN_NOT_OK_PREPEND_FROM_MAIN(client.RemoteBootstrap(target_server, tablet_id),
+                                    "Unable to run remote bootstrap");
+  } else if (op == kListMasterServersOp) {
+    CHECK_ARGC_OR_RETURN_WITH_USAGE(op, 2);
+
+    RETURN_NOT_OK_PREPEND_FROM_MAIN(client.ListMasterServers(),
+                                    "Unable to list master servers on " + addr);
   } else {
     std::cerr << "Invalid operation: " << op << std::endl;
     google::ShowUsageWithFlagsRestrict(argv[0], __FILE__);

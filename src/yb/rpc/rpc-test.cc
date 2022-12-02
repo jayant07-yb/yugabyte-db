@@ -60,6 +60,7 @@
 #include "yb/rpc/tcp_stream.h"
 #include "yb/rpc/yb_rpc.h"
 
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/countdown_latch.h"
 #include "yb/util/env.h"
 #include "yb/util/format.h"
@@ -69,11 +70,11 @@
 #include "yb/util/status_format.h"
 #include "yb/util/status_log.h"
 #include "yb/util/test_macros.h"
-#include "yb/util/test_util.h"
 #include "yb/util/tsan_util.h"
 #include "yb/util/thread.h"
 
 #include "yb/util/memory/memory_usage_test_util.h"
+#include "yb/util/flags.h"
 
 METRIC_DECLARE_histogram(handler_latency_yb_rpc_test_CalculatorService_Sleep);
 METRIC_DECLARE_histogram(rpc_incoming_queue_time);
@@ -81,7 +82,7 @@ METRIC_DECLARE_counter(tcp_bytes_sent);
 METRIC_DECLARE_counter(tcp_bytes_received);
 METRIC_DECLARE_counter(rpcs_timed_out_early_in_queue);
 
-DEFINE_int32(rpc_test_connection_keepalive_num_iterations, 1,
+DEFINE_UNKNOWN_int32(rpc_test_connection_keepalive_num_iterations, 1,
   "Number of iterations in TestRpc.TestConnectionKeepalive");
 
 DECLARE_bool(TEST_pause_calculator_echo_request);
@@ -372,11 +373,7 @@ TEST_F(TestRpc, TestConnectionKeepalive) {
   // rpc_connection_timeout less than kGcTimeout.
   FLAGS_rpc_connection_timeout_ms = MonoDelta(kGcTimeout).ToMilliseconds() / 2;
   FLAGS_enable_rpc_keepalive = true;
-  if (!FLAGS_vmodule.empty()) {
-    FLAGS_vmodule = FLAGS_vmodule + ",yb_rpc=5";
-  } else {
-    FLAGS_vmodule = "yb_rpc=5";
-  }
+  ASSERT_OK(EnableVerboseLoggingForModule("yb_rpc", 5));
   // Set up server.
   HostPort server_addr;
   StartTestServer(&server_addr, options);
@@ -805,8 +802,8 @@ TEST_F(TestRpc, QueueTimeout) {
 struct DisconnectShare {
   Proxy proxy;
   size_t left;
-  std::mutex mutex;
-  std::condition_variable cond;
+  std::mutex mutex{};
+  std::condition_variable cond{};
   std::unordered_map<std::string, size_t> counts;
 };
 
@@ -850,7 +847,8 @@ TEST_F(TestRpc, TestDisconnect) {
   auto client_messenger = CreateAutoShutdownMessengerHolder("Client");
 
   constexpr size_t kRequests = 10000;
-  DisconnectShare share = { { client_messenger.get(), server_addr }, kRequests };
+  auto share = DisconnectShare{
+      .proxy = {client_messenger.get(), server_addr}, .left = kRequests, .counts = {}};
 
   std::vector<DisconnectTask> tasks;
   for (size_t i = 0; i != kRequests; ++i) {

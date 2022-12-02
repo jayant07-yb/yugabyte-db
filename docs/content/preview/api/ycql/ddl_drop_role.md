@@ -10,8 +10,7 @@ menu:
 aliases:
   - /preview/api/cassandra/ddl_drop_role
   - /preview/api/ycql/ddl_drop_role
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -30,7 +29,7 @@ This statement is enabled by setting the YB-TServer flag [`use_cassandra_authent
 
 ### Grammar
 
-```
+```ebnf
 drop_role ::=  DROP ROLE [ IF EXISTS ] role_name
 ```
 

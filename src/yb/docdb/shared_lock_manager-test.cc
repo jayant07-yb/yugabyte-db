@@ -21,6 +21,7 @@
 
 #include "yb/rpc/thread_pool.h"
 
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/ref_cnt_buffer.h"
 #include "yb/util/result.h"
 #include "yb/util/test_macros.h"
@@ -162,7 +163,10 @@ TEST_F(SharedLockManagerTest, QuickLockUnlock) {
 }
 
 TEST_F(SharedLockManagerTest, LockConflicts) {
-  rpc::ThreadPool tp(rpc::ThreadPoolOptions{"test_pool"s, 10, 1});
+  rpc::ThreadPool tp(rpc::ThreadPoolOptions{
+    .name = "test_pool"s,
+    .max_workers = 1,
+  });
 
   for (size_t idx1 = 0; idx1 != kIntentTypeSetMapSize; ++idx1) {
     IntentTypeSet set1(idx1);

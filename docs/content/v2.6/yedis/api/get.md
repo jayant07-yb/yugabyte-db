@@ -6,17 +6,17 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2070
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`GET key`</b><br>
+**`GET key`**
+
 This command fetches the value that is associated with the given `key`.
 
-<li>If the `key` does not exist, null is returned.</li>
-<li>If the `key` is associated with a non-string value, an error is raised.</li>
+- If the `key` does not exist, null is returned.
+- If the `key` is associated with a non-string value, an error is raised.
 
 ## Return value
 

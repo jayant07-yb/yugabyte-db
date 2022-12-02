@@ -20,8 +20,6 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
-#ifndef YB_ROCKSDB_DB_DB_IMPL_H
-#define YB_ROCKSDB_DB_DB_IMPL_H
 
 #pragma once
 
@@ -73,6 +71,7 @@ class WriteCallback;
 class FileNumbersProvider;
 struct JobContext;
 struct ExternalSstFileInfo;
+struct RocksDBPriorityThreadPoolMetrics;
 
 class DBImpl : public DB {
  public:
@@ -199,7 +198,6 @@ class DBImpl : public DB {
 
   virtual SequenceNumber GetLatestSequenceNumber() const override;
 
-#ifndef ROCKSDB_LITE
   virtual Status DisableFileDeletions() override;
   virtual Status EnableFileDeletions(bool force) override;
   virtual int IsFileDeletionsEnabled() const;
@@ -210,7 +208,7 @@ class DBImpl : public DB {
   virtual Status GetSortedWalFiles(VectorLogPtr* files) override;
 
   virtual Status GetUpdatesSince(
-      SequenceNumber seq_number, unique_ptr<TransactionLogIterator>* iter,
+      SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,
       const TransactionLogIterator::ReadOptions&
           read_options = TransactionLogIterator::ReadOptions()) override;
   virtual Status DeleteFile(std::string name) override;
@@ -304,7 +302,6 @@ class DBImpl : public DB {
   virtual Status AddFile(ColumnFamilyHandle* column_family,
                          const std::string& file_path, bool move_file) override;
 
-#endif  // ROCKSDB_LITE
 
   // Similar to GetSnapshot(), but also lets the db know that this snapshot
   // will be used for transaction write-conflict checking.  The DB can then
@@ -486,6 +483,9 @@ class DBImpl : public DB {
 
   Result<std::string> GetMiddleKey() override;
 
+  // Returns a table reader for the largest SST file.
+  Result<TableReader*> TEST_GetLargestSstTableReader() override;
+
   // Used in testing to make the old memtable immutable and start writing to a new one.
   void TEST_SwitchMemtable() override;
 
@@ -493,7 +493,7 @@ class DBImpl : public DB {
   Env* const env_;
   Env* const checkpoint_env_;
   const std::string dbname_;
-  unique_ptr<VersionSet> versions_;
+  std::unique_ptr<VersionSet> versions_;
   const DBOptions db_options_;
   std::shared_ptr<Statistics> stats_;
   InternalIterator* NewInternalIterator(const ReadOptions&,
@@ -527,9 +527,7 @@ class DBImpl : public DB {
  private:
   friend class DB;
   friend class InternalStats;
-#ifndef ROCKSDB_LITE
   friend class ForwardIterator;
-#endif
   friend struct SuperVersion;
   friend class CompactedDBImpl;
 #ifndef NDEBUG
@@ -599,13 +597,11 @@ class DBImpl : public DB {
   // Wait for memtable flushed
   Status WaitForFlushMemTable(ColumnFamilyData* cfd);
 
-#ifndef ROCKSDB_LITE
   Status CompactFilesImpl(
       const CompactionOptions& compact_options, ColumnFamilyData* cfd,
       Version* version, const std::vector<std::string>& input_file_names,
       const int output_level, int output_path_id, JobContext* job_context,
       LogBuffer* log_buffer);
-#endif  // ROCKSDB_LITE
 
   ColumnFamilyData* GetColumnFamilyDataByName(const std::string& cf_name);
 
@@ -720,7 +716,7 @@ class DBImpl : public DB {
   bool log_empty_;
   ColumnFamilyHandleImpl* default_cf_handle_;
   InternalStats* default_cf_internal_stats_;
-  unique_ptr<ColumnFamilyMemTablesImpl> column_family_memtables_;
+  std::unique_ptr<ColumnFamilyMemTablesImpl> column_family_memtables_;
   struct LogFileNumberSize {
     explicit LogFileNumberSize(uint64_t _number)
         : number(_number) {}
@@ -902,6 +898,10 @@ class DBImpl : public DB {
   // stores the number of flushes are currently running
   int num_running_flushes_;
 
+  // Tracks state changes for priority thread pool tasks.
+  // Metrics are updated within the PriorityThreadPoolTask.
+  std::shared_ptr<RocksDBPriorityThreadPoolMetrics> priority_thread_pool_metrics_;
+
   // Information for a manual compaction
   struct ManualCompaction {
     ColumnFamilyData* cfd;
@@ -963,9 +963,7 @@ class DBImpl : public DB {
   // The options to access storage files
   const EnvOptions env_options_;
 
-#ifndef ROCKSDB_LITE
   WalManager wal_manager_;
-#endif  // ROCKSDB_LITE
 
   // Unified interface for logging events
   EventLogger event_logger_;
@@ -1011,7 +1009,6 @@ class DBImpl : public DB {
       ColumnFamilyData* cfd, SuperVersion* new_sv,
       const MutableCFOptions& mutable_cf_options);
 
-#ifndef ROCKSDB_LITE
   using DB::GetPropertiesOfAllTables;
   virtual Status GetPropertiesOfAllTables(ColumnFamilyHandle* column_family,
                                           TablePropertiesCollection* props)
@@ -1026,7 +1023,6 @@ class DBImpl : public DB {
   void GetColumnFamiliesOptionsUnlocked(
       std::vector<std::string>* column_family_names,
       std::vector<ColumnFamilyOptions>* column_family_options);
-#endif  // ROCKSDB_LITE
 
   // Function that Get and KeyMayExist call with no_io true or false
   // Note: 'value_found' from KeyMayExist propagates here
@@ -1062,5 +1058,3 @@ static void ClipToRange(T* ptr, V minvalue, V maxvalue) {
 }
 
 }  // namespace rocksdb
-
-#endif // YB_ROCKSDB_DB_DB_IMPL_H

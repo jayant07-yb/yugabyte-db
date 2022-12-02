@@ -36,14 +36,16 @@
 #include "yb/yql/cql/ql/exec/executor.h"
 #include "yb/yql/cql/ql/ptree/pt_expr.h"
 
+using std::string;
+
 namespace yb {
 namespace ql {
 
 using strings::Substitute;
 
 Status Executor::PTConstToPB(const PTExpr::SharedPtr& expr,
-                                     QLValuePB *const_pb,
-                                     bool negate) {
+                             QLValuePB *const_pb,
+                             bool negate) {
   if (expr->internal_type() == InternalType::VALUE_NOT_SET) {
     SetNull(const_pb);
   }
@@ -59,7 +61,7 @@ Status Executor::PTConstToPB(const PTExpr::SharedPtr& expr,
       return Status::OK();
     }
 
-    case ExprOperator::kConst:
+    case ExprOperator::kConst: FALLTHROUGH_INTENDED;
     case ExprOperator::kCollection:
       break;
 
@@ -105,6 +107,7 @@ Status Executor::PTConstToPB(const PTExpr::SharedPtr& expr,
     case DataType::MAP: FALLTHROUGH_INTENDED;
     case DataType::SET: FALLTHROUGH_INTENDED;
     case DataType::LIST: FALLTHROUGH_INTENDED;
+    case DataType::TUPLE: FALLTHROUGH_INTENDED;
     case DataType::FROZEN: FALLTHROUGH_INTENDED;
     case DataType::USER_DEFINED_TYPE: {
       DCHECK(!negate) << "Invalid datatype for negation";
@@ -120,7 +123,7 @@ Status Executor::PTConstToPB(const PTExpr::SharedPtr& expr,
 }
 
 Status Executor::PTExprToPB(const PTConstVarInt *const_pt, QLValuePB *const_pb,
-                                    bool negate) {
+                            bool negate) {
   switch (const_pt->expected_internal_type()) {
     case InternalType::kInt8Value: {
       int64_t value;
@@ -226,7 +229,7 @@ Status Executor::PTExprToPB(const PTConstVarInt *const_pt, QLValuePB *const_pb,
 }
 
 Status Executor::PTExprToPB(const PTConstDecimal *const_pt, QLValuePB *const_pb,
-                                    bool negate) {
+                            bool negate) {
   switch (const_pt->expected_internal_type()) {
     case InternalType::kDecimalValue: {
       return const_pt->ToDecimal(const_pb->mutable_decimal_value(), negate);
@@ -254,7 +257,7 @@ Status Executor::PTExprToPB(const PTConstDecimal *const_pt, QLValuePB *const_pb,
 // The following numeric functions might be needed if we fold constant at compile time.
 // Leave them here for now.
 Status Executor::PTExprToPB(const PTConstInt *const_pt, QLValuePB *const_pb,
-                                    bool negate) {
+                            bool negate) {
   int64_t value = const_pt->value();
   if (negate) {
     value = -value;
@@ -291,7 +294,7 @@ Status Executor::PTExprToPB(const PTConstInt *const_pt, QLValuePB *const_pb,
 }
 
 Status Executor::PTExprToPB(const PTConstDouble *const_pt, QLValuePB *const_pb,
-                                    bool negate) {
+                            bool negate) {
   long double value = const_pt->value();
   if (negate) {
     value = -value;
@@ -459,6 +462,16 @@ Status Executor::PTExprToPB(const PTCollectionExpr *const_pt, QLValuePB *const_p
       for (auto &elem : const_pt->values()) {
         // Expected elem to be constant because CQL only allows collection of constants.
         QLValuePB *elem_pb = list_value->add_elems();
+        RETURN_NOT_OK(PTConstToPB(elem, elem_pb));
+      }
+      break;
+    }
+
+    case TUPLE: {
+      QLSeqValuePB *tuple_value = const_pb->mutable_tuple_value();
+      for (auto &elem : const_pt->values()) {
+        // Expected elem to be constant because CQL only allows collection of constants.
+        QLValuePB *elem_pb = tuple_value->add_elems();
         RETURN_NOT_OK(PTConstToPB(elem, elem_pb));
       }
       break;

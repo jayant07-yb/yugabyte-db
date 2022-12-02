@@ -31,7 +31,7 @@
 #
 
 set(YB_PCH_PREFIX rpc)
-set(YB_PCH_DEP_LIBS cds gmock gutil libev protoc snappy yb_test_util yb_util)
+set(YB_PCH_DEP_LIBS cds gmock gtest gutil libev protoc snappy yb_test_util yb_util)
 
 ADD_YB_LIBRARY(
     yrpc_base
@@ -98,6 +98,7 @@ set(YRPC_SRCS
     serialization.cc
     service_if.cc
     service_pool.cc
+    sidecars.cc
     stream.cc
     strand.cc
     tcp_stream.cc
@@ -168,6 +169,7 @@ target_link_libraries(any_yrpc yrpc rpc_base_proto)
 # Tests
 set(YB_TEST_LINK_LIBS rtest_yrpc yrpc rpc_test_util any_yrpc ${YB_MIN_TEST_LIBS})
 ADD_YB_TEST(growable_buffer-test)
+ADD_YB_TEST(lwproto-test)
 ADD_YB_TEST(mt-rpc-test RUN_SERIAL true)
 ADD_YB_TEST(periodic-test)
 ADD_YB_TEST(reactor-test)

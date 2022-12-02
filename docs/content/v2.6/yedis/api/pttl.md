@@ -6,13 +6,13 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2235
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`PTTL key`</b><br>
+**`PTTL key`**
+
 Similar to TTL this command returns the remaining time to live of a key that has a timeout set, with the sole difference that TTL returns the amount of remaining time in seconds while PTTL returns it in milliseconds.
 
 ## Return value

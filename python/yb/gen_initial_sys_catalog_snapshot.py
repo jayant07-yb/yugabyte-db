@@ -18,14 +18,14 @@ A wrapper script for a C++ program that generates the initial sys catalog snapsh
 
 import sys
 import os
-import argparse
 import subprocess
 import logging
 import shutil
 import time
 
-from yugabyte_pycommon import init_logging, run_program, WorkDirContext, mkdir_p
-from yb.common_util import YB_SRC_ROOT
+from yugabyte_pycommon import run_program, WorkDirContext, mkdir_p  # type: ignore
+
+from yb.common_util import YB_SRC_ROOT, init_logging
 
 
 def main():
@@ -54,9 +54,9 @@ def main():
     start_time_sec = time.time()
     logging.info("Starting creating initial system catalog snapshot data")
     logging.info("Logging to: %s", os.path.join(build_root, tool_name + '.err'))
-    os.environ['YB_EXTRA_GTEST_FLAGS'] = (
-        '--initial_sys_catalog_snapshot_dest_path=' + snapshot_dest_path
-    )
+    os.environ['YB_EXTRA_GTEST_FLAGS'] = ' '.join(
+        ['--initial_sys_catalog_snapshot_dest_path=' + snapshot_dest_path] +
+        sys.argv[1:])
     os.environ['YB_CTEST_VERBOSE'] = '1'
     with WorkDirContext(build_root):
         initdb_result = run_program(
@@ -79,5 +79,5 @@ def main():
 
 
 if __name__ == '__main__':
-    init_logging()
+    init_logging(verbose=False)
     main()

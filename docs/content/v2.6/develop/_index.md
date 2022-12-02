@@ -5,12 +5,7 @@ linkTitle: Develop
 description: Build YugabyteDB application that use ecosystem integrations and GraphQL.
 headcontent: Get started building applications based on YugabyteDB.
 image: /images/section_icons/index/develop.png
-section: YUGABYTEDB CORE
-menu:
-  v2.6:
-    identifier: develop
-    weight: 600
-
+type: indexpage
 ---
 
 <div class="row">
@@ -70,7 +65,7 @@ menu:
 
 <!--  <a class="section-link icon-offset" href="port-existing-apps/">
     <div class="icon">
-      <i class="fas fa-sign-in" aria-hidden="true"></i>
+      <i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>
     </div>
     <div class="text">
       Port Existing Apps

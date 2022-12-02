@@ -3,13 +3,8 @@ title: Explore features
 headerTitle: Explore features
 linkTitle: Explore features
 description: Explore the features of YugabyteDB on macOS, Linux, Docker, and Kubernetes (Minikube).
-headcontent:
 image: /images/section_icons/index/explore.png
-section: YUGABYTEDB CORE
-menu:
-  v2.6:
-    identifier: explore
-    weight: 540
+type: indexpage
 ---
 
 {{< tip title="Tip" >}}
@@ -32,7 +27,7 @@ Use [yb-ctl](../admin/yb-ctl) local cluster management utility to explore the co
   </div>
 
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">
-    <a class="section-link icon-offset" href="fault-tolerance/macos/">
+    <a class="section-link icon-offset" href="fault-tolerance/">
       <div class="head">
         <img class="icon" src="/images/section_icons/explore/fault_tolerance.png" aria-hidden="true" />
         <div class="title">Fault tolerance</div>
@@ -58,7 +53,7 @@ Use [yb-ctl](../admin/yb-ctl) local cluster management utility to explore the co
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">
     <a class="section-link icon-offset" href="transactions/">
       <div class="head">
-        <div class="icon"><i class="fas fa-file-invoice-dollar"></i></div>
+        <div class="icon"><i class="fa-solid fa-file-invoice-dollar"></i></div>
         <div class="title">Transactions</div>
       </div>
       <div class="body">
@@ -70,7 +65,7 @@ Use [yb-ctl](../admin/yb-ctl) local cluster management utility to explore the co
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">
     <a class="section-link icon-offset" href="json-support/jsonb-ysql/">
       <div class="head">
-        <div class="icon"><i class="far fa-file-code"></i></div>
+        <div class="icon"><i class="fa-regular fa-file-code"></i></div>
         <div class="title">JSON support</div>
       </div>
       <div class="body">
@@ -78,7 +73,7 @@ Use [yb-ctl](../admin/yb-ctl) local cluster management utility to explore the co
       </div>
     </a>
   </div>
-   
+
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">
     <a class="section-link icon-offset" href="multi-region-deployments/">
       <div class="head">

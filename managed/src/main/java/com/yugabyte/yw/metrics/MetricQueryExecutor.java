@@ -2,20 +2,21 @@
 
 package com.yugabyte.yw.metrics;
 
+import static com.yugabyte.yw.common.Util.SYSTEM_PLATFORM_DB;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.collect.ImmutableSet;
 import com.yugabyte.yw.common.ApiHelper;
-import com.yugabyte.yw.common.Util;
 import com.yugabyte.yw.models.MetricConfig;
-import java.net.URLEncoder;
+import com.yugabyte.yw.models.MetricConfigDefinition;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TimeZone;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
@@ -25,49 +26,43 @@ import play.libs.Json;
 @Slf4j
 public class MetricQueryExecutor implements Callable<JsonNode> {
 
-  public static final String EXPORTED_INSTANCE = "exported_instance";
   public static final String DATE_FORMAT_STRING = "yyyy-MM-dd HH:mm:ss";
-  private ApiHelper apiHelper;
-  private play.Configuration appConfig;
-  private YBMetricQueryComponent ybMetricQueryComponent;
+  private final ApiHelper apiHelper;
 
-  private Map<String, String> queryParam = new HashMap<>();
-  private Map<String, String> additionalFilters = new HashMap<>();
-  private String queryUrl;
+  private final MetricUrlProvider metricUrlProvider;
+
+  private final Map<String, String> queryParam = new HashMap<>();
+  private final Map<String, String> additionalFilters = new HashMap<>();
   private int queryRangeSecs = 0;
-  private MetricSettings metricSettings;
+  private final MetricSettings metricSettings;
 
-  private boolean isRecharts;
+  private final boolean isRecharts;
 
   public MetricQueryExecutor(
-      play.Configuration appConfig,
+      MetricUrlProvider metricUrlProvider,
       ApiHelper apiHelper,
       Map<String, String> queryParam,
-      Map<String, String> additionalFilters,
-      YBMetricQueryComponent ybMetricQueryComponent) {
+      Map<String, String> additionalFilters) {
     this(
-        appConfig,
+        metricUrlProvider,
         apiHelper,
         queryParam,
         additionalFilters,
-        ybMetricQueryComponent,
         MetricSettings.defaultSettings(queryParam.get("queryKey")),
         false);
   }
 
   public MetricQueryExecutor(
-      play.Configuration appConfig,
+      MetricUrlProvider metricUrlProvider,
       ApiHelper apiHelper,
       Map<String, String> queryParam,
       Map<String, String> additionalFilters,
-      YBMetricQueryComponent ybMetricQueryComponent,
       MetricSettings metricSettings,
       boolean isRecharts) {
     this.apiHelper = apiHelper;
-    this.appConfig = appConfig;
+    this.metricUrlProvider = metricUrlProvider;
     this.queryParam.putAll(queryParam);
     this.additionalFilters.putAll(additionalFilters);
-    this.ybMetricQueryComponent = ybMetricQueryComponent;
     this.metricSettings = metricSettings;
     this.isRecharts = isRecharts;
     if (queryParam.containsKey("step")) {
@@ -79,64 +74,27 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
     }
   }
 
-  /**
-   * Get the metrics base uri based on the appConfig yb.metrics.uri
-   *
-   * @return returns metrics url string
-   */
-  private String getMetricsUrl() {
-    String metricsUrl = appConfig.getString("yb.metrics.url");
-    if (metricsUrl == null || metricsUrl.isEmpty()) {
-      throw new RuntimeException("yb.metrics.url not set");
-    }
-
-    return metricsUrl;
-  }
-
   private JsonNode getMetrics() {
     return getMetrics(this.queryParam);
   }
 
   private JsonNode getMetrics(Map<String, String> queryParam) {
-    boolean useNativeMetrics = appConfig.getBoolean("yb.metrics.useNative", false);
-    if (useNativeMetrics) {
-      return ybMetricQueryComponent.query(queryParam);
+    String queryUrl;
+    if (queryParam.containsKey("end")) {
+      queryUrl = metricUrlProvider.getMetricsUrl() + "/query_range";
     } else {
-      if (queryParam.containsKey("end")) {
-        this.queryUrl = this.getMetricsUrl() + "/query_range";
-      } else {
-        this.queryUrl = this.getMetricsUrl() + "/query";
-      }
-
-      log.trace("Executing metric query {}: {}", queryUrl, queryParam);
-      return apiHelper.getRequest(queryUrl, new HashMap<>(), queryParam);
+      queryUrl = metricUrlProvider.getMetricsUrl() + "/query";
     }
+
+    log.trace("Executing metric query {}: {}", queryUrl, queryParam);
+    return apiHelper.getRequest(queryUrl, new HashMap<>(), queryParam);
   }
 
   private String getDirectURL(String queryExpr) {
-
-    String durationSecs = "3600s";
-    String endString = "";
-
     long endUnixTime = Long.parseLong(queryParam.getOrDefault("end", "0"));
     long startUnixTime = Long.parseLong(queryParam.getOrDefault("start", "0"));
-    if (endUnixTime != 0 && startUnixTime != 0 && endUnixTime > startUnixTime) {
-      // The timezone is set to UTC because If there is a discrepancy between platform and
-      // prometheus timezones, the resulting directURL will show incorrect timeframe.
-      endString =
-          Util.unixTimeToDateString(
-              endUnixTime * 1000, DATE_FORMAT_STRING, TimeZone.getTimeZone("UTC"));
-      durationSecs = String.format("%ds", (endUnixTime - startUnixTime));
-    }
 
-    // Note: this is the URL as prometheus' web interface renders these metrics. It is
-    // possible this breaks over time as we upgrade prometheus.
-    return String.format(
-        "%s/graph?g0.expr=%s&g0.tab=0&g0.range_input=%s&g0.end_input=%s",
-        this.getMetricsUrl().replace("/api/v1", ""),
-        URLEncoder.encode(queryExpr),
-        durationSecs,
-        endString);
+    return metricUrlProvider.getExpressionUrl(queryExpr, startUnixTime, endUnixTime);
   }
 
   @Override
@@ -149,11 +107,12 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
     if (config == null) {
       responseJson.put("error", "Invalid Query Key");
     } else {
-      Map<String, List<MetricLabelFilters>> topNodeFilters;
+      MetricConfigDefinition configDefinition = config.getConfig();
+      Map<String, List<MetricLabelFilters>> splitQueryFilters;
       try {
-        topNodeFilters = getTopNodesFilters(config, responseJson);
+        splitQueryFilters = getSplitQueryFilters(configDefinition, responseJson);
       } catch (Exception e) {
-        log.error("Error occurred getting top nodes list for metric" + metricName, e);
+        log.error("Error occurred split query filters list for metric" + metricName, e);
         responseJson.put("error", e.getMessage());
         return responseJson;
       }
@@ -162,14 +121,12 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
           MetricQueryContext.builder()
               .queryRangeSecs(queryRangeSecs)
               .additionalFilters(additionalFilters)
-              .metricOrFilters(topNodeFilters)
-              .additionalGroupBy(
-                  metricSettings.splitTopNodes > 0
-                      ? ImmutableSet.of(EXPORTED_INSTANCE)
-                      : Collections.emptySet())
+              .metricOrFilters(splitQueryFilters)
+              .additionalGroupBy(getAdditionalGroupBy(metricSettings))
+              .excludeFilters(getExcludeFilters(metricSettings))
               .build();
-      Map<String, String> queries = config.getQueries(this.metricSettings, context);
-      responseJson.set("layout", Json.toJson(config.getLayout()));
+      Map<String, String> queries = configDefinition.getQueries(this.metricSettings, context);
+      responseJson.set("layout", Json.toJson(configDefinition.getLayout()));
       MetricRechartsGraphData rechartsOutput = new MetricRechartsGraphData();
       List<MetricGraphData> output = new ArrayList<>();
       ArrayNode directURLs = responseJson.putArray("directURLs");
@@ -194,7 +151,7 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
           responseJson.put("error", queryResponse.error);
           break;
         } else {
-          output.addAll(queryResponse.getGraphData(metric, config.getLayout()));
+          output.addAll(queryResponse.getGraphData(metric, configDefinition, metricSettings));
         }
       }
       if (isRecharts) {
@@ -207,9 +164,9 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
     return responseJson;
   }
 
-  private Map<String, List<MetricLabelFilters>> getTopNodesFilters(
-      MetricConfig config, ObjectNode responseJson) {
-    if (metricSettings.getSplitTopNodes() <= 0) {
+  private Map<String, List<MetricLabelFilters>> getSplitQueryFilters(
+      MetricConfigDefinition configDefinition, ObjectNode responseJson) {
+    if (metricSettings.getSplitMode() == SplitMode.NONE) {
       return Collections.emptyMap();
     }
     int range = Integer.parseInt(queryParam.get("range"));
@@ -218,9 +175,10 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
             .topKQuery(true)
             .queryRangeSecs(range)
             .additionalFilters(additionalFilters)
-            .additionalGroupBy(ImmutableSet.of(EXPORTED_INSTANCE))
+            .additionalGroupBy(getAdditionalGroupBy(metricSettings))
+            .excludeFilters(getExcludeFilters(metricSettings))
             .build();
-    Map<String, String> queries = config.getQueries(this.metricSettings, context);
+    Map<String, String> queries = configDefinition.getQueries(this.metricSettings, context);
     Map<String, String> topKQueryParams = new HashMap<>(queryParam);
     String endTime = topKQueryParams.remove("end");
     if (StringUtils.isNotBlank(endTime)) {
@@ -228,7 +186,7 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
       topKQueryParams.put("time", endTime);
     }
     Map<String, List<MetricLabelFilters>> results = new HashMap<>();
-    ArrayNode topNodesQueryURLs = responseJson.putArray("topNodesQueryURLs");
+    ArrayNode topKQueryURLs = responseJson.putArray("topKQueryURLs");
     for (Map.Entry<String, String> e : queries.entrySet()) {
       String metric = e.getKey();
       String queryExpr = e.getValue();
@@ -239,7 +197,7 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
           Json.fromJson(queryResponseJson, MetricQueryResponse.class);
 
       try {
-        topNodesQueryURLs.add(getDirectURL(queryExpr));
+        topKQueryURLs.add(getDirectURL(queryExpr));
       } catch (Exception de) {
         log.trace("Error getting direct url", de);
       }
@@ -268,5 +226,31 @@ public class MetricQueryExecutor implements Callable<JsonNode> {
       results.put(metric, metricLabelFilters);
     }
     return results;
+  }
+
+  private Set<String> getAdditionalGroupBy(MetricSettings metricSettings) {
+    switch (metricSettings.getSplitType()) {
+      case NODE:
+        return ImmutableSet.of(MetricQueryHelper.EXPORTED_INSTANCE);
+      case TABLE:
+        return ImmutableSet.of(
+            MetricQueryHelper.NAMESPACE_NAME,
+            MetricQueryHelper.TABLE_ID,
+            MetricQueryHelper.TABLE_NAME);
+      case NAMESPACE:
+        return ImmutableSet.of(MetricQueryHelper.NAMESPACE_NAME);
+      default:
+        return Collections.emptySet();
+    }
+  }
+
+  private Map<String, String> getExcludeFilters(MetricSettings metricSettings) {
+    switch (metricSettings.getSplitType()) {
+      case TABLE:
+      case NAMESPACE:
+        return Collections.singletonMap(MetricQueryHelper.NAMESPACE_NAME, SYSTEM_PLATFORM_DB);
+      default:
+        return Collections.emptyMap();
+    }
   }
 }

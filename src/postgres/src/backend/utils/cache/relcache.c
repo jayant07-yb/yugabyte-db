@@ -234,7 +234,7 @@ do { \
 	if (shared) \
 	{ \
 		snprintf(filename, sizeof(filename), "global/%s", \
-		         RELCACHE_INIT_FILENAME); \
+				 RELCACHE_INIT_FILENAME); \
 	} \
 	else \
 	{ \
@@ -443,6 +443,9 @@ AllocateRelationDesc(Form_pg_class relp)
 	/* make sure relation is marked as having no open file yet */
 	relation->rd_smgr = NULL;
 
+	/* YB properties will be loaded lazily */
+	relation->yb_table_properties = NULL;
+
 	/*
 	 * Copy the relation tuple form
 	 *
@@ -550,7 +553,6 @@ RelationBuildTupleDesc(Relation relation)
 	AttrDefault *attrdef = NULL;
 	AttrMissing *attrmiss = NULL;
 	int			ndef = 0;
-	bool		index_ok;
 
 	/* copy some fields from pg_class row to rd_att */
 	relation->rd_att->tdtypeid = relation->rd_rel->reltype;
@@ -578,15 +580,12 @@ RelationBuildTupleDesc(Relation relation)
 	/*
 	 * Open pg_attribute and begin a scan.  Force heap scan if we haven't yet
 	 * built the critical relcache entries (this includes initdb and startup
-	 * without a pg_internal.init file), or we are building the tuple descriptor
-	 * of the pg_attribute_relid_attnum_index relation.
+	 * without a pg_internal.init file).
 	 */
-	index_ok = criticalRelcachesBuilt &&
-			  RelationGetRelid(relation) != AttributeRelidNumIndexId;
 	pg_attribute_desc = heap_open(AttributeRelationId, AccessShareLock);
 	pg_attribute_scan = systable_beginscan(pg_attribute_desc,
 										   AttributeRelidNumIndexId,
-										   index_ok,
+										   criticalRelcachesBuilt,
 										   NULL,
 										   2, skey);
 
@@ -1319,7 +1318,6 @@ YBLoadRelations()
 		/* Ignore update of existing sys relation as it can't be changed without DB upgrade. */
 		if (tmp_rel && IsSystemRelation(tmp_rel))
 			continue;
-
 		/* get information from the pg_class_tuple */
 		Form_pg_class relp  = (Form_pg_class) GETSTRUCT(pg_class_tuple);
 
@@ -1432,24 +1430,26 @@ typedef struct YbAttrProcessorState {
 } YbAttrProcessorState;
 
 static inline bool
-YbProcessingStarted(const YbAttrProcessorState* state)
+YbIsAttrProcessingStarted(const YbAttrProcessorState* state)
 {
   return OidIsValid(state->relid);
 }
 
 static inline bool
-YbProcessingRequired(const YbAttrProcessorState* state)
+YbIsAttrProcessingRequired(const YbAttrProcessorState* state)
 {
-  return YbProcessingStarted(state) && state->relation;
+  return state->relation;
 }
 
 static bool
-YbApply(YbAttrProcessorState* state, Relation pg_attribute_desc, HeapTuple pg_attribute_tuple)
+YbApplyAttr(YbAttrProcessorState* state,
+            Relation attrel,
+            HeapTuple htup)
 {
-	Form_pg_attribute attp = (Form_pg_attribute) GETSTRUCT(pg_attribute_tuple);
-	if (!YbProcessingStarted(state) || state->relid != attp->attrelid)
+	Form_pg_attribute attp = (Form_pg_attribute) GETSTRUCT(htup);
+	if (!YbIsAttrProcessingStarted(state) || state->relid != attp->attrelid)
 		return false;
-	if (!YbProcessingRequired(state))
+	if (!YbIsAttrProcessingRequired(state))
 		return true;
 	/* Skip system attributes */
 	if (attp->attnum <= 0)
@@ -1486,9 +1486,9 @@ YbApply(YbAttrProcessorState* state, Relation pg_attribute_desc, HeapTuple pg_at
 		bool missingNull;
 
 		/* Do we have a missing value? */
-		Datum missingval = heap_getattr(pg_attribute_tuple,
+		Datum missingval = heap_getattr(htup,
 		                                Anum_pg_attribute_attmissingval,
-		                                pg_attribute_desc->rd_att,
+		                                attrel->rd_att,
 		                                &missingNull);
 		if (!missingNull)
 		{
@@ -1524,33 +1524,31 @@ YbApply(YbAttrProcessorState* state, Relation pg_attribute_desc, HeapTuple pg_at
 }
 
 static void
-YbStartNewProcessing(YbAttrProcessorState* state,
-                     bool sys_rel_update_required,
-                     Relation pg_attribute_desc,
-                     HeapTuple pg_attribute_tuple)
+YbStartNewAttrProcessing(YbAttrProcessorState* state,
+                         bool sys_rel_update_required,
+                         Relation attrel,
+                         HeapTuple htup)
 {
-	Assert(!YbProcessingStarted(state));
-	Form_pg_attribute attp = (Form_pg_attribute) GETSTRUCT(pg_attribute_tuple);
+	Assert(!YbIsAttrProcessingStarted(state));
+	Form_pg_attribute attp = (Form_pg_attribute) GETSTRUCT(htup);
 	Assert(OidIsValid(attp->attrelid));
 	state->relid = attp->attrelid;
-	RelationIdCacheLookup(state->relid, state->relation);
-	if (!state->relation || (!sys_rel_update_required && IsSystemRelation(state->relation)))
-	{
-		/*
-		 * Processing of this relation is not required.
-		 * Nullify the relation to force YbProcessingRequired return false.
-		 */
-		state->relation = NULL;
+	Relation relation;
+	RelationIdCacheLookup(state->relid, relation);
+	if (!relation || (!sys_rel_update_required && IsSystemRelation(relation)))
 		return;
-	}
+
+	state->relation = relation;
 	state->need = state->relation->rd_rel->relnatts;
-	state->constr = (TupleConstr*) MemoryContextAlloc(CacheMemoryContext, sizeof(TupleConstr));
-	state->constr->has_not_null = false;
-	YbApply(state, pg_attribute_desc, pg_attribute_tuple);
+	state->constr = (TupleConstr*) MemoryContextAllocZero(
+		CacheMemoryContext, sizeof(TupleConstr));
+	bool applied = YbApplyAttr(state, attrel, htup);
+	Assert(applied);
+	(void) applied;
 }
 
 static void
-YbCompleteProcessingImpl(const YbAttrProcessorState* state)
+YbCompleteAttrProcessingImpl(const YbAttrProcessorState* state)
 {
 	if (state->need != 0)
 		elog(ERROR, "catalog is missing %d attribute(s) for relid %u", state->need, state->relid);
@@ -1630,14 +1628,14 @@ YbCompleteProcessingImpl(const YbAttrProcessorState* state)
 }
 
 static void
-YbCompleteProcessing(YbAttrProcessorState* state)
+YbCompleteAttrProcessing(YbAttrProcessorState* state)
 {
-	if (YbProcessingStarted(state))
-	{
-		if (YbProcessingRequired(state))
-			YbCompleteProcessingImpl(state);
-		*state = (struct YbAttrProcessorState){0};
-	}
+	if (!YbIsAttrProcessingStarted(state))
+		return;
+
+	if (YbIsAttrProcessingRequired(state))
+		YbCompleteAttrProcessingImpl(state);
+	*state = (struct YbAttrProcessorState){0};
 }
 
 static void
@@ -1654,37 +1652,37 @@ YBUpdateRelationsAttributes(bool sys_relations_update_required)
 	 * info into the Relation entry, which among other things, sets up then constraint and default
 	 * info.
 	 */
-	Relation pg_attribute_desc = heap_open(AttributeRelationId, AccessShareLock);
+	Relation attrel = heap_open(AttributeRelationId, AccessShareLock);
 	SysScanDesc scandesc = systable_beginscan(
-	    pg_attribute_desc, AttributeRelationId, false /* indexOk */, NULL, 0, NULL);
+		attrel, InvalidOid, false /* indexOk */, NULL, 0, NULL);
 	YbAttrProcessorState state = {0};
-	HeapTuple pg_attribute_tuple;
-	while (HeapTupleIsValid(pg_attribute_tuple = systable_getnext(scandesc)))
+	HeapTuple htup;
+	while (HeapTupleIsValid(htup = systable_getnext(scandesc)))
 	{
-		if (!YbApply(&state, pg_attribute_desc, pg_attribute_tuple))
+		if (!YbApplyAttr(&state, attrel, htup))
 		{
-			YbCompleteProcessing(&state);
-			YbStartNewProcessing(
-			    &state, sys_relations_update_required, pg_attribute_desc, pg_attribute_tuple);
+			YbCompleteAttrProcessing(&state);
+			YbStartNewAttrProcessing(
+			    &state, sys_relations_update_required, attrel, htup);
 		}
 	}
-	YbCompleteProcessing(&state);
+	YbCompleteAttrProcessing(&state);
 	systable_endscan(scandesc);
-	heap_close(pg_attribute_desc, AccessShareLock);
+	heap_close(attrel, AccessShareLock);
 }
 
 static void
 YBUpdateRelationsPartitioning(bool sys_relations_update_required)
 {
-	Relation pg_partitioned_table_desc = heap_open(PartitionedRelationId, AccessShareLock);
+	Relation partrel = heap_open(PartitionedRelationId, AccessShareLock);
 	SysScanDesc scandesc = systable_beginscan(
-	    pg_partitioned_table_desc, PartitionedRelationId, false /* indexOk */, NULL, 0, NULL);
+	    partrel, PartitionedRelationId, false /* indexOk */, NULL, 0, NULL);
 
-	HeapTuple pg_partition_tuple;
-	while (HeapTupleIsValid(pg_partition_tuple = systable_getnext(scandesc)))
+	HeapTuple htup;
+	while (HeapTupleIsValid(htup = systable_getnext(scandesc)))
 	{
 		Form_pg_partitioned_table part_table_form =
-		    (Form_pg_partitioned_table) GETSTRUCT(pg_partition_tuple);
+		    (Form_pg_partitioned_table) GETSTRUCT(htup);
 		Relation relation;
 		RelationIdCacheLookup(part_table_form->partrelid, relation);
 
@@ -1699,7 +1697,194 @@ YBUpdateRelationsPartitioning(bool sys_relations_update_required)
 	}
 
 	systable_endscan(scandesc);
-	heap_close(pg_partitioned_table_desc, AccessShareLock);
+	heap_close(partrel, AccessShareLock);
+}
+
+typedef struct YbIndexProcessorState {
+	Oid relid;
+	Relation relation;
+	List *result;
+	Oid	oidIndex;
+	Oid	pkeyIndex;
+	Oid	candidateIndex;
+} YbIndexProcessorState;
+
+static inline bool
+YbIsIndexProcessingStarted(const YbIndexProcessorState *state)
+{
+	return OidIsValid(state->relid);
+}
+
+static inline bool
+YbIsIndexProcessingRequired(const YbIndexProcessorState *state)
+{
+	return state->relation;
+}
+
+static bool
+YbApplyIndex(YbIndexProcessorState *state, HeapTuple htup)
+{
+	Form_pg_index index = (Form_pg_index) GETSTRUCT(htup);
+
+	if (!YbIsIndexProcessingStarted(state) || state->relid != index->indrelid)
+		return false;
+	if (!YbIsIndexProcessingRequired(state))
+		return true;
+
+	/* Further code is copy-paste from the RelationGetIndexList function */
+
+	/* Add index's OID to result list in the proper order */
+	state->result = insert_ordered_oid(state->result, index->indexrelid);
+
+	/*
+	 * indclass cannot be referenced directly through the C struct,
+	 * because it comes after the variable-width indkey field.  Must
+	 * extract the datum the hard way...
+	 */
+	bool isnull;
+	Datum indclassDatum = heap_getattr(
+		htup, Anum_pg_index_indclass, GetPgIndexDescriptor(), &isnull);
+	Assert(!isnull);
+	oidvector *indclass = (oidvector *) DatumGetPointer(indclassDatum);
+
+	/*
+	 * Invalid, non-unique, non-immediate or predicate indexes aren't
+	 * interesting for either oid indexes or replication identity indexes,
+	 * so don't check them.
+	 */
+	if (!IndexIsValid(index) || !index->indisunique ||
+		!index->indimmediate ||
+		!heap_attisnull(htup, Anum_pg_index_indpred, NULL))
+		return true;
+
+	/* Check to see if is a usable btree index on OID */
+	if (index->indnatts == 1 &&
+		index->indkey.values[0] == ObjectIdAttributeNumber &&
+		(indclass->values[0] == OID_BTREE_OPS_OID ||
+		 indclass->values[0] == OID_LSM_OPS_OID))
+		state->oidIndex = index->indexrelid;
+
+	/* remember primary key index if any */
+	if (index->indisprimary)
+		state->pkeyIndex = index->indexrelid;
+
+	/* remember explicitly chosen replica index */
+	if (index->indisreplident)
+		state->candidateIndex = index->indexrelid;
+
+	return true;
+}
+
+static void
+YbCompleteIndexProcessingImpl(const YbIndexProcessorState *state)
+{
+	Assert(YbIsIndexProcessingRequired(state));
+	Relation relation = state->relation;
+	Oid oidIndex = state->oidIndex;
+	Oid pkeyIndex = state->pkeyIndex;
+	Oid candidateIndex = state->candidateIndex;
+	List *result = state->result;
+	char replident = relation->rd_rel->relreplident;
+
+	/* Further code is copy-paste from the RelationGetIndexList function */
+
+	/* Now save a copy of the completed list in the relcache entry. */
+	MemoryContext oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	List *oldlist = relation->rd_indexlist;
+	relation->rd_indexlist = list_copy(result);
+	relation->rd_oidindex = oidIndex;
+	relation->rd_pkindex = pkeyIndex;
+	if (replident == REPLICA_IDENTITY_DEFAULT && OidIsValid(pkeyIndex))
+		relation->rd_replidindex = pkeyIndex;
+	else if (replident == REPLICA_IDENTITY_INDEX && OidIsValid(candidateIndex))
+		relation->rd_replidindex = candidateIndex;
+	else
+		relation->rd_replidindex = InvalidOid;
+	relation->rd_indexvalid = 1;
+	MemoryContextSwitchTo(oldcxt);
+
+	/* Don't leak the old list, if there is one */
+	list_free(oldlist);
+}
+
+static void
+YbCompleteIndexProcessing(YbIndexProcessorState *state)
+{
+	if (!YbIsIndexProcessingStarted(state))
+		return;
+	if (YbIsIndexProcessingRequired(state))
+		YbCompleteIndexProcessingImpl(state);
+
+	list_free(state->result);
+	*state = (struct YbIndexProcessorState){0};
+}
+
+static void
+YbStartNewIndexProcessing(YbIndexProcessorState *state,
+                          bool sys_rel_update_required,
+                          HeapTuple htup)
+{
+	Assert(!YbIsIndexProcessingStarted(state));
+	Form_pg_index index = (Form_pg_index) GETSTRUCT(htup);
+	Assert(OidIsValid(index->indrelid));
+	state->relid = index->indrelid;
+	Relation relation;
+	RelationIdCacheLookup(state->relid, relation);
+	if (!relation || (!sys_rel_update_required && IsSystemRelation(relation)))
+		return;
+	state->relation = relation;
+	bool applied = YbApplyIndex(state, htup);
+	Assert(applied);
+	(void) applied;
+}
+
+/*
+ * YBUpdateRelationsIndicies updates the rd_indexlist field for all relations.
+ * The result of calling this function is identical to call the
+ * RelationGetIndexList postgres' native function for each relation.
+ * But such implementation is not an optimal due to system table preloading
+ * mechanism.
+ * The RelationGetIndexList function updates the rd_indexlist field for
+ * particular relation and it make a search for entries in the rd_index system
+ * table by specifying relation's id as a key. But due to system table
+ * preloading mechanism search in rd_index system will return all the rows from
+ * pg_index and YSQL layer will filter rows which much
+ * specified key (i.e. relation's id).
+ * As a result in case we have M relation and N rows in pg_index YSQL will have
+ * to build and process M * N tuples.
+ * The current implementation processes all the rows in pg_index once.
+ * As a result the complexity is O(N) instead of O(N * M).
+ */
+static void
+YBUpdateRelationsIndicies(bool sys_relations_update_required)
+{
+	Relation indrel = heap_open(IndexRelationId, AccessShareLock);
+	SysScanDesc indscan = systable_beginscan(
+		indrel, IndexIndrelidIndexId, true /* indexOk */, NULL, 0, NULL);
+	HeapTuple htup;
+	YbIndexProcessorState state = {0};
+	while (HeapTupleIsValid(htup = systable_getnext(indscan)))
+	{
+		Form_pg_index index = (Form_pg_index) GETSTRUCT(htup);
+		/*
+		 * Ignore any indexes that are currently being dropped.  This will
+		 * prevent them from being searched, inserted into, or considered in
+		 * HOT-safety decisions.  It's unsafe to touch such an index at all
+		 * since its catalog entries could disappear at any instant.
+		 */
+		if (!IndexIsLive(index))
+			continue;
+
+		if (!YbApplyIndex(&state, htup))
+		{
+			YbCompleteIndexProcessing(&state);
+			YbStartNewIndexProcessing(
+				&state, sys_relations_update_required, htup);
+		}
+	}
+	YbCompleteIndexProcessing(&state);
+	systable_endscan(indscan);
+	heap_close(indrel, AccessShareLock);
 }
 
 static bool
@@ -1736,6 +1921,7 @@ YBPreloadRelCache()
 	 * During the cache loading process postgres reads the data from multiple sys tables.
 	 * It is reasonable to prefetch all these tables in one shot.
 	 */
+	YbTryRegisterCatalogVersionTableForPrefetching();
 	YbRegisterSysTableForPrefetching(DatabaseRelationId);              // pg_database
 	YbRegisterSysTableForPrefetching(RelationRelationId);              // pg_class
 	YbRegisterSysTableForPrefetching(AttributeRelationId);             // pg_attribute
@@ -1747,6 +1933,9 @@ YBPreloadRelCache()
 	YbRegisterSysTableForPrefetching(AttrDefaultRelationId);           // pg_attrdef
 	YbRegisterSysTableForPrefetching(ConstraintRelationId);            // pg_constraint
 	YbRegisterSysTableForPrefetching(PartitionedRelationId);           // pg_partitioned_table
+	YbRegisterSysTableForPrefetching(TypeRelationId);                  // pg_type
+	YbRegisterSysTableForPrefetching(NamespaceRelationId);             // pg_namespace
+	YbRegisterSysTableForPrefetching(AuthIdRelationId);                // pg_authid
 
 	if (!YBIsDBConnectionValid())
 		ereport(FATAL,
@@ -1768,15 +1957,18 @@ YBPreloadRelCache()
 	 * The more effective approach is to build entire cache first. In this case
 	 * only N tuples will be built.
 	 */
-	YBPreloadCatalogCache(DATABASEOID, -1);      // pg_database
-	YBPreloadCatalogCache(RELOID, RELNAMENSP);   // pg_class
-	YBPreloadCatalogCache(ATTNAME, ATTNUM);      // pg_attribute
-	YBPreloadCatalogCache(CLAOID, CLAAMNAMENSP); // pg_opclass
-	YBPreloadCatalogCache(AMOID, AMNAME);        // pg_am
-	YBPreloadCatalogCache(INDEXRELID, -1);       // pg_index
-	YBPreloadCatalogCache(RULERELNAME, -1);      // pg_rewrite
-	YBPreloadCatalogCache(CONSTROID, -1);        // pg_constraint
-	YBPreloadCatalogCache(PARTRELID, -1);        // pg_partitioned_table
+	YbPreloadCatalogCache(DATABASEOID, -1);             // pg_database
+	YbPreloadCatalogCache(RELOID, RELNAMENSP);          // pg_class
+	YbPreloadCatalogCache(ATTNAME, ATTNUM);             // pg_attribute
+	YbPreloadCatalogCache(CLAOID, CLAAMNAMENSP);        // pg_opclass
+	YbPreloadCatalogCache(AMOID, AMNAME);               // pg_am
+	YbPreloadCatalogCache(INDEXRELID, -1);              // pg_index
+	YbPreloadCatalogCache(RULERELNAME, -1);             // pg_rewrite
+	YbPreloadCatalogCache(CONSTROID, -1);               // pg_constraint
+	YbPreloadCatalogCache(PARTRELID, -1);               // pg_partitioned_table
+	YbPreloadCatalogCache(TYPEOID, TYPENAMENSP);        // pg_type
+	YbPreloadCatalogCache(NAMESPACEOID, NAMESPACENAME); // pg_namespace
+	YbPreloadCatalogCache(AUTHOID, AUTHNAME);           // pg_authid
 
 	YBLoadRelationsResult relations_result = YBLoadRelations();
 
@@ -1798,7 +1990,6 @@ YBPreloadRelCache()
 
 	if (relations_result.has_partitioned_tables)
 	{
-		YbRegisterSysTableForPrefetching(TypeRelationId);      // pg_type
 		YbRegisterSysTableForPrefetching(ProcedureRelationId); // pg_proc
 		YbRegisterSysTableForPrefetching(InheritsRelationId);  // pg_inherits
 	}
@@ -1808,12 +1999,24 @@ YBPreloadRelCache()
 
 	if (relations_result.has_partitioned_tables)
 	{
-		YBPreloadCatalogCache(TYPEOID, TYPENAMENSP);     // pg_type
-		YBPreloadCatalogCache(PROCOID, PROCNAMEARGSNSP); // pg_proc
-		YBPreloadCatalogCache(INHERITSRELID, -1);        // pg_inherits
+		YbPreloadCatalogCache(PROCOID, PROCNAMEARGSNSP); // pg_proc
+		YbPreloadCatalogCache(INHERITSRELID, -1);        // pg_inherits
 	}
 
-	criticalRelcachesBuilt = true;
+	YBUpdateRelationsIndicies(relations_result.sys_relations_update_required);
+	/*
+	 * The first request after the cache refresh will call the
+	 * recomputeNamespacePath function. And this function will try to find
+	 * namespace equal to username. In spite of the fact that we have already
+	 * loaded caches for the `pg_namespace` table such finding may initiate read
+	 * RPC to a master in case such namespace doesn't exists. In this case cache
+	 * will create negative entry. To avoid this RPC we try to find namespace
+	 * here. As far as data for the `pg_namespace` table is preloaded no RPC will
+	 * be sent a master and negative cache entry will be created for a future use.
+	 */
+	get_namespace_oid(GetUserNameFromId(GetUserId(), false), true);
+
+	YbUpdateCatalogCacheVersion(YbGetMasterCatalogVersion());
 }
 
 /*
@@ -1839,7 +2042,7 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	/*
 	 * find the tuple in pg_class corresponding to the given relation id
 	 */
-	pg_class_tuple = ScanPgRelation(targetRelId, targetRelId != ClassOidIndexId, false);
+	pg_class_tuple = ScanPgRelation(targetRelId, true, false);
 
 	/*
 	 * if no such tuple exists, return NULL
@@ -2712,10 +2915,15 @@ RelationIdGetRelation(Oid relationId)
 	}
 
 	/*
-	 * This would lead to an infinite recursion and should never be possible.
+	 * YB note:
+	 * These would lead to an infinite recursion and should never be possible.
+	 * See how RelationCacheInvalidate works.
 	 */
 	if (relationId == RelationRelationId)
 		elog(FATAL, "pg_class cache is queried before it's initalized!");
+
+	if (relationId == ClassOidIndexId)
+		elog(FATAL, "pg_class_oid_index is queried before it's initalized!");
 
 	/*
 	 * no reldesc in the cache, so have RelationBuildDesc() build one and add
@@ -2977,8 +3185,7 @@ RelationReloadNailed(Relation relation)
 			relation->rd_isvalid = true;
 
 			pg_class_tuple = ScanPgRelation(RelationGetRelid(relation),
-											RelationGetRelid(relation) != ClassOidIndexId,
-											false);
+											true, false);
 			relp = (Form_pg_class) GETSTRUCT(pg_class_tuple);
 			memcpy(relation->rd_rel, relp, CLASS_TUPLE_SIZE);
 			heap_freetuple(pg_class_tuple);
@@ -4374,7 +4581,7 @@ RelationCacheInitializePhase3(void)
 	 * In YB mode initialize the relache at the beginning so that we need
 	 * fewer cache lookups in steady state.
 	 */
-	if (needNewCacheFile && IsYugaByteEnabled())
+	if (IsYugaByteEnabled() && (needNewCacheFile || YBCIsInitDbModeEnvVarSet()))
 	{
 		YBPreloadRelCache();
 	}
@@ -4625,8 +4832,8 @@ RelationCacheInitializePhase3(void)
 	 * During initdb also preload catalog caches (not just relation cache) as
 	 * they will be used heavily.
 	 */
-	if (IsYugaByteEnabled() && YBIsPreparingTemplates())
-		YBPreloadCatalogCaches();
+	if (IsYugaByteEnabled() && YBCIsInitDbModeEnvVarSet())
+		YbPreloadCatalogCaches();
 }
 
 /*
@@ -4639,25 +4846,25 @@ static void
 load_critical_index(Oid indexoid, Oid heapoid)
 {
 	Relation	ird;
-	if (IsYugaByteEnabled())
-	{
-		/* TODO We do not support/use critical indexes in YugaByte mode yet */
-		return;
-	}
-
 	/*
 	 * We must lock the underlying catalog before locking the index to avoid
 	 * deadlock, since RelationBuildDesc might well need to read the catalog,
 	 * and if anyone else is exclusive-locking this catalog and index they'll
 	 * be doing it in that order.
 	 */
+
 	LockRelationOid(heapoid, AccessShareLock);
 	LockRelationOid(indexoid, AccessShareLock);
-	ird = RelationBuildDesc(indexoid, true);
+	if (IsYugaByteEnabled())
+	{
+		RelationIdCacheLookup(indexoid, ird);
+	} else
+		ird = RelationBuildDesc(indexoid, true);
 	if (ird == NULL)
 		elog(PANIC, "could not open critical system index %u", indexoid);
 	ird->rd_isnailed = true;
 	ird->rd_refcnt = 1;
+
 	UnlockRelationOid(indexoid, AccessShareLock);
 	UnlockRelationOid(heapoid, AccessShareLock);
 }
@@ -6233,6 +6440,15 @@ load_relcache_init_file(bool shared)
 	int			i;
 	uint64      ybc_stored_cache_version = 0;
 
+	/*
+	 * Disable shared init file in per database catalog version mode because
+	 * MyDatabaseId isn't known yet and different databases have different
+	 * catalog versions of their own. At this time we cannot compose the
+	 * correct init file name for the to-be-resolved MyDatabaseId.
+	 */
+	if (shared && YBIsDBCatalogVersionMode())
+		return false;
+
 	RelCacheInitFileName(initfilename, shared);
 
 	fp = AllocateFile(initfilename, PG_BINARY_R);
@@ -6270,7 +6486,7 @@ load_relcache_init_file(bool shared)
 		 * If we already have a newer cache version (e.g. from reading the
 		 * shared init file) or master has newer catalog version then this file is too old.
 		 */
-		if (yb_catalog_cache_version > ybc_stored_cache_version)
+		if (YbGetCatalogCacheVersion() > ybc_stored_cache_version)
 		{
 			unlink_initfile(initfilename, ERROR);
 			goto read_failed;
@@ -6568,15 +6784,6 @@ load_relcache_init_file(bool shared)
 	int num_critical_shared_indexes = NUM_CRITICAL_SHARED_INDEXES;
 	int num_critical_local_indexes = NUM_CRITICAL_LOCAL_INDEXES;
 
-	/*
-	 * TODO We do not support/use critical indexes in YugaByte mode yet so set
-	 * the expected number of indexes to 0 so we do not fail here.
-	 */
-	if (IsYugaByteEnabled())
-	{
-		num_critical_shared_indexes = 0;
-		num_critical_local_indexes  = 0;
-	}
 	if (shared)
 	{
 		if (nailed_rels != NUM_CRITICAL_SHARED_RELS ||
@@ -6624,10 +6831,8 @@ load_relcache_init_file(bool shared)
 		 * The checks above will ensure that if it is already initialized then
 		 * we should leave it unchanged (see also comment in pg_yb_utils.h).
 		 */
-		if (yb_catalog_cache_version == YB_CATCACHE_VERSION_UNINITIALIZED)
-		{
-			yb_catalog_cache_version = ybc_stored_cache_version;
-		}
+		if (YbGetCatalogCacheVersion() == YB_CATCACHE_VERSION_UNINITIALIZED)
+			YbUpdateCatalogCacheVersion(ybc_stored_cache_version);
 	}
 
 	if (shared)
@@ -6662,6 +6867,13 @@ write_relcache_init_file(bool shared)
 	HASH_SEQ_STATUS status;
 	RelIdCacheEnt *idhentry;
 	int			i;
+
+	/*
+	 * Disable shared init file in per database catalog version mode because
+	 * it will never be read in load_relcache_init_file.
+	 */
+	if (shared && YBIsDBCatalogVersionMode())
+		return;
 
 	/*
 	 * If we have already received any relcache inval events, there's no
@@ -6706,10 +6918,11 @@ write_relcache_init_file(bool shared)
 	if (IsYugaByteEnabled())
 	{
 		/* Write the ysql_catalog_version */
-		if (fwrite(&yb_catalog_cache_version,
+		const uint64_t catalog_cache_version = YbGetCatalogCacheVersion();
+		if (fwrite(&catalog_cache_version,
 		           1,
-		           sizeof(yb_catalog_cache_version),
-		           fp) != sizeof(yb_catalog_cache_version))
+		           sizeof(catalog_cache_version),
+		           fp) != sizeof(catalog_cache_version))
 		{
 			elog(FATAL, "could not write init file");
 		}

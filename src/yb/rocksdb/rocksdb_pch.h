@@ -4,6 +4,8 @@
 
 #include <assert.h>
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <float.h>
 #include <inttypes.h>
 #include <math.h>
@@ -15,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <time.h>
@@ -27,6 +30,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <compare>
 #include <condition_variable>
 #include <cstdarg>
 #include <cstddef>
@@ -54,6 +58,7 @@
 #include <stack>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <type_traits>
@@ -62,6 +67,7 @@
 #include <utility>
 #include <vector>
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/atomic.hpp>
 #include <boost/container/small_vector.hpp>
 #include <boost/core/demangle.hpp>
@@ -82,6 +88,7 @@
 #include <boost/smart_ptr/detail/yield_k.hpp>
 #include <boost/tti/has_type.hpp>
 #include <boost/type_traits/make_signed.hpp>
+#include <gflags/gflags.h>
 #include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 #include <google/protobuf/any.pb.h>
@@ -123,6 +130,8 @@
 #include "yb/gutil/type_traits.h"
 #include "yb/gutil/walltime.h"
 #include "yb/util/atomic.h"
+#include "yb/util/backoff_waiter.h"
+#include "yb/util/byte_buffer.h"
 #include "yb/util/bytes_formatter.h"
 #include "yb/util/cache_metrics.h"
 #include "yb/util/cast.h"
@@ -138,8 +147,12 @@
 #include "yb/util/faststring.h"
 #include "yb/util/file_system.h"
 #include "yb/util/file_system_mem.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
+#include "yb/util/flags/auto_flags.h"
+#include "yb/util/flags/flag_tags.h"
+#include "yb/util/flags/flags_callback.h"
 #include "yb/util/format.h"
+#include "yb/util/io.h"
 #include "yb/util/jsonwriter.h"
 #include "yb/util/locks.h"
 #include "yb/util/logging.h"
@@ -182,6 +195,7 @@
 #include "yb/util/string_util.h"
 #include "yb/util/striped64.h"
 #include "yb/util/strongly_typed_bool.h"
+#include "yb/util/test_kill.h"
 #include "yb/util/test_macros.h"
 #include "yb/util/test_thread_holder.h"
 #include "yb/util/test_util.h"

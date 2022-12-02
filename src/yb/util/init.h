@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_INIT_H
-#define YB_UTIL_INIT_H
+#pragma once
 
 #include <string>
 
@@ -47,10 +46,11 @@ Status CheckCPUFlags();
 // Returns an IllegalState Status if we cannot create the dir structure for logging.
 Status SetupLogDir(const std::string& server_type);
 
+void SetGLogHeader(const std::string& server_info = "");
+
 // Initialize YB, checking that the platform we are running on is supported, etc.
 // Issues a FATAL log message if we fail to init.
 // argv0 is passed to InitGoogleLoggingSafe.
 Status InitYB(const std::string &server_type, const char* argv0);
 
 } // namespace yb
-#endif /* YB_UTIL_INIT_H */

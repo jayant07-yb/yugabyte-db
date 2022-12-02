@@ -13,14 +13,13 @@
 //
 //
 
-#ifndef YB_CLIENT_TABLET_RPC_H
-#define YB_CLIENT_TABLET_RPC_H
+#pragma once
 
 #include <memory>
 #include <string>
 #include <unordered_set>
 
-#include <gflags/gflags_declare.h>
+#include "yb/util/flags.h"
 #include <gtest/gtest_prod.h>
 
 #include "yb/client/client_fwd.h"
@@ -42,11 +41,6 @@ namespace yb {
 
 namespace tserver {
 class TabletServerServiceProxy;
-class TabletServerForwardServiceProxy;
-}
-
-namespace rpc {
-class RpcController;
 }
 
 namespace client {
@@ -59,8 +53,6 @@ class TabletRpc {
 
   // attempt_num starts with 1.
   virtual void SendRpcToTserver(int attempt_num) = 0;
-
-  virtual bool ShouldRetryExpiredRequest() { return false; }
 
  protected:
   ~TabletRpc() {}
@@ -81,8 +73,8 @@ class TabletInvoker {
                          const std::shared_ptr<const YBTable>& table,
                          rpc::RpcRetrier* retrier,
                          Trace* trace,
-                         master::IncludeInactive include_inactive =
-                            master::IncludeInactive::kFalse);
+                         master::IncludeInactive include_inactive = master::IncludeInactive::kFalse,
+                         master::IncludeDeleted include_deleted = master::IncludeDeleted::kFalse);
 
   virtual ~TabletInvoker();
 
@@ -92,12 +84,6 @@ class TabletInvoker {
   bool Done(Status* status);
 
   bool IsLocalCall() const;
-
-  void WriteAsync(const tserver::WriteRequestPB& req, tserver::WriteResponsePB *resp,
-                  rpc::RpcController *controller, std::function<void()>&& cb);
-
-  void ReadAsync(const tserver::ReadRequestPB& req, tserver::ReadResponsePB *resp,
-                 rpc::RpcController *controller, std::function<void()>&& cb);
 
   const RemoteTabletPtr& tablet() const { return tablet_; }
   std::shared_ptr<tserver::TabletServerServiceProxy> proxy() const;
@@ -125,7 +111,7 @@ class TabletInvoker {
   // Marks all replicas on current_ts_ as failed and retries the write on a
   // new replica.
   Status FailToNewReplica(const Status& reason,
-                                  const tserver::TabletServerErrorPB* error_code = nullptr);
+                          const tserver::TabletServerErrorPB* error_code = nullptr);
 
   // Called when we finish a lookup (to find the new consensus leader). Retries
   // the rpc after a short delay.
@@ -141,8 +127,6 @@ class TabletInvoker {
         ErrorCode(error_code) == tserver::TabletServerErrorPB::TABLET_NOT_FOUND &&
         current_ts_ != nullptr;
   }
-
-  bool ShouldUseNodeLocalForwardProxy();
 
   YBClient* const client_;
 
@@ -164,7 +148,10 @@ class TabletInvoker {
   Trace* const trace_;
 
   // Whether or not to allow lookups of inactive (hidden) tablets.
-  master::IncludeInactive const include_inactive_;
+  const master::IncludeInactive include_inactive_;
+
+  // Whether or not to allow deleted tablets.
+  const master::IncludeDeleted include_deleted_;
 
   // Used to retry some failed RPCs.
   // Tablet servers that refused the write because they were followers at the time.
@@ -191,14 +178,6 @@ class TabletInvoker {
 
   // Should we assign new leader in meta cache when successful response is received.
   bool assign_new_leader_ = false;
-
-  // Whether to use the local node proxy or to use the default remote proxy for communication to the
-  // tablet servers. This flag is true if all of the following conditions are true:
-  // 1. FLAGS_ysql_forward_rpcs_to_local_tserver is true
-  // 2. The node local forward proxy is set in the client.
-  // 3. The destination tserver is not the same as the node local tserver.
-  // 4. The rpc is not intended for the master.
-  bool should_use_local_node_proxy_ = false;
 };
 
 Status ErrorStatus(const tserver::TabletServerErrorPB* error);
@@ -211,5 +190,3 @@ HybridTime GetPropagatedHybridTime(const Response& response) {
 } // namespace internal
 } // namespace client
 } // namespace yb
-
-#endif // YB_CLIENT_TABLET_RPC_H

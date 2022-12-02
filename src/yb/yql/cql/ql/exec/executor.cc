@@ -70,6 +70,7 @@
 #include "yb/yql/cql/ql/ptree/pt_use_keyspace.h"
 #include "yb/yql/cql/ql/ql_processor.h"
 #include "yb/yql/cql/ql/util/errcodes.h"
+#include "yb/util/flags.h"
 
 using namespace std::literals;
 using namespace std::placeholders;
@@ -106,7 +107,7 @@ using strings::Substitute;
     } while (false)
 
 //--------------------------------------------------------------------------------------------------
-DEFINE_bool(ycql_serial_operation_in_transaction_block, true,
+DEFINE_UNKNOWN_bool(ycql_serial_operation_in_transaction_block, true,
             "If true, operations within a transaction block must be executed in order, "
             "at least semantically speaking.");
 
@@ -160,7 +161,7 @@ void Executor::ExecuteAsync(const ParseTree& parse_tree, const StatementParamete
   if (read_time) {
     session_->SetReadPoint(read_time);
   } else {
-    session_->SetReadPoint(client::Restart::kFalse);
+    session_->RestartNonTxnReadPoint(client::Restart::kFalse);
   }
   RETURN_STMT_NOT_OK(Execute(parse_tree, params), &reset_async_calls);
 
@@ -173,7 +174,7 @@ void Executor::ExecuteAsync(const StatementBatch& batch, StatementExecutedCallba
   cb_ = std::move(cb);
   session_->SetDeadline(rescheduler_->GetDeadline());
   session_->SetForceConsistentRead(client::ForceConsistentRead::kFalse);
-  session_->SetReadPoint(client::Restart::kFalse);
+  session_->RestartNonTxnReadPoint(client::Restart::kFalse);
 
   // Table for DML batches, where all statements must modify the same table.
   client::YBTablePtr dml_batch_table;
@@ -287,34 +288,6 @@ Status Executor::PreExecTreeNode(PTInsertStmt *tnode) {
   } else {
     return Status::OK();
   }
-}
-
-shared_ptr<client::YBTable> Executor::GetTableFromStatement(const TreeNode *tnode) const {
-  if (tnode != nullptr) {
-    switch (tnode->opcode()) {
-      case TreeNodeOpcode::kPTAlterTable:
-        return static_cast<const PTAlterTable *>(tnode)->table();
-
-      case TreeNodeOpcode::kPTSelectStmt:
-        return static_cast<const PTSelectStmt *>(tnode)->table();
-
-      case TreeNodeOpcode::kPTInsertStmt:
-        return static_cast<const PTInsertStmt *>(tnode)->table();
-
-      case TreeNodeOpcode::kPTDeleteStmt:
-        return static_cast<const PTDeleteStmt *>(tnode)->table();
-
-      case TreeNodeOpcode::kPTUpdateStmt:
-        return static_cast<const PTUpdateStmt *>(tnode)->table();
-
-      case TreeNodeOpcode::kPTExplainStmt:
-        return GetTableFromStatement(static_cast<const PTExplainStmt *>(tnode)->stmt().get());
-
-      default: break;
-    }
-  }
-
-  return nullptr;
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -959,11 +932,13 @@ Status Executor::ExecPTNode(const PTSelectStmt *tnode, TnodeContext* tnode_conte
   req->set_is_aggregate(tnode->is_aggregate());
   Result<uint64_t> max_rows_estimate = WhereClauseToPB(req, tnode->key_where_ops(),
                                                        tnode->where_ops(),
+                                                       tnode->multi_col_where_ops(),
                                                        tnode->subscripted_col_where_ops(),
                                                        tnode->json_col_where_ops(),
                                                        tnode->partition_key_ops(),
                                                        tnode->func_ops(),
                                                        tnode_context);
+
   if (PREDICT_FALSE(!max_rows_estimate)) {
     return exec_context_->Error(tnode, max_rows_estimate.status(), ErrorCode::INVALID_ARGUMENTS);
   }
@@ -1164,9 +1139,9 @@ Result<QueryPagingState*> Executor::LoadPagingStateFromUser(const PTSelectStmt* 
 Status Executor::GenerateEmptyResult(const PTSelectStmt* tnode) {
   YBqlReadOpPtr select_op(tnode->table()->NewQLSelect());
   QLRowBlock empty_row_block(tnode->table()->InternalSchema(), {});
-  faststring buffer;
+  WriteBuffer buffer(1024);
   empty_row_block.Serialize(select_op->request().client(), &buffer);
-  *select_op->mutable_rows_data() = buffer.ToString();
+  buffer.AssignTo(select_op->mutable_rows_data());
   result_ = std::make_shared<RowsResult>(select_op.get());
 
   return Status::OK();
@@ -1450,10 +1425,8 @@ Status Executor::ExecPTNode(const PTUpdateStmt *tnode, TnodeContext* tnode_conte
         "No update performed as all JSON cols are set to 'null'");
       // Leave the rest of the columns null in this case.
 
-      faststring row_data;
-      result_row_block.Serialize(YQL_CLIENT_CQL, &row_data);
-
-      result_ = std::make_shared<RowsResult>(table->name(), columns, row_data.ToString());
+      result_ = std::make_shared<RowsResult>(
+          table->name(), columns, result_row_block.SerializeToString());
     } else if (tnode->if_clause() != nullptr) {
       // Return row with [applied] = false.
       std::shared_ptr<std::vector<ColumnSchema>> columns =
@@ -1464,10 +1437,8 @@ Status Executor::ExecPTNode(const PTUpdateStmt *tnode, TnodeContext* tnode_conte
       QLRow& row = result_row_block.Extend();
       row.mutable_column(0)->set_bool_value(false);
 
-      faststring row_data;
-      result_row_block.Serialize(YQL_CLIENT_CQL, &row_data);
-
-      result_ = std::make_shared<RowsResult>(table->name(), columns, row_data.ToString());
+      result_ = std::make_shared<RowsResult>(
+          table->name(), columns, result_row_block.SerializeToString());
     }
 
     return Status::OK();
@@ -1601,7 +1572,6 @@ Status Executor::ExecPTNode(const PTExplainStmt *tnode) {
       std::initializer_list<ColumnSchema>{explainColumn});
   auto explainSchema = std::make_shared<Schema>(*explainColumns, 0);
   QLRowBlock row_block(*explainSchema);
-  faststring buffer;
   ExplainPlanPB explain_plan = dmlStmt->AnalysisResultToPB();
   switch (explain_plan.plan_case()) {
     case ExplainPlanPB::kSelectPlan: {
@@ -1657,8 +1627,8 @@ Status Executor::ExecPTNode(const PTExplainStmt *tnode) {
       break;
     }
   }
-  row_block.Serialize(YQL_CLIENT_CQL, &buffer);
-  result_ = std::make_shared<RowsResult>(explainTable, explainColumns, buffer.ToString());
+  result_ = std::make_shared<RowsResult>(
+      explainTable, explainColumns, row_block.SerializeToString());
   return Status::OK();
 }
 
@@ -1916,7 +1886,7 @@ void Executor::ProcessAsyncResults(const bool rescheduled, ResetAsyncCalls* rese
       }
 
       YBSessionPtr session = GetSession(exec_context_);
-      session->SetReadPoint(client::Restart::kTrue);
+      session->RestartNonTxnReadPoint(client::Restart::kTrue);
       RETURN_STMT_NOT_OK(ExecTreeNode(root), reset_async_calls);
       need_flush |= NeedsFlush(session);
       exec_itr++;
@@ -2223,6 +2193,7 @@ bool UpdateIndexesLocally(const PTDmlStmt *tnode, const QLWriteRequestPB& req) {
           case QLExpressionPB::ExprCase::kCondition: FALLTHROUGH_INTENDED;
           case QLExpressionPB::ExprCase::kBocall: FALLTHROUGH_INTENDED;
           case QLExpressionPB::ExprCase::kBindId: FALLTHROUGH_INTENDED;
+          case QLExpressionPB::ExprCase::kTuple: FALLTHROUGH_INTENDED;
           case QLExpressionPB::ExprCase::EXPR_NOT_SET:
             return false;
         }
@@ -2506,16 +2477,11 @@ Status Executor::ProcessStatementStatus(const ParseTree& parse_tree, const Statu
         errcode == ErrorCode::TYPE_NOT_FOUND) {
       if (errcode == ErrorCode::INVALID_ARGUMENTS) {
         // Check the table schema is up-to-date.
-        const shared_ptr<client::YBTable> table = GetTableFromStatement(parse_tree.root().get());
-        if (table) {
-          const uint32_t current_schema_ver = table->schema().version();
-          uint32_t updated_schema_ver = 0;
-          const Status s_get_schema = ql_env_->GetUpToDateTableSchemaVersion(
-              table->name(), &updated_schema_ver);
-
-          if (s_get_schema.ok() && updated_schema_ver == current_schema_ver) {
-            return s; // Do not retry via STALE_METADATA code if the table schema is up-to-date.
-          }
+        const Result<bool> is_altered_res = parse_tree.IsYBTableAltered(ql_env_);
+        // The table is not available if (!is_altered_res.ok()).
+        // Usually it happens if the table was deleted.
+        if (is_altered_res.ok() && !(*is_altered_res)) {
+          return s; // Do not retry via STALE_METADATA code if the table schema is up-to-date.
         }
       }
 
@@ -2564,9 +2530,7 @@ Status Executor::ProcessOpStatus(const PTDmlStmt* stmt,
     row.mutable_column(1)->set_string_value(resp.error_message());
     // Leave the rest of the columns null in this case.
 
-    faststring row_data;
-    result_row_block.Serialize(YQL_CLIENT_CQL, &row_data);
-    *op->mutable_rows_data() = row_data.ToString();
+    *op->mutable_rows_data() = result_row_block.SerializeToString();
     return Status::OK();
   }
 
@@ -2590,8 +2554,8 @@ Status Executor::ProcessAsyncStatus(const OpErrors& op_errors, ExecContext* exec
           }
           if (PREDICT_FALSE(!s.ok() && !NeedsRestart(s))) {
             // YBOperation returns not-found error when the tablet is not found.
-            const auto errcode = s.IsNotFound() ? ErrorCode::TABLET_NOT_FOUND
-                                                : ErrorCode::EXEC_ERROR;
+            const auto errcode =
+                s.IsNotFound() ? ErrorCode::TABLET_NOT_FOUND : ErrorCode::EXEC_ERROR;
             s = exec_context->Error(tnode, s, errcode);
           }
           if (s.ok()) {

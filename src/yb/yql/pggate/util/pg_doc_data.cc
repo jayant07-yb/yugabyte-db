@@ -15,8 +15,6 @@
 
 #include "yb/yql/pggate/util/pg_doc_data.h"
 
-#include "yb/client/client.h"
-
 #include "yb/common/ql_value.h"
 
 #include "yb/util/format.h"
@@ -25,7 +23,7 @@
 namespace yb {
 namespace pggate {
 
-Status WriteColumn(const QLValuePB& col_value, faststring *buffer) {
+Status WriteColumn(const QLValuePB& col_value, WriteBuffer *buffer) {
   // Write data header.
   bool has_data = true;
   PgWireDataHeader col_header;
@@ -97,6 +95,7 @@ Status WriteColumn(const QLValuePB& col_value, faststring *buffer) {
     case InternalType::kMapValue:
     case InternalType::kSetValue:
     case InternalType::kFrozenValue:
+    case InternalType::kTupleValue:
       // Postgres does not have these datatypes.
       return STATUS_FORMAT(Corruption,
           "Unexpected data was read from database: col_value.type()=$0", col_value.value_case());

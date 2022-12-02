@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_TABLET_OPERATIONS_OPERATION_DRIVER_H
-#define YB_TABLET_OPERATIONS_OPERATION_DRIVER_H
+#pragma once
 
 #include <condition_variable>
 #include <string>
@@ -41,6 +40,7 @@
 #include "yb/common/common_types.pb.h"
 
 #include "yb/consensus/log_fwd.h"
+#include "yb/consensus/consensus.pb.h"
 #include "yb/consensus/consensus_round.h"
 
 #include "yb/gutil/ref_counted.h"
@@ -204,6 +204,8 @@ class OperationDriver : public RefCountedThreadSafe<OperationDriver>,
 
   int64_t SpaceUsed();
 
+  size_t ReplicateMsgSize();
+
  private:
   friend class RefCountedThreadSafe<OperationDriver>;
   enum ReplicationState {
@@ -284,5 +286,3 @@ class OperationDriver : public RefCountedThreadSafe<OperationDriver>,
 
 }  // namespace tablet
 }  // namespace yb
-
-#endif // YB_TABLET_OPERATIONS_OPERATION_DRIVER_H

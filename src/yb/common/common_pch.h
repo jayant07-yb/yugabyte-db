@@ -27,6 +27,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -38,15 +39,20 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
+#include <optional>
 #include <ostream>
 #include <random>
 #include <regex>
 #include <set>
+#include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
@@ -69,6 +75,8 @@
 #include <boost/functional/hash/hash.hpp>
 #include <boost/icl/discrete_interval.hpp>
 #include <boost/icl/interval_set.hpp>
+#include <boost/intrusive/list.hpp>
+#include <boost/iterator/transform_iterator.hpp>
 #include <boost/mpl/and.hpp>
 #include <boost/mpl/if.hpp>
 #include <boost/optional.hpp>
@@ -91,6 +99,7 @@
 #include <boost/tti/has_type.hpp>
 #include <boost/type_traits/is_const.hpp>
 #include <boost/type_traits/make_signed.hpp>
+#include <boost/unordered_map.hpp>
 #include <boost/uuid/nil_generator.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <gflags/gflags.h>
@@ -98,6 +107,7 @@
 #include <glog/logging.h>
 #include <google/protobuf/arena.h>
 #include <google/protobuf/arenastring.h>
+#include <google/protobuf/descriptor.pb.h>
 #include <google/protobuf/generated_message_table_driven.h>
 #include <google/protobuf/generated_message_util.h>
 #include <google/protobuf/io/coded_stream.h>
@@ -108,6 +118,7 @@
 #include <google/protobuf/repeated_field.h>
 #include <google/protobuf/stubs/common.h>
 #include <google/protobuf/unknown_field_set.h>
+#include <google/protobuf/wire_format_lite.h>
 #include <gtest/gtest.h>
 #include <gtest/gtest_prod.h>
 #include <rapidjson/document.h>
@@ -166,12 +177,14 @@
 #include "yb/util/byte_buffer.h"
 #include "yb/util/bytes_formatter.h"
 #include "yb/util/cast.h"
+#include "yb/util/checked_narrow_cast.h"
 #include "yb/util/coding_consts.h"
 #include "yb/util/compare_util.h"
 #include "yb/util/condition_variable.h"
 #include "yb/util/countdown_latch.h"
 #include "yb/util/date_time.h"
 #include "yb/util/debug-util.h"
+#include "yb/util/debug/lock_debug.h"
 #include "yb/util/decimal.h"
 #include "yb/util/enums.h"
 #include "yb/util/env.h"
@@ -179,9 +192,13 @@
 #include "yb/util/fast_varint.h"
 #include "yb/util/faststring.h"
 #include "yb/util/file_system.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
+#include "yb/util/flags/auto_flags.h"
+#include "yb/util/flags/flag_tags.h"
+#include "yb/util/flags/flags_callback.h"
 #include "yb/util/format.h"
 #include "yb/util/init.h"
+#include "yb/util/io.h"
 #include "yb/util/kv_util.h"
 #include "yb/util/locks.h"
 #include "yb/util/logging.h"
@@ -191,6 +208,8 @@
 #include "yb/util/memcmpable_varint.h"
 #include "yb/util/memory/arena.h"
 #include "yb/util/memory/arena_fwd.h"
+#include "yb/util/memory/arena_list.h"
+#include "yb/util/memory/mc_types.h"
 #include "yb/util/memory/memory.h"
 #include "yb/util/monotime.h"
 #include "yb/util/mutex.h"
@@ -198,6 +217,7 @@
 #include "yb/util/net/net_fwd.h"
 #include "yb/util/net/net_util.h"
 #include "yb/util/opid.fwd.h"
+#include "yb/util/opid.messages.h"
 #include "yb/util/opid.pb.h"
 #include "yb/util/physical_time.h"
 #include "yb/util/port_picker.h"
@@ -215,6 +235,7 @@
 #include "yb/util/status_format.h"
 #include "yb/util/status_fwd.h"
 #include "yb/util/status_log.h"
+#include "yb/util/std_util.h"
 #include "yb/util/stol_utils.h"
 #include "yb/util/string_case.h"
 #include "yb/util/string_trim.h"

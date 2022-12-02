@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_DOCDB_INTENT_H_
-#define YB_DOCDB_INTENT_H_
+#pragma once
 
 #include "yb/common/doc_hybrid_time.h"
 #include "yb/common/transaction.h"
@@ -28,13 +27,13 @@ namespace docdb {
 // parallel with it. Conflicts between intent types are handled according to the conflict matrix at
 // https://goo.gl/Wbc663.
 
-// "Weak" intents are obtained for parent nodes of a node that is a transaction is working with.
+// "Weak" intents are obtained for prefix SubDocKeys of a key that a transaction is working with.
 // E.g. if we're writing "a.b.c", we'll obtain weak write intents on "a" and "a.b", but a strong
 // write intent on "a.b.c".
 constexpr int kWeakIntentFlag         = 0b000;
 
-// "Strong" intents are obtained on the node that an operation is working with. See the example
-// above.
+// "Strong" intents are obtained on the fully qualified SubDocKey that an operation is working with.
+// See the example above.
 constexpr int kStrongIntentFlag       = 0b010;
 
 constexpr int kReadIntentFlag         = 0b000;
@@ -126,5 +125,3 @@ bool IntentValueType(char ch);
 
 }  // namespace docdb
 }  // namespace yb
-
-#endif  // YB_DOCDB_INTENT_H_

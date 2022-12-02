@@ -10,6 +10,7 @@ menu:
     identifier: explore-scalability
     parent: explore
     weight: 220
+type: indexpage
 ---
 
 A YugabyteDB cluster can be scaled horizontally (to increase the aggregate vCPUs, memory and disk in the database cluster) by dynamically adding nodes to a running cluster, or by increasing the number of pods in the `yb-tserver` StatefulSet in the case of Kubernetes deployments.
@@ -32,10 +33,10 @@ Every table in YugabyteDB is transparently sharded using the primary key of the 
 
 The table below summarizes the support for scalability and sharding across YSQL and YCQL APIs.
 
-| <span style="font-size:20px;">Property</span> | <span style="font-size:20px;">YSQL</span> | <span style="font-size:20px;">YCQL</span> | <span style="font-size:20px;">Comments</span> |
+| Property | YSQL | YCQL | Comments |
 |--------------------------------------------------|-------------|----------|----------|
-| <span style="font-size:16px;">[Scale transactions per sec](scaling-transactions/)</span> | <span style="font-size:16px;">Yes</span> | <span style="font-size:16px;">Yes</span> | Scale out the cluster to handle a higher number of concurrent transactions per second. |
-| <span style="font-size:16px;">[Data distribution support](sharding-data/)</span> | <span style="font-size:16px;">Hash sharding, <br/>  Range sharding</span>  | <span style="font-size:16px;">Hash sharding</span> | Sharding is used to distributed data across nodes of clusters. <br/> Tables can be pre-split at creation time, and dynamically split at runtime. |
+| [Scale transactions per sec](scaling-transactions/) | Yes | Yes | Scale out the cluster to handle a higher number of concurrent transactions per second. |
+| [Data distribution support](sharding-data/) | Hash sharding, <br/>  Range sharding  | Hash sharding | Sharding is used to distributed data across nodes of clusters. <br/> Tables can be pre-split at creation time, and dynamically split at runtime. |
 
 The various features are explained in these sections:
 

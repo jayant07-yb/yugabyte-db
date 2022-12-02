@@ -4,15 +4,14 @@ headerTitle: JSON Support
 linkTitle: JSON support
 description: JSON Support in YugabyteDB.
 headcontent: JSON Support in YugabyteDB.
-image: <div class="icon"><i class="fas fa-file-invoice"></i></div>
+image: <div class="icon"><i class="fa-solid fa-file-invoice"></i></div>
 menu:
   v2.6:
     name: JSON support
     identifier: explore-json-support-2-ycql
     parent: explore
     weight: 260
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 JSON data types are for storing JSON (JavaScript Object Notation) data, as specified in [RFC 7159](https://tools.ietf.org/html/rfc7159). Such data can also be stored as `text`, but the JSON data types have the advantage of enforcing that each stored value is valid according to the JSON rules. There are also assorted JSON-specific functions and operators available for data stored in these data types.

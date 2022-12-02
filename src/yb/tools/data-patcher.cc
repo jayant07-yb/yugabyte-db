@@ -16,6 +16,7 @@
 #include "yb/common/doc_hybrid_time.h"
 #include "yb/common/transaction.h"
 
+#include "yb/consensus/log.messages.h"
 #include "yb/consensus/log_index.h"
 #include "yb/consensus/log_reader.h"
 #include "yb/consensus/log_util.h"
@@ -23,10 +24,10 @@
 #include "yb/docdb/consensus_frontier.h"
 #include "yb/docdb/docdb_rocksdb_util.h"
 #include "yb/docdb/docdb_types.h"
-#include "yb/docdb/packed_row.h"
 #include "yb/docdb/value_type.h"
 #include "yb/docdb/kv_debug.h"
 #include "yb/docdb/docdb-internal.h"
+#include "yb/docdb/schema_packing.h"
 #include "yb/docdb/value.h"
 
 #include "yb/fs/fs_manager.h"
@@ -581,7 +582,7 @@ Status ChangeTimeInWalDir(
     MonoDelta delta, HybridTime bound_time, size_t max_num_old_wal_entries,
     const std::string& dir) {
   auto env = Env::Default();
-  auto log_index = make_scoped_refptr<log::LogIndex>(dir);
+  auto log_index = VERIFY_RESULT(log::LogIndex::NewLogIndex(dir));
   std::unique_ptr<log::LogReader> log_reader;
   RETURN_NOT_OK(log::LogReader::Open(
       env, log_index, kLogPrefix, dir, /* table_metric_entity= */ nullptr,
@@ -606,7 +607,7 @@ Status ChangeTimeInWalDir(
   header.set_minor_version(log::kLogMinorVersion);
   header.set_sequence_number(1);
   header.set_unused_tablet_id("TABLET ID");
-  header.mutable_unused_schema();
+  header.mutable_schema();
 
   RETURN_NOT_OK(new_segment.WriteHeaderAndOpen(header));
 
@@ -632,9 +633,9 @@ Status ChangeTimeInWalDir(
       OpId committed_op_id;
       int64_t last_index = -1;
 
-      auto write_entry_batch = [
-          &batch, &buffer, &num_entries, &new_segment, &read_result, &committed_op_id](
-              bool last_batch_of_segment) -> Status {
+      auto write_entry_batch = [&batch, &buffer, &num_entries, &new_segment, &read_result,
+                                &committed_op_id,
+                                &log_index](bool last_batch_of_segment) -> Status {
         if (last_batch_of_segment) {
           read_result.committed_op_id.ToPB(batch.mutable_committed_op_id());
         } else if (committed_op_id.valid()) {
@@ -646,13 +647,28 @@ Status ChangeTimeInWalDir(
         buffer.clear();
         RETURN_NOT_OK(pb_util::AppendToString(batch, &buffer));
         num_entries += batch.entry().size();
+
+        const auto batch_offset = new_segment.written_offset();
+        for (const auto& entry_pb : batch.entry()) {
+          if (!entry_pb.has_replicate()) {
+            continue;
+          }
+
+          log::LogIndexEntry index_entry;
+
+          index_entry.op_id = yb::OpId::FromPB(entry_pb.replicate().id());
+          index_entry.segment_sequence_number = new_segment.header().sequence_number();
+          index_entry.offset_in_segment = batch_offset;
+          RETURN_NOT_OK(log_index->AddEntry(index_entry));
+        }
+
         RETURN_NOT_OK(new_segment.WriteEntryBatch(Slice(buffer)));
         batch.clear_entry();
         return Status::OK();
       };
 
       auto add_entry = [&write_entry_batch, &batch, &last_index, &committed_op_id](
-          std::unique_ptr<log::LogEntryPB> entry) -> Status {
+          std::shared_ptr<log::LWLogEntryPB> entry) -> Status {
         if (entry->has_replicate() && entry->replicate().id().index() <= last_index) {
           RETURN_NOT_OK(write_entry_batch(/* last_batch_of_segment= */ false));
         }
@@ -661,7 +677,7 @@ Status ChangeTimeInWalDir(
             entry->replicate().has_committed_op_id()) {
           committed_op_id = OpId::FromPB(entry->replicate().committed_op_id());
         }
-        batch.mutable_entry()->AddAllocated(entry.release());
+        entry->ToGoogleProtobuf(batch.add_entry());
         return Status::OK();
       };
 
@@ -718,7 +734,7 @@ Status ChangeTimeInWalDir(
     footer.set_max_replicate_index(max_replicate_index);
   }
 
-  RETURN_NOT_OK(new_segment.WriteFooterAndClose(footer));
+  RETURN_NOT_OK(new_segment.WriteIndexWithFooterAndClose(log_index.get(), &footer));
   return Env::Default()->RenameFile(tmp_segment_path, new_segment_path);
 }
 

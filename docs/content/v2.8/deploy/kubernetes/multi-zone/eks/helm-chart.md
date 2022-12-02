@@ -9,15 +9,13 @@ menu:
     name: Amazon EKS
     identifier: k8s-mz-eks-1
     weight: 627
-type: page
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
   <li >
     <a href="/preview/deploy/kubernetes/multi-zone/eks/helm-chart" class="nav-link active">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       Helm chart
     </a>
   </li>
@@ -158,7 +156,7 @@ $ helm search repo yugabytedb/yugabyte --version {{<yb-version version="v2.8" fo
 ```
 
 ```output
-NAME                    CHART VERSION   APP VERSION     DESCRIPTION
+NAME                    CHART VERSION    APP VERSION     DESCRIPTION
 yugabytedb/yugabyte     {{<yb-version version="v2.8" format="short">}}           {{<yb-version version="v2.8" format="build">}}    YugabyteDB is the high-performance distributed ...
 ```
 
@@ -371,7 +369,7 @@ You can follow the [Explore YSQL](../../../../../quick-start/explore/ysql) tutor
 
 ## 6. Connect using external clients
 
-To connect an external program, get the load balancer `EXTERNAL-IP` address of one of the `yb-tserver-service` service and connect to the 5433 / 9042 ports for YSQL / YCQL services respectively.
+To connect an external program, get the load balancer `EXTERNAL-IP` address of the `yb-tserver-service` service and connect using port 5433 for YSQL or port 9042 for YCQL, as follows:
 
 ```sh
 $ kubectl get services --namespace yb-demo

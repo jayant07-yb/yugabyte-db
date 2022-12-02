@@ -6,13 +6,13 @@ menu:
   v2.6:
     parent: api-yedis
     weight: 2064
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
 
-<b>`FLUSHALL`</b><br>
+**`FLUSHALL`**
+
 This command deletes all keys from all databases.
 
 This functionality can be disabled by setting the yb-tserver `--yedis_enable_flush` flag to `false`.

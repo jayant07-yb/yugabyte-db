@@ -10,8 +10,7 @@ menu:
     identifier: architecture-layered-architecture
     parent: architecture
     weight: 1109
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 YugabyteDB architecture follows a layered design. It is comprised of 2 logical layers as shown in the diagram below:
@@ -81,12 +80,8 @@ DocDB has support for both single-row and multi-row transactions. This means tha
 
 You can now read about the following:
 
-{{< note title="" >}}
-
 * [The design goals of YugabyteDB](../design-goals/)
 * [Architecture of DocDB](../docdb/)
 * [Transactions in DocDB](../transactions/)
 * [Design of the query layer](../query-layer/)
 * [How various functions work, like the read and write IO paths](../core-functions/)
-
-{{< /note >}}

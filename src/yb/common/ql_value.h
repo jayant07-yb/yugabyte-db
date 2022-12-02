@@ -13,8 +13,7 @@
 //
 // This file contains the QLValue class that represents QL values.
 
-#ifndef YB_COMMON_QL_VALUE_H
-#define YB_COMMON_QL_VALUE_H
+#pragma once
 
 #include <stdint.h>
 
@@ -33,7 +32,6 @@
 // The list of unsupported datatypes to use in switch statements
 #define QL_UNSUPPORTED_TYPES_IN_SWITCH \
   case NULL_VALUE_TYPE: FALLTHROUGH_INTENDED; \
-  case TUPLE: FALLTHROUGH_INTENDED;     \
   case TYPEARGS: FALLTHROUGH_INTENDED;  \
   case UNKNOWN_DATA
 
@@ -134,6 +132,7 @@ class QLValue {
   QLVALUE_PRIMITIVE_GETTER(list);
   QLVALUE_PRIMITIVE_GETTER(frozen);
   QLVALUE_PRIMITIVE_GETTER(gin_null);
+  QLVALUE_PRIMITIVE_GETTER(tuple);
   #undef QLVALUE_PRIMITIVE_GETTER
 
   static Timestamp timestamp_value(const QLValuePB& pb);
@@ -229,7 +228,7 @@ class QLValue {
     return varint_value(pb_);
   }
 
-  void AppendToKeyBytes(string *bytes) const {
+  void AppendToKeyBytes(std::string *bytes) const {
     AppendToKey(pb_, bytes);
   }
 
@@ -272,6 +271,9 @@ class QLValue {
   }
   void set_jsonb_value(const std::string& val) {
     pb_.set_jsonb_value(val);
+  }
+  void set_jsonb_value(const void* value, size_t size) {
+    pb_.set_jsonb_value(value, size);
   }
   void set_bool_value(bool val) {
     pb_.set_bool_value(val);
@@ -427,6 +429,9 @@ class QLValue {
   QLValuePB* add_frozen_elem() {
     return pb_.mutable_frozen_value()->add_elems();
   }
+  QLValuePB* add_tuple_elem() {
+    return pb_.mutable_tuple_value()->add_elems();
+  }
 
   // For collections, the call to `mutable_foo` takes care of setting the correct type to `foo`
   // internally and allocating the message if needed
@@ -443,6 +448,7 @@ class QLValue {
   void set_frozen_value() {
     pb_.mutable_frozen_value();
   }
+  void set_tuple_value() { pb_.mutable_tuple_value(); }
 
   //----------------------------------- assignment methods ----------------------------------
   QLValue& operator=(const QLValuePB& other) {
@@ -497,8 +503,8 @@ class QLValue {
 
   //----------------------------- serializer / deserializer ---------------------------------
   Status Deserialize(const std::shared_ptr<QLType>& ql_type,
-                             const QLClient& client,
-                             Slice* data);
+                     const QLClient& client,
+                     Slice* data);
 
   //------------------------------------ debug string ---------------------------------------
   // Return a string for debugging.
@@ -592,6 +598,9 @@ void ConcatStrings(const std::string& lhs, const std::string& rhs, QLValuePB* re
 void ConcatStrings(const std::string& lhs, const std::string& rhs, QLValue* result);
 void ConcatStrings(const Slice& lhs, const Slice& rhs, LWQLValuePB* result);
 
+std::vector<QLValuePB> SortTuplesbyOrdering(
+    const QLSeqValuePB& options, const std::vector<bool>& reverse);
+
 #define YB_SET_INT_VALUE(ql_valuepb, input, bits) \
   case DataType::BOOST_PP_CAT(INT, bits): { \
     auto value = CheckedStoInt<BOOST_PP_CAT(BOOST_PP_CAT(int, bits), _t)>(input); \
@@ -600,5 +609,3 @@ void ConcatStrings(const Slice& lhs, const Slice& rhs, LWQLValuePB* result);
   } break;
 
 } // namespace yb
-
-#endif // YB_COMMON_QL_VALUE_H

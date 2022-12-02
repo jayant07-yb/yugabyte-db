@@ -10,8 +10,7 @@ menu:
 aliases:
   - /preview/api/cassandra/ddl_drop_keyspace
   - /preview/api/ycql/ddl_drop_keyspace
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
@@ -26,7 +25,7 @@ Use the `DROP KEYSPACE` statement to remove a keyspace from the system.
 
 ### Grammar
 
-```
+```ebnf
 drop_keyspace ::= DROP { KEYSPACE | SCHEMA } [ IF EXISTS ] keyspace_name;
 ```
 

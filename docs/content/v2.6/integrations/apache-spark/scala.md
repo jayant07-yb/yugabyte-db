@@ -8,8 +8,7 @@ menu:
     identifier: apache-spark-1-scala
     parent: integrations
     weight: 572
-showAsideToc: true
-isTocNested: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
@@ -22,7 +21,7 @@ isTocNested: true
 
   <li >
     <a href="{{< relref "./java.md" >}}" class="nav-link">
-      <i class="icon-java-bold" aria-hidden="true"></i>
+      <i class="fa-brands fa-java" aria-hidden="true"></i>
       Java
     </a>
   </li>

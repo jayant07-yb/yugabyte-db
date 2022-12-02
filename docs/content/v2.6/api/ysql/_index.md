@@ -10,13 +10,12 @@ menu:
     identifier: api-ysql
     parent: api
     weight: 2900
-isTocNested: true
-showAsideToc: true
+type: indexpage
 ---
 
 ## Introduction
 
-Yugabyte Structured Query Language (YSQL) is an ANSI SQL, fully-relational API that is best fit for scale-out RDBMS applications that need ultra resilience, massive write scalability and geographic data distribution. The YugabyteDB SQL processing layer is built by using the PostgreSQL code (starting with version 11.2) directly. 
+Yugabyte Structured Query Language (YSQL) is an ANSI SQL, fully-relational API that is best fit for scale-out RDBMS applications that need ultra resilience, massive write scalability and geographic data distribution. The YugabyteDB SQL processing layer is built by using the PostgreSQL code (starting with version 11.2) directly.
 
 YSQL therefore supports all of the traditional relational modeling features, such as referential integrity (implemented using a foreign key constraint from a child table to a primary key to its parent table), joins, partial indexes, triggers and stored procedures. It extends the familiar transactional notions into the YugabyteDB Distributed SQL Database architecture.
 
@@ -24,7 +23,7 @@ The main components of YSQL include the data definition language (DDL), the data
 
 {{< note title="Note" >}}
 
-If you don't find what you're looking for in the YSQL documentation, you might find answers in the relevant <a href="https://www.postgresql.org/docs/11/index.html" target="_blank">PostgreSQL documentation <i class="fas fa-external-link-alt"></i></a>. Successive YugabyteDB releases honor PostgreSQL syntax and semantics, although some features (for example those that are specific to the PostgreSQL monolithic SQL database architecture) might not be supported for distributed SQL. The YSQL documentation specifies the supported syntax and extensions.
+If you don't find what you're looking for in the YSQL documentation, you might find answers in the relevant <a href="https://www.postgresql.org/docs/11/index.html" target="_blank">PostgreSQL documentation <i class="fa-solid fa-up-right-from-square"></i></a>. Successive YugabyteDB releases honor PostgreSQL syntax and semantics, although some features (for example those that are specific to the PostgreSQL monolithic SQL database architecture) might not be supported for distributed SQL. The YSQL documentation specifies the supported syntax and extensions.
 
 To find the version of the PostgreSQL processing layer used in YugabyteDB, you can use the `version()` function. The following YSQL query displays only the first part of the returned value:
 
@@ -32,7 +31,7 @@ To find the version of the PostgreSQL processing layer used in YugabyteDB, you c
 select rpad(version(), 18)||'...' as v;
 ```
 
-For the “latest” release series of YugabyteDB, as reflected in this main documentation URL, 
+For the “latest” release series of YugabyteDB, as reflected in this main documentation URL,
 the query result shows that the PostgreSQL version is 11.2:
 
 ```

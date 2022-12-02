@@ -4,34 +4,33 @@ headerTitle: Install Yugabyte Platform Software - OpenShift
 linkTitle: Install software
 description: Install Yugabyte Platform software in your OpenShift environment
 menu:
-  v2.8:
+  v2.8_yugabyte-platform:
     parent: install-yugabyte-platform
     identifier: install-software-2-openshift
     weight: 77
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li>
     <a href="../default/" class="nav-link">
-      <i class="fas fa-cloud"></i>Default</a>
+      <i class="fa-solid fa-cloud"></i>Default</a>
   </li>
 
   <li>
     <a href="../kubernetes/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>Kubernetes</a>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>Kubernetes</a>
   </li>
 
   <li>
     <a href="../airgapped/" class="nav-link">
-      <i class="fas fa-unlink"></i>Airgapped</a>
+      <i class="fa-solid fa-link-slash"></i>Airgapped</a>
   </li>
 
   <li>
     <a href="../openshift/" class="nav-link active">
-      <i class="fas fa-cubes"></i>OpenShift</a>
+      <i class="fa-solid fa-cubes"></i>OpenShift</a>
   </li>
 
 </ul>

@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_MASTER_MASTER_FWD_H
-#define YB_MASTER_MASTER_FWD_H
+#pragma once
 
 #include <map>
 #include <memory>
@@ -27,6 +26,7 @@
 #include "yb/gutil/ref_counted.h"
 
 #include "yb/master/master_backup.fwd.h"
+#include "yb/master/master_replication.pb.h"
 #include "yb/master/tablet_split_fwd.h"
 
 #include "yb/util/enums.h"
@@ -52,6 +52,7 @@ class CatalogManagerIf;
 class CatalogManagerBgTasks;
 class CDCConsumerSplitDriverIf;
 class CDCRpcTasks;
+class CDCSplitDriverIf;
 class ClusterConfigInfo;
 class ClusterLoadBalancer;
 class FlushManager;
@@ -78,7 +79,7 @@ class SysRowEntries;
 class TSDescriptor;
 class TSManager;
 class UDTypeInfo;
-class XClusterSplitDriverIf;
+class XClusterSafeTimeService;
 class YQLPartitionsVTable;
 class YQLVirtualTable;
 class YsqlTablegroupManager;
@@ -95,7 +96,6 @@ using AsyncTabletSnapshotOpPtr = std::shared_ptr<AsyncTabletSnapshotOp>;
 
 class TableInfo;
 using TableInfoPtr = scoped_refptr<TableInfo>;
-using TableInfoMap = std::map<TableId, TableInfoPtr>;
 
 class TabletInfo;
 using TabletInfoPtr = scoped_refptr<TabletInfo>;
@@ -107,9 +107,11 @@ using SnapshotScheduleRestorationPtr = std::shared_ptr<SnapshotScheduleRestorati
 YB_STRONGLY_TYPED_BOOL(RegisteredThroughHeartbeat);
 
 YB_STRONGLY_TYPED_BOOL(IncludeInactive);
+YB_STRONGLY_TYPED_BOOL(IncludeDeleted);
 
 YB_DEFINE_ENUM(
-    CollectFlag, (kAddIndexes)(kIncludeParentColocatedTable)(kSucceedIfCreateInProgress));
+    CollectFlag,
+    (kAddIndexes)(kIncludeParentColocatedTable)(kSucceedIfCreateInProgress)(kAddUDTypes));
 using CollectFlags = EnumBitSet<CollectFlag>;
 
 using TableToTablespaceIdMap = std::unordered_map<TableId, boost::optional<TablespaceId>>;
@@ -126,6 +128,10 @@ using AffinitizedZonesSet = std::unordered_set<CloudInfoPB, cloud_hash, cloud_eq
 using BlacklistSet = std::unordered_set<HostPort, HostPortHash>;
 using RetryingTSRpcTaskPtr = std::shared_ptr<RetryingTSRpcTask>;
 
+// Use ordered map to make computing fingerprint of the map easier.
+using DbOidToCatalogVersionMap = std::map<uint32_t, std::pair<uint64_t, uint64_t>>;
+using RelIdToAttributesMap = std::unordered_map<uint32_t, std::vector<PgAttributePB>>;
+using RelTypeOIDMap = std::unordered_map<uint32_t, uint32_t>;
 namespace enterprise {
 
 class CatalogManager;
@@ -134,5 +140,3 @@ class CatalogManager;
 
 } // namespace master
 } // namespace yb
-
-#endif // YB_MASTER_MASTER_FWD_H

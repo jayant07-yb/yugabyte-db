@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_TOOLS_YB_ADMIN_CLIENT_H
-#define YB_TOOLS_YB_ADMIN_CLIENT_H
+#pragma once
 
 #include <string>
 #include <vector>
@@ -39,6 +38,7 @@
 
 #include "yb/client/yb_table_name.h"
 
+#include "yb/master/master_admin.pb.h"
 #include "yb/rpc/rpc_controller.h"
 
 #include "yb/util/status_fwd.h"
@@ -78,14 +78,16 @@ struct TypedNamespaceName {
 
 class TableNameResolver {
  public:
-  TableNameResolver(std::vector<client::YBTableName> tables,
-                    std::vector<master::NamespaceIdentifierPB> namespaces);
+  using Values = std::vector<client::YBTableName>;
+  TableNameResolver(
+      Values* values,
+      std::vector<client::YBTableName>&& tables,
+      std::vector<master::NamespaceIdentifierPB>&& namespaces);
   TableNameResolver(TableNameResolver&&);
   ~TableNameResolver();
 
   Result<bool> Feed(const std::string& value);
-  std::vector<client::YBTableName>& values();
-  master::NamespaceIdentifierPB last_namespace();
+  const master::NamespaceIdentifierPB* last_namespace() const;
 
  private:
   class Impl;
@@ -158,14 +160,14 @@ class ClusterAdminClient {
 
   // List all the tables.
   Status ListTables(bool include_db_type,
-                            bool include_table_id,
-                            bool include_table_type);
+                    bool include_table_id,
+                    bool include_table_type);
 
   // List all tablets of this table
   Status ListTablets(const client::YBTableName& table_name,
-                             int max_tablets,
-                             bool json,
-                             bool followers);
+                     int max_tablets,
+                     bool json,
+                     bool followers);
 
   // Per Tablet list of all tablet servers
   Status ListPerTabletTabletServers(const PeerId& tablet_id);
@@ -223,37 +225,37 @@ class ClusterAdminClient {
   Status DropRedisTable();
 
   Status FlushTables(const std::vector<client::YBTableName>& table_names,
-                             bool add_indexes,
-                             int timeout_secs,
-                             bool is_compaction);
+                     bool add_indexes,
+                     int timeout_secs,
+                     bool is_compaction);
 
   Status FlushTablesById(const std::vector<TableId>& table_id,
-                                 bool add_indexes,
-                                 int timeout_secs,
-                                 bool is_compaction);
+                         bool add_indexes,
+                         int timeout_secs,
+                         bool is_compaction);
 
   Status FlushSysCatalog();
 
   Status CompactSysCatalog();
 
   Status ModifyTablePlacementInfo(const client::YBTableName& table_name,
-                                          const std::string& placement_info,
-                                          int replication_factor,
-                                          const std::string& optional_uuid);
+                                  const std::string& placement_info,
+                                  int replication_factor,
+                                  const std::string& optional_uuid);
 
   Status ModifyPlacementInfo(std::string placement_infos,
-                                     int replication_factor,
-                                     const std::string& optional_uuid);
+                             int replication_factor,
+                             const std::string& optional_uuid);
 
   Status ClearPlacementInfo();
 
   Status AddReadReplicaPlacementInfo(const std::string& placement_info,
-                                             int replication_factor,
-                                             const std::string& optional_uuid);
+                                     int replication_factor,
+                                     const std::string& optional_uuid);
 
   Status ModifyReadReplicaPlacementInfo(const std::string& placement_uuid,
-                                                const std::string& placement_info,
-                                                int replication_factor);
+                                        const std::string& placement_info,
+                                        int replication_factor);
 
   Status DeleteReadReplicaPlacementInfo();
 
@@ -275,13 +277,15 @@ class ClusterAdminClient {
 
   Status SplitTablet(const std::string& tablet_id);
 
-  Status DisableTabletSplitting(int64_t disable_duration_ms);
+  Status DisableTabletSplitting(int64_t disable_duration_ms, const std::string& feature_name);
 
-  Status IsTabletSplittingComplete();
+  Status IsTabletSplittingComplete(bool wait_for_parent_deletion);
 
   Status CreateTransactionsStatusTable(const std::string& table_name);
 
-  Result<TableNameResolver> BuildTableNameResolver();
+  Status AddTransactionStatusTablet(const TableId& table_id);
+
+  Result<TableNameResolver> BuildTableNameResolver(TableNameResolver::Values* tables);
 
   Result<std::string> GetMasterLeaderUuid();
 
@@ -292,7 +296,7 @@ class ClusterAdminClient {
   // Upgrade YSQL cluster (all databases) to the latest version, applying necessary migrations.
   // Note: Works with a tserver but is placed here (and not in yb-ts-cli) because it doesn't
   //       look like this workflow is a good fit there.
-  Status UpgradeYsql();
+  Status UpgradeYsql(bool use_single_connection);
 
   // Set WAL retention time in secs for a table name.
   Status SetWalRetentionSecs(
@@ -303,7 +307,7 @@ class ClusterAdminClient {
  protected:
   // Fetch the locations of the replicas for a given tablet from the Master.
   Status GetTabletLocations(const TabletId& tablet_id,
-                                    master::TabletLocationsPB* locations);
+                            master::TabletLocationsPB* locations);
 
   // Fetch information about the location of a tablet peer from the leader master.
   Status GetTabletPeer(
@@ -340,10 +344,12 @@ class ClusterAdminClient {
   Status WaitUntilMasterLeaderReady();
 
   template <class Resp, class F>
-  Status RequestMasterLeader(Resp* resp, const F& f) {
-    auto deadline = CoarseMonoClock::now() + timeout_;
+  Status RequestMasterLeader(Resp* resp, const F& f, const MonoDelta& timeout = MonoDelta::kZero) {
+    const MonoDelta local_timeout = (timeout == MonoDelta::kZero ? timeout_ : timeout);
+
+    auto deadline = CoarseMonoClock::now() + local_timeout;
     rpc::RpcController rpc;
-    rpc.set_timeout(timeout_);
+    rpc.set_timeout(local_timeout);
     for (;;) {
       resp->Clear();
       RETURN_NOT_OK(f(&rpc));
@@ -370,6 +376,12 @@ class ClusterAdminClient {
   }
 
   void ResetMasterProxy(const HostPort& leader_addr = HostPort());
+
+  Result<master::DisableTabletSplittingResponsePB> DisableTabletSplitsInternal(
+      int64_t disable_duration_ms, const std::string& feature_name);
+
+  Result<master::IsTabletSplittingCompleteResponsePB> IsTabletSplittingCompleteInternal(
+      bool wait_for_parent_deletion);
 
   std::string master_addr_list_;
   HostPort init_master_addr_;
@@ -400,7 +412,6 @@ class ClusterAdminClient {
 
   Result<int> GetReadReplicaConfigFromPlacementUuid(
       master::ReplicationInfoPB* replication_info, const std::string& placement_uuid);
-
 
   Result<master::GetMasterClusterConfigResponsePB> GetMasterClusterConfig();
 
@@ -443,5 +454,3 @@ std::string HybridTimeToString(HybridTime ht);
 
 }  // namespace tools
 }  // namespace yb
-
-#endif // YB_TOOLS_YB_ADMIN_CLIENT_H

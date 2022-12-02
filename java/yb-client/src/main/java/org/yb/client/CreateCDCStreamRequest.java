@@ -14,8 +14,7 @@
 package org.yb.client;
 
 import com.google.protobuf.Message;
-import org.apache.log4j.LogMF;
-import org.jboss.netty.buffer.ChannelBuffer;
+import io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.yb.cdc.CdcService.CreateCDCStreamRequestPB;
@@ -31,10 +30,11 @@ public class CreateCDCStreamRequest extends YRpc<CreateCDCStreamResponse> {
   private final CdcService.CDCRequestSource source_type;
   private final CdcService.CDCRecordFormat record_format;
   private final CdcService.CDCCheckpointType checkpoint_type;
+  private CdcService.CDCRecordType recordType;
 
   public CreateCDCStreamRequest(YBTable masterTable, String tableId,
                                 String namespaceName, String format,
-                                String checkpointType) {
+                                String checkpointType, String recordType) {
     super(masterTable);
     this.tableId = tableId;
     this.namespaceName = namespaceName;
@@ -50,10 +50,26 @@ public class CreateCDCStreamRequest extends YRpc<CreateCDCStreamResponse> {
     else {
       this.checkpoint_type = CdcService.CDCCheckpointType.IMPLICIT;
     }
+
+    // If record type is null or empty then it will be set as the default value which is CHANGE.
+    // For more information on default values, see yugabyte-db/src/yb/cdc/cdc_service.proto.
+    if (recordType != null && !recordType.isEmpty()) {
+      if (recordType.equalsIgnoreCase("ALL")) {
+        this.recordType = CdcService.CDCRecordType.ALL;
+      } else {
+        this.recordType = CdcService.CDCRecordType.CHANGE;
+      }
+    }
+  }
+
+  public CreateCDCStreamRequest(YBTable masterTable, String tableId,
+                                String namespaceName, String format,
+                                String checkpointType) {
+    this(masterTable, tableId, namespaceName, format, checkpointType, null);
   }
 
   @Override
-  ChannelBuffer serialize(Message header) {
+  ByteBuf serialize(Message header) {
     assert header.isInitialized();
     final CreateCDCStreamRequestPB.Builder builder = CreateCDCStreamRequestPB.newBuilder();
     if (namespaceName == null)
@@ -62,6 +78,11 @@ public class CreateCDCStreamRequest extends YRpc<CreateCDCStreamResponse> {
     builder.setSourceType(this.source_type);
     builder.setRecordFormat(this.record_format);
     builder.setCheckpointType(this.checkpoint_type);
+
+    if (recordType != null) {
+      builder.setRecordType(this.recordType);
+    }
+
     return toChannelBuffer(header, builder.build());
   }
 

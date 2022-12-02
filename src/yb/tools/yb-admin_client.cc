@@ -84,18 +84,19 @@
 #include "yb/util/stol_utils.h"
 #include "yb/util/string_case.h"
 #include "yb/util/string_util.h"
+#include "yb/util/flags.h"
 
-DEFINE_bool(wait_if_no_leader_master, false,
+DEFINE_UNKNOWN_bool(wait_if_no_leader_master, false,
             "When yb-admin connects to the cluster and no leader master is present, "
             "this flag determines if yb-admin should wait for the entire duration of timeout or"
             "in case a leader master appears in that duration or return error immediately.");
 
-DEFINE_string(certs_dir_name, "",
+DEFINE_UNKNOWN_string(certs_dir_name, "",
               "Directory with certificates to use for secure server connection.");
 
-DEFINE_string(client_node_name, "", "Client node name.");
+DEFINE_UNKNOWN_string(client_node_name, "", "Client node name.");
 
-DEFINE_bool(
+DEFINE_UNKNOWN_bool(
     disable_graceful_transition, false,
     "During a leader stepdown, disable graceful leadership transfer "
     "to an up to date peer");
@@ -114,6 +115,10 @@ using namespace std::literals;
 
 using std::cout;
 using std::endl;
+using std::string;
+using std::pair;
+using std::make_pair;
+using std::vector;
 
 using google::protobuf::RepeatedPtrField;
 using google::protobuf::util::MessageToJsonString;
@@ -137,18 +142,15 @@ using consensus::RunLeaderElectionResponsePB;
 
 using master::ListMastersRequestPB;
 using master::ListMastersResponsePB;
-using master::ListMasterRaftPeersRequestPB;
-using master::ListMasterRaftPeersResponsePB;
 using master::ListTabletServersRequestPB;
 using master::ListTabletServersResponsePB;
-using master::ListLiveTabletServersRequestPB;
-using master::ListLiveTabletServersResponsePB;
 using master::TabletLocationsPB;
 using master::TSInfoPB;
 
 namespace {
 
 static constexpr const char* kRpcHostPortHeading = "RPC Host/Port";
+static constexpr const char* kBroadcastHeading = "Broadcast Host/Port";
 static constexpr const char* kDBTypePrefixUnknown = "unknown";
 static constexpr const char* kDBTypePrefixCql = "ycql";
 static constexpr const char* kDBTypePrefixYsql = "ysql";
@@ -310,10 +312,12 @@ class TableNameResolver::Impl {
  public:
   struct TableIdTag;
   struct TableNameTag;
-  using Values = std::vector<client::YBTableName>;
 
-  Impl(std::vector<YBTableName> tables, vector<master::NamespaceIdentifierPB> namespaces)
-      : current_namespace_(nullptr) {
+  Impl(
+      TableNameResolver::Values* values,
+      std::vector<YBTableName>&& tables,
+      vector<master::NamespaceIdentifierPB>&& namespaces)
+      : current_namespace_(nullptr), values_(values) {
     std::move(tables.begin(), tables.end(), std::inserter(tables_, tables_.end()));
     std::move(namespaces.begin(), namespaces.end(), std::inserter(namespaces_, namespaces_.end()));
   }
@@ -326,16 +330,7 @@ class TableNameResolver::Impl {
     return result;
   }
 
-  Values& values() {
-    return values_;
-  }
-
-  master::NamespaceIdentifierPB last_namespace() {
-    if (!current_namespace_) {
-      return master::NamespaceIdentifierPB();
-    }
-    return *current_namespace_;
-  }
+  const master::NamespaceIdentifierPB* last_namespace() const { return current_namespace_; }
 
  private:
   Result<bool> FeedImpl(const std::string& str) {
@@ -409,7 +404,7 @@ class TableNameResolver::Impl {
 
   void AppendTable(const YBTableName& table) {
     current_namespace_ = nullptr;
-    values_.push_back(table);
+    values_->push_back(table);
   }
 
   using TableContainer = boost::multi_index_container<YBTableName,
@@ -437,13 +432,14 @@ class TableNameResolver::Impl {
   TableContainer tables_;
   std::set<master::NamespaceIdentifierPB, NamespaceComparator> namespaces_;
   const master::NamespaceIdentifierPB* current_namespace_;
-  Values values_;
+  TableNameResolver::Values* values_;
 };
 
-TableNameResolver::TableNameResolver(std::vector<client::YBTableName> tables,
-                                     std::vector<master::NamespaceIdentifierPB> namespaces)
-    : impl_(new Impl(std::move(tables), std::move(namespaces))) {
-}
+TableNameResolver::TableNameResolver(
+    std::vector<client::YBTableName>* container,
+    std::vector<client::YBTableName>&& tables,
+    std::vector<master::NamespaceIdentifierPB>&& namespaces)
+    : impl_(new Impl(container, std::move(tables), std::move(namespaces))) {}
 
 TableNameResolver::TableNameResolver(TableNameResolver&&) = default;
 
@@ -453,11 +449,7 @@ Result<bool> TableNameResolver::Feed(const std::string& value) {
   return impl_->Feed(value);
 }
 
-std::vector<client::YBTableName>& TableNameResolver::values() {
-  return impl_->values();
-}
-
-master::NamespaceIdentifierPB TableNameResolver::last_namespace() {
+const master::NamespaceIdentifierPB* TableNameResolver::last_namespace() const {
   return impl_->last_namespace();
 }
 
@@ -1129,6 +1121,7 @@ Status ClusterAdminClient::ListAllTabletServers(bool exclude_dead) {
         << RightPadToWidth("SST uncomp size", kLongColWidth) << kSpaceSep
         << RightPadToWidth("SST #files", kLongColWidth) << kSpaceSep
         << RightPadToWidth("Memory", kSmallColWidth) << kSpaceSep
+        << kBroadcastHeading << kSpaceSep
         << endl;
   for (const ListTabletServersResponsePB::Entry& server : servers) {
     if (exclude_dead && server.has_alive() && !server.alive()) {
@@ -1157,6 +1150,7 @@ Status ClusterAdminClient::ListAllTabletServers(bool exclude_dead) {
          << RightPadToWidth(server.metrics().num_sst_files(), kLongColWidth) << kSpaceSep
          << RightPadToWidth(HumanizeBytes(server.metrics().total_ram_usage()), kSmallColWidth)
          << kSpaceSep
+         << FormatFirstHostPort(server.registration().common().broadcast_addresses())
          << endl;
   }
 
@@ -1177,7 +1171,7 @@ Status ClusterAdminClient::ListAllMasters() {
   cout << RightPadToUuidWidth("Master UUID") << kColumnSep
         << RightPadToWidth(kRpcHostPortHeading, kHostPortColWidth) << kColumnSep
         << RightPadToWidth("State", kSmallColWidth) << kColumnSep
-        << "Role" << endl;
+        << "Role" << kColumnSep << RightPadToWidth(kBroadcastHeading, kHostPortColWidth) << endl;
 
   for (const auto& master : lresp.masters()) {
       const auto master_reg = master.has_registration() ? &master.registration() : nullptr;
@@ -1191,7 +1185,10 @@ Status ClusterAdminClient::ListAllMasters() {
                                 PBEnumToString(master.error().code()) : "ALIVE"),
                               kSmallColWidth)
             << kColumnSep;
-      cout << (master.has_role() ? PBEnumToString(master.role()) : "UNKNOWN") << endl;
+      cout << (master.has_role() ? PBEnumToString(master.role()) : "UNKNOWN") << kColumnSep;
+      cout << RightPadToWidth(
+        master_reg ? FormatFirstHostPort(master_reg->broadcast_addresses()) : "UNKNOWN",
+        kHostPortColWidth) << endl;
   }
 
   return Status::OK();
@@ -1258,6 +1255,9 @@ Status ClusterAdminClient::ListTables(bool include_db_type,
         case master::INDEX_TABLE_RELATION:
           str << " index";
           break;
+        case master::MATVIEW_TABLE_RELATION:
+          str << "matview";
+          break;
         default:
           str << " other";
       }
@@ -1272,7 +1272,9 @@ Status ClusterAdminClient::ListTables(bool include_db_type,
 struct FollowerDetails {
   string uuid;
   string host_port;
-  FollowerDetails(const string &u, const string &hp) : uuid(u), host_port(hp) {}
+  string peer_role;
+  FollowerDetails(const string &u, const string &hp, const string &role) :
+    uuid(u), host_port(hp), peer_role(role) {}
 };
 
 Status ClusterAdminClient::ListTablets(
@@ -1319,7 +1321,8 @@ Status ClusterAdminClient::ListTablets(
             HostPortPBToString(replica.ts_info().private_rpc_addresses(0));
           if (json) {
             follower_list.push_back(
-                FollowerDetails(replica.ts_info().permanent_uuid(), follower_host_port));
+                FollowerDetails(replica.ts_info().permanent_uuid(), follower_host_port,
+                  PeerRole_Name(replica.role())));
           } else {
             if (!follower_list_str.empty()) {
               follower_list_str += ",";
@@ -1343,6 +1346,8 @@ Status ClusterAdminClient::ListTablets(
       rapidjson::Value json_leader(rapidjson::kObjectType);
       AddStringField("uuid", leader_uuid, &json_leader, &document.GetAllocator());
       AddStringField("endpoint", leader_host_port, &json_leader, &document.GetAllocator());
+      AddStringField("role", PeerRole_Name(PeerRole::LEADER), &json_leader,
+          &document.GetAllocator());
       json_tablet.AddMember(rapidjson::StringRef("leader"), json_leader, document.GetAllocator());
       if (followers) {
         rapidjson::Value json_followers(rapidjson::kArrayType);
@@ -1351,6 +1356,7 @@ Status ClusterAdminClient::ListTablets(
           rapidjson::Value json_follower(rapidjson::kObjectType);
           AddStringField("uuid", follower.uuid, &json_follower, &document.GetAllocator());
           AddStringField("endpoint", follower.host_port, &json_follower, &document.GetAllocator());
+          AddStringField("role", follower.peer_role, &json_follower, &document.GetAllocator());
           json_followers.PushBack(json_follower, document.GetAllocator());
         }
         json_tablet.AddMember(rapidjson::StringRef("followers"), json_followers,
@@ -1987,7 +1993,7 @@ Result<rapidjson::Document> ClusterAdminClient::DdlLog() {
   return result;
 }
 
-Status ClusterAdminClient::UpgradeYsql() {
+Status ClusterAdminClient::UpgradeYsql(bool use_single_connection) {
   {
     master::IsInitDbDoneRequestPB req;
     auto res = InvokeRpc(
@@ -2031,6 +2037,7 @@ Status ClusterAdminClient::UpgradeYsql() {
   TabletServerAdminServiceProxy ts_admin_proxy(proxy_cache_.get(), HostPortFromPB(*ts_rpc_addr));
 
   UpgradeYsqlRequestPB req;
+  req.set_use_single_connection(use_single_connection);
   const auto resp_result = InvokeRpc(&TabletServerAdminServiceProxy::UpgradeYsql,
                                      ts_admin_proxy, req);
   if (!resp_result.ok()) {
@@ -2106,25 +2113,40 @@ Status ClusterAdminClient::SplitTablet(const std::string& tablet_id) {
   return Status::OK();
 }
 
-Status ClusterAdminClient::DisableTabletSplitting(int64_t disable_duration_ms) {
+Result<master::DisableTabletSplittingResponsePB> ClusterAdminClient::DisableTabletSplitsInternal(
+    int64_t disable_duration_ms, const std::string& feature_name) {
   master::DisableTabletSplittingRequestPB req;
   req.set_disable_duration_ms(disable_duration_ms);
-  const auto resp = VERIFY_RESULT(
-      InvokeRpc(&master::MasterAdminProxy::DisableTabletSplitting, *master_admin_proxy_, req));
+  req.set_feature_name(feature_name);
+  return InvokeRpc(&master::MasterAdminProxy::DisableTabletSplitting, *master_admin_proxy_, req);
+}
+
+Status ClusterAdminClient::DisableTabletSplitting(
+    int64_t disable_duration_ms, const std::string& feature_name) {
+  const auto resp = VERIFY_RESULT(DisableTabletSplitsInternal(disable_duration_ms, feature_name));
   std::cout << "Response: " << AsString(resp) << std::endl;
   return Status::OK();
 }
 
-Status ClusterAdminClient::IsTabletSplittingComplete() {
+Result<master::IsTabletSplittingCompleteResponsePB>
+    ClusterAdminClient::IsTabletSplittingCompleteInternal(bool wait_for_parent_deletion) {
   master::IsTabletSplittingCompleteRequestPB req;
-  const auto resp = VERIFY_RESULT(
-      InvokeRpc(&master::MasterAdminProxy::IsTabletSplittingComplete, *master_admin_proxy_, req));
+  req.set_wait_for_parent_deletion(wait_for_parent_deletion);
+  return InvokeRpc(&master::MasterAdminProxy::IsTabletSplittingComplete, *master_admin_proxy_, req);
+}
+
+Status ClusterAdminClient::IsTabletSplittingComplete(bool wait_for_parent_deletion) {
+  const auto resp = VERIFY_RESULT(IsTabletSplittingCompleteInternal(wait_for_parent_deletion));
   std::cout << "Response: " << AsString(resp) << std::endl;
   return Status::OK();
 }
 
 Status ClusterAdminClient::CreateTransactionsStatusTable(const std::string& table_name) {
   return yb_client_->CreateTransactionsStatusTable(table_name);
+}
+
+Status ClusterAdminClient::AddTransactionStatusTablet(const TableId& table_id) {
+  return yb_client_->AddTransactionStatusTablet(table_id);
 }
 
 template<class Response, class Request, class Object>
@@ -2161,9 +2183,10 @@ Result<const ClusterAdminClient::NamespaceMap&> ClusterAdminClient::GetNamespace
   return const_cast<const ClusterAdminClient::NamespaceMap&>(namespace_map_);
 }
 
-Result<TableNameResolver> ClusterAdminClient::BuildTableNameResolver() {
-  return TableNameResolver(VERIFY_RESULT(yb_client_->ListTables()),
-                           VERIFY_RESULT(yb_client_->ListNamespaces()));
+Result<TableNameResolver> ClusterAdminClient::BuildTableNameResolver(
+    TableNameResolver::Values* tables) {
+  return TableNameResolver(
+      tables, VERIFY_RESULT(yb_client_->ListTables()), VERIFY_RESULT(yb_client_->ListNamespaces()));
 }
 
 string RightPadToUuidWidth(const string &s) {

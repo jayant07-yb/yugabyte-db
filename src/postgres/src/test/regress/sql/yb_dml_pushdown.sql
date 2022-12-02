@@ -1,7 +1,3 @@
--- These tests for UPDATE/DELETE single row operations are forked off of yb_dml_single_row
--- and test approximately same statements when expression pushdown is enabled
-SET yb_enable_expression_pushdown to on;
-
 --
 -- Test that single-row UPDATE/DELETEs bypass scan.
 --
@@ -219,6 +215,16 @@ EXPLAIN (COSTS FALSE) EXECUTE single_row_update (1, 1, 1);
 -- DELETE should still use single-row since trigger does not apply to it.
 EXPLAIN (COSTS FALSE) EXECUTE single_row_delete (1);
 DROP TRIGGER single_row_update_trigger ON single_row;
+
+--
+-- Test stored procedure
+--
+CREATE PROCEDURE update_single_row_proc(pk int, new_v1 int, inc_v2 int) AS $$
+  UPDATE single_row SET v1 = new_v1, v2 = v2 + inc_v2 WHERE k = pk;
+$$ LANGUAGE SQL;
+CALL update_single_row_proc(1, 2, 3);
+SELECT * FROM single_row WHERE k = 1;
+DROP PROCEDURE update_single_row_proc;
 
 --
 -- Test table with composite primary key.

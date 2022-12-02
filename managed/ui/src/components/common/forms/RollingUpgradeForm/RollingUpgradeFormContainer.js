@@ -79,12 +79,15 @@ function mapStateToProps(state, ownProps) {
   } = state;
 
   const initialValues = {};
+  let intialSystemdValue = false;
   if (isNonEmptyObject(currentUniverse) && isNonEmptyObject(currentUniverse.data.universeDetails)) {
     initialValues.tlsCertificate = currentUniverse.data.universeDetails.rootCA;
 
     const primaryCluster = getPrimaryCluster(currentUniverse.data.universeDetails.clusters);
-    var intialSystemdValue = primaryCluster.userIntent.useSystemd;
+    intialSystemdValue = primaryCluster.userIntent.useSystemd;
     if (isDefinedNotNull(primaryCluster)) {
+      initialValues.ybSoftwareVersion = primaryCluster.userIntent.ybSoftwareVersion;
+
       const masterGFlags = primaryCluster.userIntent.masterGFlags;
       const tserverGFlags = primaryCluster.userIntent.tserverGFlags;
       const gFlagArray = [];
@@ -112,12 +115,12 @@ function mapStateToProps(state, ownProps) {
       initialValues.gFlags = gFlagArray;
     }
   }
-  initialValues.ybSoftwareVersion = state.customer.softwareVersions[0];
   initialValues.timeDelay = TASK_LONG_TIMEOUT / 1000;
   initialValues.upgradeOption = 'Rolling';
   initialValues.rollingUpgrade = true;
   initialValues.systemdValue = intialSystemdValue;
-
+  initialValues.universeOverrides = '';
+  initialValues.azOverrides = '';
   let certificates = [];
   const allCertificates = state.customer.userCertificates;
   if (getPromiseState(allCertificates).isSuccess()) {
@@ -140,6 +143,7 @@ function mapStateToProps(state, ownProps) {
     modal: state.modal,
     universe: state.universe,
     softwareVersions: state.customer.softwareVersions,
+    featureFlags: state.featureFlags,
     initialValues,
     certificates,
     formValues,

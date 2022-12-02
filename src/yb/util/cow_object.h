@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_COW_OBJECT_H
-#define YB_UTIL_COW_OBJECT_H
+#pragma once
 
 #include <fcntl.h>
 
@@ -128,6 +127,10 @@ class CowObject {
   bool is_dirty() const {
     DCHECK(lock_.HasReaders() || lock_.HasWriteLock());
     return is_dirty_;
+  }
+
+  void WriteLockThreadChanged() {
+    lock_.WriteLockThreadChanged();
   }
 
  private:
@@ -285,6 +288,10 @@ class CowWriteLock {
     return cow_ != nullptr;
   }
 
+  void ThreadChanged() {
+    cow_->WriteLockThreadChanged();
+  }
+
   ~CowWriteLock() {
     Unlock();
   }
@@ -294,5 +301,3 @@ class CowWriteLock {
 };
 
 } // namespace yb
-
-#endif /* YB_UTIL_COW_OBJECT_H */

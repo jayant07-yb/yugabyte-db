@@ -112,14 +112,14 @@ class TaskDetail extends Component {
           {/* TODO use API response to check retryable. */}
           {allowRetry && isNonEmptyString(currentTaskData.title) &&
             currentTaskData.retryable && (
-              <div
-                className="btn btn-orange text-center pull-right task-detail-button"
-                onClick={() => self.retryTaskClicked(taskUUID)}
-              >
-                <i className="fa fa-refresh"></i>
+            <div
+              className="btn btn-orange text-center pull-right task-detail-button"
+              onClick={() => self.retryTaskClicked(taskUUID)}
+            >
+              <i className="fa fa-refresh"></i>
                 Retry Task
-              </div>
-            )}
+            </div>
+          )}
         </div>
       );
     };
@@ -209,7 +209,16 @@ class TaskDetail extends Component {
         </div>
 
         <YBPanelItem
-          header={<h2>Task details</h2>}
+          header={
+            <h2>
+              {currentTaskData.correlationId ? (
+                <Link to={`/logs/?queryRegex=${currentTaskData.correlationId}`}>
+                  Task details
+                </Link>
+              ) :
+                ('Task details')}
+            </h2>
+          }
           body={
             <div className="task-detail-container">
               <Row className="task-heading-row">

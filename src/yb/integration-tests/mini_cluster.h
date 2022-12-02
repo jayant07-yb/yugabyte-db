@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_INTEGRATION_TESTS_MINI_CLUSTER_H_
-#define YB_INTEGRATION_TESTS_MINI_CLUSTER_H_
+#pragma once
 
 #include <chrono>
 #include <memory>
@@ -138,9 +137,6 @@ class MiniCluster : public MiniClusterBase {
   Status SwitchMemtables();
   Status CleanTabletLogs();
 
-  // Shuts down masters only.
-  void ShutdownMasters();
-
   // Setup a consensus configuration of distributed masters, with count specified in
   // 'options'. Requires that a reserve RPC port is specified in
   // 'options' for each master.
@@ -210,8 +206,8 @@ class MiniCluster : public MiniClusterBase {
   // Returns a bad Status if the tablet does not reach the required count
   // within kTabletReportWaitTimeSeconds.
   Status WaitForReplicaCount(const std::string& tablet_id,
-                                     int expected_count,
-                                     master::TabletLocationsPB* locations);
+                             int expected_count,
+                             master::TabletLocationsPB* locations);
 
   // Wait until the number of registered tablet servers reaches the given
   // count. Returns Status::TimedOut if the desired count is not achieved
@@ -227,6 +223,8 @@ class MiniCluster : public MiniClusterBase {
   uint16_t AllocateFreePort() {
     return port_picker_.AllocateFreePort();
   }
+
+  Status WaitForLoadBalancerToStabilize(MonoDelta timeout);
 
  private:
 
@@ -297,6 +295,8 @@ std::vector<tablet::TabletPeerPtr> ListTableActiveTabletPeers(
 std::vector<tablet::TabletPeerPtr> ListTableInactiveSplitTabletPeers(
     MiniCluster* cluster, const TableId& table_id);
 
+tserver::MiniTabletServer* GetLeaderForTablet(MiniCluster* cluster, const std::string& tablet_id);
+
 std::vector<tablet::TabletPeerPtr> ListActiveTabletLeadersPeers(
     MiniCluster* cluster);
 
@@ -365,6 +365,11 @@ void SetCompactFlushRateLimitBytesPerSec(MiniCluster* cluster, size_t bytes_per_
 Status WaitAllReplicasSynchronizedWithLeader(
     MiniCluster* cluster, CoarseTimePoint deadline);
 
-}  // namespace yb
+Status WaitForAnySstFiles(
+    tablet::TabletPeerPtr peer, MonoDelta timeout = MonoDelta::FromSeconds(5) * kTimeMultiplier);
 
-#endif /* YB_INTEGRATION_TESTS_MINI_CLUSTER_H_ */
+// Activate compaction time logging on existing cluster tablet server.
+// Multiple calls will result in duplicate logging.
+void ActivateCompactionTimeLogging(MiniCluster* cluster);
+
+}  // namespace yb

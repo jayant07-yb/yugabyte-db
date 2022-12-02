@@ -29,13 +29,14 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_MASTER_MASTER_H
-#define YB_MASTER_MASTER_H
+#pragma once
 
 #include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "yb/common/wire_protocol.pb.h"
 
 #include "yb/consensus/consensus.fwd.h"
 #include "yb/consensus/metadata.fwd.h"
@@ -57,6 +58,8 @@ class MaintenanceManager;
 class RpcServer;
 class ServerEntryPB;
 class ThreadPool;
+class AutoFlagsManager;
+class AutoFlagsConfigPB;
 
 namespace server {
 
@@ -71,8 +74,10 @@ class Master : public tserver::DbServerBase {
   explicit Master(const MasterOptions& opts);
   virtual ~Master();
 
-  Status Init();
-  Status Start();
+  virtual Status InitAutoFlags() override;
+  Status InitAutoFlagsFromMasterLeader(const HostPort& leader_address);
+  Status Init() override;
+  Status Start() override;
 
   Status StartAsync();
   Status WaitForCatalogManagerInit();
@@ -84,7 +89,7 @@ class Master : public tserver::DbServerBase {
     const MonoDelta& timeout = MonoDelta::FromSeconds(15))
       WARN_UNUSED_RESULT;
 
-  void Shutdown();
+  void Shutdown() override;
 
   std::string ToString() const override;
 
@@ -95,6 +100,8 @@ class Master : public tserver::DbServerBase {
   enterprise::CatalogManager* catalog_manager_impl() const { return catalog_manager_.get(); }
 
   FlushManager* flush_manager() const { return flush_manager_.get(); }
+
+  AutoFlagsManager* auto_flags_manager() { return auto_flags_manager_.get(); }
 
   PermissionsManager& permissions_manager();
 
@@ -148,6 +155,9 @@ class Master : public tserver::DbServerBase {
 
   SysCatalogTable& sys_catalog() const;
 
+  uint32_t GetAutoFlagConfigVersion() const override;
+  AutoFlagsConfigPB GetAutoFlagsConfig() const;
+
   yb::client::AsyncClientInitialiser& async_client_initializer() {
     return *async_client_init_;
   }
@@ -172,6 +182,9 @@ class Master : public tserver::DbServerBase {
       return &master_metrics_;
   }
 
+  Status get_ysql_db_oid_to_cat_version_info_map(
+      bool size_only, tserver::GetTserverCatalogVersionInfoResponsePB *resp) const;
+
  protected:
   virtual Status RegisterServices();
 
@@ -187,8 +200,6 @@ class Master : public tserver::DbServerBase {
   // Requires that the web server and RPC server have been started.
   Status InitMasterRegistration();
 
-  const std::shared_future<client::YBClient*>& client_future() const override;
-
   client::LocalTabletFilter CreateLocalTabletFilter() override;
 
   enum MasterState {
@@ -197,8 +208,15 @@ class Master : public tserver::DbServerBase {
     kRunning
   };
 
-  MasterState state_;
+  MonoDelta default_client_timeout() override;
 
+  const std::string& permanent_uuid() const override;
+
+  void SetupAsyncClientInit(client::AsyncClientInitialiser* async_client_init) override;
+
+  std::atomic<MasterState> state_;
+
+  std::unique_ptr<AutoFlagsManager> auto_flags_manager_;
   std::unique_ptr<TSManager> ts_manager_;
   std::unique_ptr<enterprise::CatalogManager> catalog_manager_;
   std::unique_ptr<MasterPathHandlers> path_handlers_;
@@ -225,7 +243,6 @@ class Master : public tserver::DbServerBase {
   // Master's tablet server implementation used to host virtual tables like system.peers.
   std::unique_ptr<MasterTabletServer> master_tablet_server_;
 
-  std::unique_ptr<yb::client::AsyncClientInitialiser> async_client_init_;
   std::unique_ptr<yb::client::AsyncClientInitialiser> cdc_state_client_init_;
   std::mutex master_metrics_mutex_;
   std::map<std::string, scoped_refptr<Histogram>> master_metrics_ GUARDED_BY(master_metrics_mutex_);
@@ -235,4 +252,3 @@ class Master : public tserver::DbServerBase {
 
 } // namespace master
 } // namespace yb
-#endif // YB_MASTER_MASTER_H

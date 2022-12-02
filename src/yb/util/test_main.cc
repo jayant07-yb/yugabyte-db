@@ -33,7 +33,6 @@
 #include <signal.h> // For sigaction
 #include <sys/time.h>
 
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
@@ -52,8 +51,9 @@ using yb::StackTraceLineFormat;
 
 using std::string;
 
-DEFINE_int32(test_timeout_after, 0,
+DEFINE_UNKNOWN_int32(test_timeout_after, 0,
              "Maximum total seconds allowed for all unit tests in the suite. Default: disabled");
+DECLARE_bool(TEST_promote_all_auto_flags);
 
 // Start timer that kills the process if --test_timeout_after is exceeded before
 // the tests complete.
@@ -90,6 +90,9 @@ int main(int argc, char **argv) {
   // InitGoogleTest() must precede ParseCommandLineFlags(), as the former
   // removes gtest-related flags from argv that would trip up the latter.
   ::testing::InitGoogleTest(&argc, argv);
+
+  // Set before ParseCommandLineFlags so that user provided override takes precedence.
+  FLAGS_TEST_promote_all_auto_flags = yb::ShouldTestPromoteAllAutoFlags();
 
   yb::ParseCommandLineFlags(&argc, &argv, /* remove_flags */ true);
 

@@ -7,10 +7,11 @@ import {
   changeGraphQueryPeriod,
   resetGraphQueryPeriod,
   togglePrometheusQuery,
-  getGrafanaJson
+  getGrafanaJson,
+  resetMetrics
 } from '../../../actions/graph';
 import { fetchUniverseList, fetchUniverseListResponse } from '../../../actions/universe';
-import {closeDialog, openDialog} from "../../../actions/modal";
+import { closeDialog, openDialog } from "../../../actions/modal";
 
 const mapDispatchToProps = (dispatch) => {
   return {
@@ -32,6 +33,9 @@ const mapDispatchToProps = (dispatch) => {
     showModal: (modalName) => {
       dispatch(openDialog(modalName));
     },
+    resetMetrics: () => {
+      dispatch(resetMetrics());
+    },
     closeModal: () => {
       dispatch(closeDialog());
     }
@@ -49,7 +53,8 @@ function mapStateToProps(state, ownProps) {
     prometheusQueryEnabled: state.graph.prometheusQueryEnabled,
     customer: state.customer,
     visibleModal: state.modal.visibleModal,
-    enableNodeComparisonModal: test.enableNodeComparisonModal || released.enableNodeComparisonModal
+    enableNodeComparisonModal: test.enableNodeComparisonModal || released.enableNodeComparisonModal,
+    enableTopKMetrics: test.enableTopKMetrics || released.enableTopKMetrics
   };
 }
 

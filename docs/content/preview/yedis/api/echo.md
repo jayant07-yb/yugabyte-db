@@ -9,12 +9,13 @@ menu:
 aliases:
   - /preview/api/redis/echo
   - /preview/api/yedis/del
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 ## Synopsis
-<b>`ECHO message`</b><br>
+
+**`ECHO message`**
+
 This command outputs the given `message`.
 
 ## Return Value

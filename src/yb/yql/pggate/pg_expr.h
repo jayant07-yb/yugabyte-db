@@ -12,8 +12,7 @@
 // under the License.
 //--------------------------------------------------------------------------------------------------
 
-#ifndef YB_YQL_PGGATE_PG_EXPR_H_
-#define YB_YQL_PGGATE_PG_EXPR_H_
+#pragma once
 
 #include "yb/common/common_fwd.h"
 #include "yb/common/ql_datatype.h"
@@ -25,6 +24,9 @@
 
 namespace yb {
 namespace pggate {
+
+// decode collation encoded string
+void DecodeCollationEncodedString(const char** text, int64_t* text_len);
 
 class PgDml;
 
@@ -214,5 +216,3 @@ class PgOperator : public PgExpr {
 
 }  // namespace pggate
 }  // namespace yb
-
-#endif // YB_YQL_PGGATE_PG_EXPR_H_

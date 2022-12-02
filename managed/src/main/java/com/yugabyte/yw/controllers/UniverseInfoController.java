@@ -17,7 +17,6 @@ import com.google.inject.Inject;
 import com.yugabyte.yw.cloud.UniverseResourceDetails;
 import com.yugabyte.yw.cloud.UniverseResourceDetails.Context;
 import com.yugabyte.yw.common.PlatformServiceException;
-import com.yugabyte.yw.common.Util;
 import com.yugabyte.yw.common.config.RuntimeConfigFactory;
 import com.yugabyte.yw.common.utils.FileUtils;
 import com.yugabyte.yw.controllers.handlers.UniverseInfoHandler;
@@ -39,7 +38,6 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Date;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -161,11 +159,7 @@ public class UniverseInfoController extends AuthenticatedController {
     log.info("Slow queries for customer {}, universe {}", customerUUID, universeUUID);
     Customer customer = Customer.getOrBadRequest(customerUUID);
     Universe universe = Universe.getValidUniverseOrBadRequest(universeUUID, customer);
-    Optional<String> optUsername = request().getHeaders().get(YSQL_USERNAME_HEADER);
-    Optional<String> optPassword = request().getHeaders().get(YSQL_PASSWORD_HEADER);
-    JsonNode resultNode =
-        universeInfoHandler.getSlowQueries(
-            universe, optUsername.orElse(null), optPassword.map(Util::decodeBase64).orElse(null));
+    JsonNode resultNode = universeInfoHandler.getSlowQueries(universe);
     return Results.ok(resultNode);
   }
 
@@ -212,13 +206,13 @@ public class UniverseInfoController extends AuthenticatedController {
       notes = "Trigger a universe health check and return the trigger time.",
       response = TriggerHealthCheckResult.class)
   public Result triggerHealthCheck(UUID customerUUID, UUID universeUUID) {
-    if (!runtimeConfigFactory.globalRuntimeConf().getBoolean("yb.cloud.enabled")) {
+    Customer customer = Customer.getOrBadRequest(customerUUID);
+    Universe universe = Universe.getValidUniverseOrBadRequest(universeUUID, customer);
+
+    if (!runtimeConfigFactory.forUniverse(universe).getBoolean("yb.health.trigger_api.enabled")) {
       throw new PlatformServiceException(
           METHOD_NOT_ALLOWED, "Manual health check trigger is disabled.");
     }
-
-    Customer customer = Customer.getOrBadRequest(customerUUID);
-    Universe universe = Universe.getValidUniverseOrBadRequest(universeUUID, customer);
 
     OffsetDateTime dt = OffsetDateTime.now(ZoneOffset.UTC);
     universeInfoHandler.triggerHealthCheck(customer, universe);
@@ -261,9 +255,7 @@ public class UniverseInfoController extends AuthenticatedController {
           Path targetFile = Paths.get(storagePath + "/" + tarFileName);
           File file =
               universeInfoHandler.downloadNodeLogs(customer, universe, node, targetFile).toFile();
-          InputStream is = FileUtils.getInputStreamOrFail(file);
-          file.delete(); // TODO: should this be done in finally?
-          // return the file to client
+          InputStream is = FileUtils.getInputStreamOrFail(file, true /* deleteOnClose */);
           response().setHeader("Content-Disposition", "attachment; filename=" + file.getName());
           return ok(is).as("application/x-compressed");
         },

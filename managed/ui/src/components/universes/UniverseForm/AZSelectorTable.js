@@ -36,6 +36,7 @@ const nodeStates = {
   ],
   inactiveStates: [
     'Unreachable',
+    'MetricsUnavailable',
     'ToBeRemoved',
     'Removing',
     'Removed',
@@ -252,6 +253,8 @@ export default class AZSelectorTable extends Component {
             cluster.userIntent.numNodes = totalNodesInConfig;
           }
         });
+        if (currentProvider.code === 'onprem')
+          newTaskParams.currentClusterType = clusterType.toUpperCase();
       }
       if (isEmptyObject(currentUniverse.data)) {
         newTaskParams.currentClusterType = clusterType.toUpperCase();

@@ -3,8 +3,6 @@ package com.yugabyte.yw.models;
 
 import static com.yugabyte.yw.models.helpers.CommonUtils.DEFAULT_YB_HOME_DIR;
 import static com.yugabyte.yw.models.helpers.CommonUtils.maskConfigNew;
-import static com.yugabyte.yw.models.helpers.CommonUtils.encryptProviderConfig;
-import static com.yugabyte.yw.models.helpers.CommonUtils.decryptProviderConfig;
 import static io.swagger.annotations.ApiModelProperty.AccessMode.READ_ONLY;
 import static io.swagger.annotations.ApiModelProperty.AccessMode.READ_WRITE;
 import static play.mvc.Http.Status.BAD_REQUEST;
@@ -22,11 +20,13 @@ import io.ebean.ExpressionList;
 import io.ebean.Finder;
 import io.ebean.Model;
 import io.ebean.annotation.DbJson;
+import io.ebean.annotation.Encrypted;
 import io.swagger.annotations.ApiModelProperty;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import javax.persistence.CascadeType;
@@ -37,6 +37,7 @@ import javax.persistence.OneToMany;
 import javax.persistence.Table;
 import javax.persistence.Transient;
 import javax.persistence.UniqueConstraint;
+import javax.persistence.Version;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import play.data.validation.Constraints;
@@ -79,7 +80,7 @@ public class Provider extends Model {
   public static final Set<Common.CloudType> InstanceTagsEnabledProviders =
       ImmutableSet.of(Common.CloudType.aws, Common.CloudType.azu, Common.CloudType.gcp);
   public static final Set<Common.CloudType> InstanceTagsModificationEnabledProviders =
-      ImmutableSet.of(Common.CloudType.aws);
+      ImmutableSet.of(Common.CloudType.aws, Common.CloudType.gcp);
 
   @JsonIgnore
   public void setCustomerUuid(UUID id) {
@@ -88,6 +89,7 @@ public class Provider extends Model {
 
   @Column(nullable = false, columnDefinition = "TEXT")
   @DbJson
+  @Encrypted
   private Map<String, String> config;
 
   @OneToMany(cascade = CascadeType.ALL)
@@ -134,24 +136,13 @@ public class Provider extends Model {
   // Port to open for connections on the instance.
   @Transient
   @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
-  public Integer sshPort = 54422;
+  public Integer sshPort = 22;
 
-  @Transient
-  @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
-  public String hostVpcId = null;
+  @ApiModelProperty public String hostVpcId = null;
 
-  @Transient
-  @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
-  public String hostVpcRegion = null;
+  @ApiModelProperty public String hostVpcRegion = null;
 
-  @Transient
-  @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
-  public List<String> customHostCidrs = new ArrayList<>();
-  // TODO(bogdan): only used/needed for GCP.
-
-  @Transient
-  @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
-  public String destVpcId = null;
+  @ApiModelProperty public String destVpcId = null;
 
   @Transient
   @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
@@ -167,6 +158,13 @@ public class Provider extends Model {
   @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
   public List<String> ntpServers = new ArrayList<>();
 
+  // Indicates whether the provider was created before or after PLAT-3009
+  // True if it was created after, else it was created before.
+  // Dictates whether or not to show the set up NTP option in the provider UI
+  @Transient
+  @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
+  public boolean showSetUpChrony = true;
+
   // Hosted Zone for the deployment
   @Transient
   @ApiModelProperty(TRANSIENT_PROPERTY_IN_MUTATE_API_REQUEST)
@@ -174,18 +172,22 @@ public class Provider extends Model {
 
   // End Transient Properties
 
-  // Set and encrypt config
+  @Column(nullable = false)
+  @Version
+  @ApiModelProperty(value = "Provider version", accessMode = READ_ONLY)
+  private long version;
+
+  public long getVersion() {
+    return version;
+  }
+
+  public void setVersion(long version) {
+    this.version = version;
+  }
+
   @JsonProperty("config")
   public void setConfig(Map<String, String> configMap) {
-    Map<String, String> newConfigMap = this.getUnmaskedConfig();
-    newConfigMap.putAll(configMap);
-    if (this.customerUUID != null) {
-      this.config = encryptProviderConfig(newConfigMap, this.customerUUID, this.code);
-    } else {
-      // When a Provider object is not being persisted, it may not have a customer ID. In this
-      // case, we can't encrypt.
-      this.config = newConfigMap;
-    }
+    this.config = configMap;
   }
 
   @JsonProperty("config")
@@ -196,20 +198,8 @@ public class Provider extends Model {
   // Get the decrypted config
   @JsonIgnore
   public Map<String, String> getUnmaskedConfig() {
-    if (this.config == null) {
-      return new HashMap<>();
-    } else if (!this.config.containsKey("encrypted")) {
-      // When a Provider object is not being persisted, it may not be encrypted.
-      return new HashMap<>(this.config);
-    } else {
-      return decryptProviderConfig(this.config, this.customerUUID, this.code);
-    }
-  }
-
-  // Get the raw config
-  @JsonIgnore
-  public Map<String, String> getConfig() {
-    return this.config;
+    if (config == null) return new HashMap<>();
+    return config;
   }
 
   @JsonIgnore
@@ -353,6 +343,18 @@ public class Provider extends Model {
     return find.byId(providerUuid);
   }
 
+  public static Optional<Provider> maybeGet(UUID providerUUID) {
+    // Find the Provider.
+    Provider provider = find.byId(providerUUID);
+    if (provider == null) {
+      LOG.trace("Cannot find provider {}", providerUUID);
+      return Optional.empty();
+    }
+
+    // Return the provider object.
+    return Optional.of(provider);
+  }
+
   public static Provider getOrBadRequest(UUID providerUuid) {
     Provider provider = find.byId(providerUuid);
     if (provider == null)
@@ -388,7 +390,6 @@ public class Provider extends Model {
     currentProviderConfig.put("HOSTED_ZONE_ID", hostedZoneId);
     currentProviderConfig.put("HOSTED_ZONE_NAME", hostedZoneName);
     this.setConfig(currentProviderConfig);
-    this.save();
   }
 
   // Used for GCP providers to pass down region information. Currently maps regions to

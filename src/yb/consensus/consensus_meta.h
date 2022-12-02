@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_CONSENSUS_CONSENSUS_META_H_
-#define YB_CONSENSUS_CONSENSUS_META_H_
+#pragma once
 
 #include <stdint.h>
 
@@ -44,6 +43,7 @@
 
 #include "yb/gutil/macros.h"
 
+#include "yb/util/opid.h"
 #include "yb/util/status_fwd.h"
 
 namespace yb {
@@ -126,7 +126,10 @@ class ConsensusMetadata {
 
   // Set & clear the pending configuration.
   void clear_pending_config();
-  void set_pending_config(const RaftConfigPB& config);
+  void set_pending_config(const RaftConfigPB& config, const OpId& config_op_id);
+  Status set_pending_config_op_id(const OpId& config_op_id);
+
+  OpId pending_config_op_id() { return pending_config_op_id_; }
 
   // If a pending configuration is set, return it.
   // Otherwise, return the committed configuration.
@@ -206,6 +209,7 @@ class ConsensusMetadata {
                             // configuration change pending.
   // RaftConfig used by the peers when there is a pending config change operation.
   RaftConfigPB pending_config_;
+  OpId pending_config_op_id_;
 
   // Cached role of the peer_uuid_ within the active configuration.
   PeerRole active_role_;
@@ -229,5 +233,3 @@ void CopyRegistration(ServerRegistrationPB source, RaftPeerPB* dest);
 
 } // namespace consensus
 } // namespace yb
-
-#endif // YB_CONSENSUS_CONSENSUS_META_H_

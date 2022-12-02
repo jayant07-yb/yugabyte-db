@@ -13,8 +13,9 @@
 
 package org.yb.cdc.ysql;
 
-import org.apache.log4j.Logger;
 import org.junit.runner.RunWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yb.cdc.CdcService;
 import org.yb.cdc.CdcService.RowMessage.Op;
 import org.yb.cdc.common.CDCBaseClass;
@@ -31,7 +32,7 @@ import org.yb.util.YBTestRunnerNonTsanOnly;
 
 @RunWith(value = YBTestRunnerNonTsanOnly.class)
 public class TestSnapshot extends CDCBaseClass {
-  private final static Logger LOG = Logger.getLogger(TestSnapshot.class);
+  private final static Logger LOG = LoggerFactory.getLogger(TestSnapshot.class);
 
   protected final long DEFAULT_BATCH_SIZE = 250;
 
@@ -237,9 +238,7 @@ public class TestSnapshot extends CDCBaseClass {
       int recordsAsserted = 0;
       ExpectedRecord3Proto[] postSnapshotRecords = {
         new ExpectedRecord3Proto(10000, 11, 12, Op.INSERT),
-        new ExpectedRecord3Proto(-1, -1, -1, Op.BEGIN),
         new ExpectedRecord3Proto(10000, 11, 22, Op.UPDATE),
-        new ExpectedRecord3Proto(-1, -1, -1, Op.COMMIT),
         new ExpectedRecord3Proto(-1, -1, -1, Op.BEGIN),
         new ExpectedRecord3Proto(10000, 0, 0, Op.DELETE),
         new ExpectedRecord3Proto(-1, -1, -1, Op.COMMIT) };

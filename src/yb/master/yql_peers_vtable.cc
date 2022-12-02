@@ -34,6 +34,7 @@ using std::string;
 using std::shared_ptr;
 using std::unique_ptr;
 using std::map;
+using std::vector;
 
 namespace {
 
@@ -79,7 +80,7 @@ Result<std::shared_ptr<QLRowBlock>> PeersVTable::RetrieveData(
   struct Entry {
     size_t index;
     TSInformationPB ts_info;
-    util::PublicPrivateIPFutures ts_ips;
+    util::PublicPrivateIPFutures ts_ips{};
   };
 
   std::vector<Entry> entries;

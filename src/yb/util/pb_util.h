@@ -33,8 +33,7 @@
 // Utilities for dealing with protocol buffers.
 // These are mostly just functions similar to what are found in the protobuf
 // library itself, but using yb::faststring instances instead of STL strings.
-#ifndef YB_UTIL_PB_UTIL_H
-#define YB_UTIL_PB_UTIL_H
+#pragma once
 
 #include <string>
 
@@ -302,7 +301,7 @@ class ReadablePBContainerFile {
   // If 'eofOK' is EOF_OK, an EOF is returned as-is. Otherwise, it is
   // considered to be an invalid short read and returned as an error.
   Status ValidateAndRead(size_t length, EofOK eofOK,
-                                 Slice* result, std::unique_ptr<uint8_t[]>* scratch);
+                         Slice* result, std::unique_ptr<uint8_t[]>* scratch);
 
   size_t offset_;
 
@@ -329,6 +328,9 @@ Status ReadPBContainerFromPath(Env* env, const std::string& path, const std::str
 // Serialize a "containerized" protobuf to the given path.
 //
 // If create == NO_OVERWRITE and 'path' already exists, the function will fail.
+// If create == OVERWRITE and 'path' already exists, then it is atomically replaced. If there is a
+// system crash during the operation, it is guaranteed that an intact copy of either the old or new
+// version of the file will continue to exist.
 // If sync == SYNC, the newly created file will be fsynced before returning.
 Status WritePBContainerToPath(Env* env, const std::string& path,
                               const google::protobuf::Message& msg,
@@ -348,5 +350,3 @@ bool ArePBsEqual(const google::protobuf::Message& prev_pb,
 using RepeatedBytes = google::protobuf::RepeatedPtrField<std::string>;
 
 } // namespace yb
-
-#endif // YB_UTIL_PB_UTIL_H

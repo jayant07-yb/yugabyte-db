@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_UTIL_ENUMS_H_
-#define YB_UTIL_ENUMS_H_
+#pragma once
 
 #include <bitset>
 #include <string>
@@ -395,6 +394,17 @@ class EnumBitSet {
   }
 };
 
+// Convert from the underlying type to enum value. This is slow as it takes linear time.
+template <typename EnumType>
+Result<EnumType> UnderlyingToEnumSlow(const typename std::underlying_type<EnumType>::type int_val) {
+  for (auto value : List(static_cast<EnumType*>(nullptr))) {
+    if (static_cast<typename std::underlying_type<EnumType>::type>(value) == int_val) {
+      return value;
+    }
+  }
+  return STATUS_FORMAT(InvalidArgument, "$0 invalid value: $1", GetTypeName<EnumType>(), int_val);
+}
+
 // Parses string representation to enum value
 template <typename EnumType>
 Result<EnumType> ParseEnumInsensitive(const char* str) {
@@ -413,5 +423,3 @@ Result<EnumType> ParseEnumInsensitive(const std::string& str) {
 
 
 }  // namespace yb
-
-#endif  // YB_UTIL_ENUMS_H_

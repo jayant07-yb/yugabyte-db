@@ -33,6 +33,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <compare>
 #include <condition_variable>
 #include <cstdarg>
 #include <cstddef>
@@ -49,6 +50,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <queue>
 #include <random>
 #include <set>
@@ -56,6 +58,7 @@
 #include <sstream>
 #include <stack>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
@@ -64,6 +67,7 @@
 #include <vector>
 
 #include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/address_v4.hpp>
@@ -82,8 +86,13 @@
 #include <boost/functional/hash.hpp>
 #include <boost/functional/hash/hash.hpp>
 #include <boost/intrusive/list.hpp>
+#include <boost/iterator/transform_iterator.hpp>
 #include <boost/mpl/and.hpp>
 #include <boost/mpl/if.hpp>
+#include <boost/multi_index/hashed_index.hpp>
+#include <boost/multi_index/member.hpp>
+#include <boost/multi_index/ordered_index.hpp>
+#include <boost/multi_index_container.hpp>
 #include <boost/optional.hpp>
 #include <boost/optional/optional.hpp>
 #include <boost/optional/optional_fwd.hpp>
@@ -107,8 +116,10 @@
 #include <boost/type_traits.hpp>
 #include <boost/type_traits/is_const.hpp>
 #include <boost/type_traits/make_signed.hpp>
+#include <boost/unordered_map.hpp>
 #include <boost/utility.hpp>
 #include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
 #include <boost/version.hpp>
 #undef EV_ERROR // On mac is it defined as some number, but ev++.h uses it in enum
 #include <ev++.h>
@@ -121,6 +132,7 @@
 #include <google/protobuf/generated_message_table_driven.h>
 #include <google/protobuf/generated_message_util.h>
 #include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/map.h>
 #include <google/protobuf/map_entry.h>
 #include <google/protobuf/map_field_inl.h>
 #include <google/protobuf/message.h>
@@ -181,6 +193,8 @@
 #include "yb/util/countdown_latch.h"
 #include "yb/util/cross_thread_mutex.h"
 #include "yb/util/crypt.h"
+#include "yb/util/curl_util.h"
+#include "yb/util/debug/lock_debug.h"
 #include "yb/util/debug/long_operation_tracker.h"
 #include "yb/util/debug/trace_event.h"
 #include "yb/util/debug/trace_event_impl.h"
@@ -190,8 +204,13 @@
 #include "yb/util/ev_util.h"
 #include "yb/util/faststring.h"
 #include "yb/util/file_system.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
+#include "yb/util/flags/auto_flags.h"
+#include "yb/util/flags/flag_tags.h"
+#include "yb/util/flags/flags_callback.h"
 #include "yb/util/format.h"
+#include "yb/util/io.h"
+#include "yb/util/jsonreader.h"
 #include "yb/util/jsonwriter.h"
 #include "yb/util/lockfree.h"
 #include "yb/util/locks.h"
@@ -201,6 +220,7 @@
 #include "yb/util/mem_tracker.h"
 #include "yb/util/memory/arena.h"
 #include "yb/util/memory/arena_fwd.h"
+#include "yb/util/memory/arena_list.h"
 #include "yb/util/memory/mc_types.h"
 #include "yb/util/memory/memory.h"
 #include "yb/util/memory/memory_usage.h"
@@ -220,6 +240,7 @@
 #include "yb/util/operation_counter.h"
 #include "yb/util/opid.fwd.h"
 #include "yb/util/opid.h"
+#include "yb/util/opid.pb.h"
 #include "yb/util/path_util.h"
 #include "yb/util/physical_time.h"
 #include "yb/util/port_picker.h"
@@ -239,6 +260,7 @@
 #include "yb/util/status_format.h"
 #include "yb/util/status_fwd.h"
 #include "yb/util/status_log.h"
+#include "yb/util/std_util.h"
 #include "yb/util/string_util.h"
 #include "yb/util/striped64.h"
 #include "yb/util/strongly_typed_bool.h"
@@ -252,6 +274,7 @@
 #include "yb/util/timestamp.h"
 #include "yb/util/tostring.h"
 #include "yb/util/trace.h"
+#include "yb/util/tsan_util.h"
 #include "yb/util/type_traits.h"
 #include "yb/util/ulimit.h"
 #include "yb/util/uuid.h"

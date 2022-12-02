@@ -45,11 +45,12 @@
 #include "yb/util/locks.h"
 #include "yb/util/status.h"
 #include "yb/util/status_log.h"
+#include "yb/util/flags.h"
 
-DEFINE_bool(expose_metric_histogram_percentiles, true,
+DEFINE_UNKNOWN_bool(expose_metric_histogram_percentiles, true,
             "Should we expose the percentiles information for metrics histograms.");
 
-DEFINE_int32(max_tables_metrics_breakdowns, INT32_MAX,
+DEFINE_UNKNOWN_int32(max_tables_metrics_breakdowns, INT32_MAX,
              "The maxmimum number of tables to retrieve metrics for");
 
 // Process/server-wide metrics should go into the 'server' entity.
@@ -178,7 +179,7 @@ bool MetricRegistry::TabletHasBeenShutdown(const scoped_refptr<MetricEntity> ent
 }
 
 Status MetricRegistry::WriteAsJson(JsonWriter* writer,
-                                   const vector<string>& requested_metrics,
+                                   const MetricEntityOptions& entity_options,
                                    const MetricJsonOptions& opts) const {
   EntityMap entities;
   {
@@ -192,7 +193,7 @@ Status MetricRegistry::WriteAsJson(JsonWriter* writer,
       continue;
     }
 
-    WARN_NOT_OK(e.second->WriteAsJson(writer, requested_metrics, opts),
+    WARN_NOT_OK(e.second->WriteAsJson(writer, entity_options, opts),
                 Substitute("Failed to write entity $0 as JSON", e.second->id()));
   }
   writer->EndArray();
@@ -208,13 +209,8 @@ Status MetricRegistry::WriteAsJson(JsonWriter* writer,
 }
 
 Status MetricRegistry::WriteForPrometheus(PrometheusWriter* writer,
-                                                  const MetricPrometheusOptions& opts) const {
-  return WriteForPrometheus(writer, {""}, opts);  // Include all metrics.
-}
-
-Status MetricRegistry::WriteForPrometheus(PrometheusWriter* writer,
-                                                  const vector<string>& requested_metrics,
-                                                  const MetricPrometheusOptions& opts) const {
+                                          const MetricEntityOptions& entity_options,
+                                          const MetricPrometheusOptions& opts) const {
   EntityMap entities;
   {
     std::lock_guard<simple_spinlock> l(lock_);
@@ -226,11 +222,11 @@ Status MetricRegistry::WriteForPrometheus(PrometheusWriter* writer,
       continue;
     }
 
-    WARN_NOT_OK(e.second->WriteForPrometheus(writer, requested_metrics, opts),
+    WARN_NOT_OK(e.second->WriteForPrometheus(writer, entity_options, opts),
                 Substitute("Failed to write entity $0 as Prometheus", e.second->id()));
   }
   RETURN_NOT_OK(writer->FlushAggregatedValues(opts.max_tables_metrics_breakdowns,
-                opts.priority_regex));
+                entity_options.priority_regex));
 
   // Rather than having a thread poll metrics periodically to retire old ones,
   // we'll just retire them here. The only downside is that, if no one is polling
@@ -240,6 +236,17 @@ Status MetricRegistry::WriteForPrometheus(PrometheusWriter* writer,
   entities.clear(); // necessary to deref metrics we just dumped before doing retirement scan.
   const_cast<MetricRegistry*>(this)->RetireOldMetrics();
   return Status::OK();
+}
+
+void MetricRegistry::get_all_prototypes(std::set<std::string>& prototypes) const {
+  EntityMap entities;
+  {
+    std::lock_guard<simple_spinlock> l(lock_);
+    entities = entities_;
+  }
+  for (const EntityMap::value_type& e : entities) {
+    prototypes.insert(e.second->prototype().name());
+  }
 }
 
 void MetricRegistry::RetireOldMetrics() {
@@ -579,9 +586,12 @@ Status Histogram::WriteForPrometheus(
   HdrHistogram snapshot(*histogram_);
   // HdrHistogram reports percentiles based on all the data points from the
   // begining of time. We are interested in the percentiles based on just
-  // the "newly-arrived" data. So, we will reset the histogram's percentiles
-  // between each invocation.
-  histogram_->ResetPercentiles();
+  // the "newly-arrived" data. So, in the defualt setting, we will reset
+  // the histogram's percentiles between each invocation. User also has the
+  // option to set the url parameter reset_histograms=false
+  if (opts.reset_histograms) {
+    histogram_->ResetPercentiles();
+  }
 
   // Representing the sum and count require suffixed names.
   std::string hist_name = prototype_->name();
@@ -624,9 +634,12 @@ Status Histogram::GetAndResetHistogramSnapshotPB(HistogramSnapshotPB* snapshot_p
   HdrHistogram snapshot(*histogram_);
   // HdrHistogram reports percentiles based on all the data points from the
   // begining of time. We are interested in the percentiles based on just
-  // the "newly-arrived" data. So, we will reset the histogram's percentiles
-  // between each invocation.
-  histogram_->ResetPercentiles();
+  // the "newly-arrived" data. So, in the defualt setting, we will reset
+  // the histogram's percentiles between each invocation. User also has the
+  // option to set the url parameter reset_histograms=false
+  if (opts.reset_histograms) {
+    histogram_->ResetPercentiles();
+  }
 
   snapshot_pb->set_name(prototype_->name());
   if (opts.include_schema_info) {

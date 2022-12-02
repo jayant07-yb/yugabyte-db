@@ -9,8 +9,8 @@ menu:
     identifier: advanced-features
     parent: explore-ysql-language-features
     weight: 320
+type: indexpage
 ---
-
 <div class="row">
 
   <div class="col-12 col-md-6 col-lg-12 col-xl-6">
@@ -72,4 +72,15 @@ menu:
     </a>
   </div>
 
+  <div class="col-12 col-md-6 col-lg-12 col-xl-6">
+    <a class="section-link icon-offset" href="foreign-data-wrappers/">
+      <div class="head">
+        <img class="icon" src="/images/section_icons/develop/learn.png" aria-hidden="true"/>
+        <div class="title">Foreign data wrappers</div>
+      </div>
+      <div class="body">
+          Use foreign data wrappers to access and interact with an external data source.
+      </div>
+    </a>
+  </div>
 </div>

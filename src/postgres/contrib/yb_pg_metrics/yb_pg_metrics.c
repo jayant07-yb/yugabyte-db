@@ -97,6 +97,8 @@ static int num_backends = 0;
 static rpczEntry *rpcz = NULL;
 static MemoryContext ybrpczMemoryContext = NULL;
 PgBackendStatus **backendStatusArrayPointer = NULL;
+extern int too_many_conn;
+extern int MaxConnections;
 
 static long last_cache_misses_val = 0;
 
@@ -236,6 +238,7 @@ pullRpczEntries(void)
       before_changecount = beentry->st_changecount;
 
       rpcz[i].proc_id = beentry->st_procpid;
+      rpcz[i].new_conn = beentry->yb_new_conn;
 
       /* avoid filling any more fields if invalid */
       if (beentry->st_procpid <= 0) {
@@ -345,12 +348,14 @@ webserver_worker_main(Datum unused)
    */
 
   YBCInitThreading();
+  /*
+   * We call YBCInit here so that HandleYBStatus can correctly report potential error.
+   */
+  HandleYBStatus(YBCInit(NULL /* argv[0] */, palloc, NULL /* cstring_to_text_with_len_fn */));
 
   backendStatusArrayPointer = getBackendStatusArrayPointer();
 
   BackgroundWorkerUnblockSignals();
-
-  HandleYBStatus(YBCInitGFlags(NULL /* argv[0] */));
 
   webserver = CreateWebserver(ListenAddresses, port);
 
@@ -363,7 +368,7 @@ webserver_worker_main(Datum unused)
   callbacks.getTimestampTzDiffMs = getElapsedMs;
   callbacks.getTimestampTzToStr  = timestamptz_to_str;
 
-  RegisterRpczEntries(&callbacks, &num_backends, &rpcz);
+  RegisterRpczEntries(&callbacks, &num_backends, &rpcz, &too_many_conn, &MaxConnections);
 
   HandleYBStatus(StartWebserver(webserver));
 
@@ -574,7 +579,7 @@ ybpgm_ExecutorEnd(QueryDesc *queryDesc)
 
 	ybpgm_Store(type, time, rows_count);
 
-  if (!queryDesc->estate->yb_es_is_single_row_modify_txn) 
+  if (queryDesc->estate->yb_es_is_single_row_modify_txn) 
   {
     ybpgm_Store(Single_Shard_Transaction, time, rows_count);
     ybpgm_Store(SingleShardTransaction, time, rows_count);

@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_CONSENSUS_REPLICA_STATE_H
-#define YB_CONSENSUS_REPLICA_STATE_H
+#pragma once
 
 #include <atomic>
 #include <deque>
@@ -206,14 +205,17 @@ class ReplicaState {
   // - If the op id matches an inflight op.
   // If an operation with the same index is in our log but the terms
   // are different 'term_mismatch' is set to true, it is false otherwise.
-  bool IsOpCommittedOrPending(const yb::OpId& op_id, bool* term_mismatch);
+  bool IsOpCommittedOrPending(const OpId& op_id, bool* term_mismatch);
 
   // Sets the given configuration as pending commit. Does not persist into the peers
   // metadata. In order to be persisted, SetCommittedConfigUnlocked() must be called.
-  Status SetPendingConfigUnlocked(const RaftConfigPB& new_config);
+  Status SetPendingConfigUnlocked(const RaftConfigPB& new_config, const OpId& config_op_id);
+  Status SetPendingConfigOpIdUnlocked(const OpId& config_op_id);
 
   // Clears the pending config.
   Status ClearPendingConfigUnlocked();
+
+  OpId GetPendingConfigOpIdUnlocked() { return cmeta_->pending_config_op_id(); }
 
   // Return the pending configuration, or crash if one is not set.
   const RaftConfigPB& GetPendingConfigUnlocked() const;
@@ -313,7 +315,7 @@ class ReplicaState {
 
   // Updates the last received operation.
   // This must be called under a lock.
-  void UpdateLastReceivedOpIdUnlocked(const OpIdPB& op_id);
+  void UpdateLastReceivedOpIdUnlocked(const OpId& op_id);
 
   // Returns the last received op id. This must be called under the lock.
   const OpId& GetLastReceivedOpIdUnlocked() const;
@@ -369,7 +371,7 @@ class ReplicaState {
   void UpdateOldLeaderLeaseExpirationOnNonLeaderUnlocked(
       const CoarseTimeLease& lease, const PhysicalComponentLease& ht_lease);
 
-  void SetMajorityReplicatedLeaseExpirationUnlocked(
+  Status SetMajorityReplicatedLeaseExpirationUnlocked(
       const MajorityReplicatedData& majority_replicated_data,
       EnumBitSet<SetMajorityReplicatedLeaseExpirationFlag> flags);
 
@@ -423,6 +425,11 @@ class ReplicaState {
   void NotifyReplicationFinishedUnlocked(
       const ConsensusRoundPtr& round, const Status& status, int64_t leader_term,
       OpIds* applied_op_ids);
+
+  const RetryableRequests& retryable_requests() const {
+    DCHECK(IsLocked());
+    return retryable_requests_;
+  }
 
  private:
   typedef std::deque<ConsensusRoundPtr> PendingOperations;
@@ -566,5 +573,3 @@ class ReplicaState {
 
 }  // namespace consensus
 }  // namespace yb
-
-#endif // YB_CONSENSUS_REPLICA_STATE_H_

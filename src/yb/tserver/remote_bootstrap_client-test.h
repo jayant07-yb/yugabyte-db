@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_TSERVER_REMOTE_BOOTSTRAP_CLIENT_TEST_H_
-#define YB_TSERVER_REMOTE_BOOTSTRAP_CLIENT_TEST_H_
+#pragma once
 
 #include "yb/common/wire_protocol.h"
 
@@ -51,7 +50,6 @@
 #include "yb/util/env_util.h"
 #include "yb/util/net/net_util.h"
 
-using std::shared_ptr;
 
 namespace yb {
 namespace tserver {
@@ -92,11 +90,12 @@ class RemoteBootstrapClientTest : public RemoteBootstrapTest {
         ->ConsensusState(consensus::CONSENSUS_CONFIG_COMMITTED), &leader_));
 
     HostPort host_port = HostPortFromPB(leader_.last_known_private_addr()[0]);
-    ASSERT_OK(client_->Start(leader_.permanent_uuid(), proxy_cache_.get(), host_port, &meta_));
+    ASSERT_OK(client_->Start(leader_.permanent_uuid(), proxy_cache_.get(),
+        host_port, ServerRegistrationPB(), &meta_));
   }
 
  protected:
-  Status CompareFileContents(const string& path1, const string& path2);
+  Status CompareFileContents(const std::string& path1, const std::string& path2);
 
   std::unique_ptr<FsManager> fs_manager_;
   std::unique_ptr<rpc::Messenger> messenger_;
@@ -106,8 +105,8 @@ class RemoteBootstrapClientTest : public RemoteBootstrapTest {
   RaftPeerPB leader_;
 };
 
-Status RemoteBootstrapClientTest::CompareFileContents(const string& path1, const string& path2) {
-  shared_ptr<RandomAccessFile> file1, file2;
+Status RemoteBootstrapClientTest::CompareFileContents(const std::string& path1, const std::string& path2) {
+  std::shared_ptr<RandomAccessFile> file1, file2;
   RETURN_NOT_OK(env_util::OpenFileForRandom(fs_manager_->env(), path1, &file1));
   RETURN_NOT_OK(env_util::OpenFileForRandom(fs_manager_->env(), path2, &file2));
 
@@ -133,5 +132,3 @@ Status RemoteBootstrapClientTest::CompareFileContents(const string& path1, const
 
 } // namespace tserver
 } // namespace yb
-
-#endif // YB_TSERVER_REMOTE_BOOTSTRAP_CLIENT_TEST_H_

@@ -4,34 +4,33 @@ headerTitle: Install Yugabyte Platform
 linkTitle: Install software
 description: Install the Yugabyte Platform software.
 menu:
-  v2.8:
+  v2.8_yugabyte-platform:
     parent: install-yugabyte-platform
     identifier: install-software-1-default
     weight: 77
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li>
     <a href="../default/" class="nav-link active">
-      <i class="fas fa-cloud"></i>Default</a>
+      <i class="fa-solid fa-cloud"></i>Default</a>
   </li>
 
   <li>
     <a href="../kubernetes/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>Kubernetes</a>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>Kubernetes</a>
   </li>
 
   <li>
     <a href="../airgapped/" class="nav-link">
-      <i class="fas fa-unlink"></i>Airgapped</a>
+      <i class="fa-solid fa-link-slash"></i>Airgapped</a>
   </li>
 
   <li>
     <a href="../openshift/" class="nav-link">
-      <i class="fas fa-cubes"></i>OpenShift</a>
+      <i class="fa-solid fa-cubes"></i>OpenShift</a>
   </li>
 
 </ul>
@@ -104,9 +103,9 @@ Click **Continue** to configure Yugabyte Platform.
 
 If the preflight check fails, review the [Troubleshoot Yugabyte Platform](../../../troubleshoot/) to resolve the issue.
 
-## Set the TLS Version for Nginx Frontend 
+## Set the TLS Version for Nginx Frontend
 
-Specify TLS versions via **Application config**, as shown in the following illustration: 
+Specify TLS versions via **Application config**, as shown in the following illustration:
 
 ![Application Config](/images/replicated/application-config.png)
 

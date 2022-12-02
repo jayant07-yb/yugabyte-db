@@ -30,8 +30,7 @@
 // under the License.
 //
 // Helpers for dealing with the protobufs defined in wire_protocol.proto.
-#ifndef YB_COMMON_WIRE_PROTOCOL_H
-#define YB_COMMON_WIRE_PROTOCOL_H
+#pragma once
 
 #include <vector>
 
@@ -62,6 +61,7 @@ class Slice;
 
 // Convert the given C++ Status object into the equivalent Protobuf.
 void StatusToPB(const Status& status, AppStatusPB* pb);
+void StatusToPB(const Status& status, LWAppStatusPB* pb);
 
 // Convert the given protobuf into the equivalent C++ Status object.
 Status StatusFromPB(const AppStatusPB& pb);
@@ -83,7 +83,7 @@ Status EndpointFromHostPortPB(const HostPortPB& host_portpb, Endpoint* endpoint)
 // Adds addresses in 'addrs' to 'pbs'. If an address is a wildcard (e.g., "0.0.0.0"),
 // then the local machine's FQDN or its network interface address is used in its place.
 Status AddHostPortPBs(const std::vector<Endpoint>& addrs,
-                              google::protobuf::RepeatedPtrField<HostPortPB>* pbs);
+                      google::protobuf::RepeatedPtrField<HostPortPB>* pbs);
 
 // Simply convert the list of host ports into a repeated list of corresponding PB's.
 void HostPortsToPBs(const std::vector<HostPort>& addrs,
@@ -196,11 +196,9 @@ struct SplitChildTabletIdsTag : yb::StringVectorBackedErrorTag {
   // It is part of the wire protocol and should not be changed once released.
   static constexpr uint8_t kCategory = 14;
 
-  static std::string ToMessage(Value value);
+  static std::string ToMessage(const Value& value);
 };
 
 typedef yb::StatusErrorCodeImpl<SplitChildTabletIdsTag> SplitChildTabletIdsData;
 
 } // namespace yb
-
-#endif  // YB_COMMON_WIRE_PROTOCOL_H

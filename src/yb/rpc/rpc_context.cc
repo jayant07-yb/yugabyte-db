@@ -58,6 +58,7 @@ namespace yb {
 namespace rpc {
 
 using std::shared_ptr;
+using std::string;
 
 namespace {
 
@@ -91,7 +92,7 @@ scoped_refptr<debug::ConvertableToTraceFormat> TracePb(const Message& msg) {
 
 }  // anonymous namespace
 
-Result<size_t> RpcCallPBParams::ParseRequest(Slice param) {
+Result<size_t> RpcCallPBParams::ParseRequest(Slice param, const RefCntBuffer& buffer) {
   google::protobuf::io::CodedInputStream in(param.data(), narrow_cast<int>(param.size()));
   SetupLimit(&in);
   auto& message = request();
@@ -113,7 +114,8 @@ const google::protobuf::Message* RpcCallPBParams::CastMessage(const AnyMessageCo
   return msg.protobuf();
 }
 
-Result<size_t> RpcCallLWParams::ParseRequest(Slice param) {
+Result<size_t> RpcCallLWParams::ParseRequest(Slice param, const RefCntBuffer& buffer) {
+  buffer_ = buffer;
   RETURN_NOT_OK(request().ParseFromSlice(param));
   return 0;
 }
@@ -157,7 +159,7 @@ RpcContext::RpcContext(std::shared_ptr<LocalYBInboundCall> call)
 void RpcContext::RespondSuccess() {
   call_->RecordHandlingCompleted();
   TRACE_EVENT_ASYNC_END1("rpc_call", "RPC", this,
-                         "trace", trace()->DumpToString(true));
+                         "trace", trace() ? trace()->DumpToString(true) : "");
   call_->RespondSuccess(params_->SerializableResponse());
   responded_ = true;
 }
@@ -166,7 +168,7 @@ void RpcContext::RespondFailure(const Status &status) {
   call_->RecordHandlingCompleted();
   TRACE_EVENT_ASYNC_END2("rpc_call", "RPC", this,
                          "status", status.ToString(),
-                         "trace", trace()->DumpToString(true));
+                         "trace", trace() ? trace()->DumpToString(true) : "");
   call_->RespondFailure(ErrorStatusPB::ERROR_APPLICATION, status);
   responded_ = true;
 }
@@ -175,7 +177,7 @@ void RpcContext::RespondRpcFailure(ErrorStatusPB_RpcErrorCodePB err, const Statu
   call_->RecordHandlingCompleted();
   TRACE_EVENT_ASYNC_END2("rpc_call", "RPC", this,
                          "status", status.ToString(),
-                         "trace", trace()->DumpToString(true));
+                         "trace", trace() ? trace()->DumpToString(true) : "");
   call_->RespondFailure(err, status);
   responded_ = true;
 }
@@ -185,21 +187,13 @@ void RpcContext::RespondApplicationError(int error_ext_id, const std::string& me
   call_->RecordHandlingCompleted();
   TRACE_EVENT_ASYNC_END2("rpc_call", "RPC", this,
                          "response", TracePb(app_error_pb),
-                         "trace", trace()->DumpToString(true));
+                         "trace", trace() ? trace()->DumpToString(true) : "");
   call_->RespondApplicationError(error_ext_id, message, app_error_pb);
   responded_ = true;
 }
 
-size_t RpcContext::AddRpcSidecar(const Slice& car) {
-  return call_->AddRpcSidecar(car);
-}
-
-void RpcContext::ResetRpcSidecars() {
-  call_->ResetRpcSidecars();
-}
-
-void RpcContext::ReserveSidecarSpace(size_t space) {
-  call_->ReserveSidecarSpace(space);
+Sidecars& RpcContext::sidecars() {
+  return call_->sidecars();
 }
 
 const Endpoint& RpcContext::remote_address() const {
@@ -224,6 +218,10 @@ MonoTime RpcContext::ReceiveTime() const {
 
 Trace* RpcContext::trace() {
   return call_->trace();
+}
+
+void RpcContext::EnsureTraceCreated() {
+  return call_->EnsureTraceCreated();
 }
 
 void RpcContext::Panic(const char* filepath, int line_number, const string& message) {

@@ -9,16 +9,9 @@ menu:
     identifier: analyzing-a-normal-distribution
     parent: window-functions
     weight: 40
-isTocNested: true
-showAsideToc: true
+type: indexpage
+showRightNav: true
 ---
-**On this page**<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Introduction](./#introduction)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[How to make best use of the code examples](./#how-to-make-best-use-of-the-code-examples)<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Step through the code](./#step-through-the-code)
-<br>
-&#160;&#160;&#160;&#160;&#160;&#160;&#160;[Conclusion](./#conclusion)
 
 ## Introduction
 

@@ -322,14 +322,18 @@ ybginSetupBindsForPrefix(TupleDesc tupdesc, YbginScanOpaque ybso,
 		HandleYBStatus(YBCPgDmlBindColumnCondBetween(ybso->handle,
 													 1 /* attr_num */,
 													 expr_start,
-													 expr_end));
+													 true,
+													 expr_end,
+													 false));
 		pfree(greaterstr);
 	}
 	else
 		HandleYBStatus(YBCPgDmlBindColumnCondBetween(ybso->handle,
 													 1 /* attr_num */,
 													 expr_start,
-													 NULL /* attr_value_end */));
+													 true,
+													 NULL /* attr_value_end */,
+													 true));
 }
 
 static void
@@ -561,9 +565,7 @@ ybginDoFirstExec(IndexScanDesc scan, ScanDirection dir)
 	/* targets */
 	ybginSetupTargets(scan);
 
-	/* syscatalog version */
-	HandleYBStatus(YBCPgSetCatalogCacheVersion(ybso->handle,
-											   yb_catalog_cache_version));
+	YbSetCatalogCacheVersion(ybso->handle, YbGetCatalogCacheVersion());
 
 	/* execute select */
 	ybginExecSelect(scan, dir);

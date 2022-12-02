@@ -3,13 +3,16 @@
 package com.yugabyte.yw.commissioner.tasks.upgrade;
 
 import static com.yugabyte.yw.commissioner.UserTaskDetails.SubTaskGroupType.DownloadingSoftware;
-import static com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType.MASTER;
-import static com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType.TSERVER;
+import static com.yugabyte.yw.commissioner.tasks.UniverseTaskBase.ServerType.MASTER;
+import static com.yugabyte.yw.commissioner.tasks.UniverseTaskBase.ServerType.TSERVER;
 import static com.yugabyte.yw.models.TaskInfo.State.Failure;
 import static com.yugabyte.yw.models.TaskInfo.State.Success;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -18,8 +21,9 @@ import static org.mockito.Mockito.when;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.yugabyte.yw.commissioner.UserTaskDetails;
-import com.yugabyte.yw.commissioner.tasks.UniverseDefinitionTaskBase.ServerType;
+import com.yugabyte.yw.commissioner.tasks.UniverseTaskBase.ServerType;
 import com.yugabyte.yw.commissioner.tasks.params.NodeTaskParams;
+import com.yugabyte.yw.commissioner.tasks.subtasks.RunYsqlUpgrade;
 import com.yugabyte.yw.common.ApiUtils;
 import com.yugabyte.yw.common.PlacementInfoUtil;
 import com.yugabyte.yw.common.ShellResponse;
@@ -29,6 +33,7 @@ import com.yugabyte.yw.forms.UpgradeTaskParams.UpgradeOption;
 import com.yugabyte.yw.models.AvailabilityZone;
 import com.yugabyte.yw.models.TaskInfo;
 import com.yugabyte.yw.models.Universe;
+import com.yugabyte.yw.models.helpers.NodeDetails;
 import com.yugabyte.yw.models.helpers.PlacementInfo;
 import com.yugabyte.yw.models.helpers.TaskType;
 import java.util.ArrayList;
@@ -40,6 +45,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import junitparams.JUnitParamsRunner;
 import junitparams.Parameters;
+import org.hamcrest.Matchers;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -59,6 +65,7 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
   private static final List<TaskType> ROLLING_UPGRADE_TASK_SEQUENCE_MASTER =
       ImmutableList.of(
           TaskType.SetNodeState,
+          TaskType.RunHooks,
           TaskType.AnsibleClusterServerCtl,
           TaskType.AnsibleConfigureServers,
           TaskType.AnsibleClusterServerCtl,
@@ -66,11 +73,13 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
           TaskType.WaitForServerReady,
           TaskType.WaitForEncryptionKeyInMemory,
           TaskType.WaitForFollowerLag,
+          TaskType.RunHooks,
           TaskType.SetNodeState);
 
   private static final List<TaskType> ROLLING_UPGRADE_TASK_SEQUENCE_TSERVER =
       ImmutableList.of(
           TaskType.SetNodeState,
+          TaskType.RunHooks,
           TaskType.ModifyBlackList,
           TaskType.WaitForLeaderBlacklistCompletion,
           TaskType.AnsibleClusterServerCtl,
@@ -81,13 +90,16 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
           TaskType.WaitForEncryptionKeyInMemory,
           TaskType.ModifyBlackList,
           TaskType.WaitForFollowerLag,
+          TaskType.RunHooks,
           TaskType.SetNodeState);
 
-  private static final List<TaskType> TASK_SEQUENCE_INACTIVE_ROLE =
+  private static final List<TaskType> ROLLING_UPGRADE_TASK_SEQUENCE_INACTIVE_ROLE =
       ImmutableList.of(
           TaskType.SetNodeState,
+          TaskType.RunHooks,
           TaskType.AnsibleClusterServerCtl,
           TaskType.AnsibleConfigureServers,
+          TaskType.RunHooks,
           TaskType.SetNodeState);
 
   private static final List<TaskType> NON_ROLLING_UPGRADE_TASK_SEQUENCE_ACTIVE_ROLE =
@@ -99,30 +111,47 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
           TaskType.WaitForServer,
           TaskType.SetNodeState);
 
+  private static final List<TaskType> NON_ROLLING_UPGRADE_TASK_SEQUENCE_INACTIVE_ROLE =
+      ImmutableList.of(
+          TaskType.SetNodeState,
+          TaskType.AnsibleClusterServerCtl,
+          TaskType.AnsibleConfigureServers,
+          TaskType.SetNodeState);
+
   private ArgumentCaptor<String> ybAdminFuncName;
+  private ArgumentCaptor<List<String>> ybAdminArgs;
 
   @Override
   @Before
   public void setUp() {
     super.setUp();
 
+    attachHooks("SoftwareUpgrade");
+
     softwareUpgrade.setUserTaskUUID(UUID.randomUUID());
     ShellResponse successResponse = new ShellResponse();
     successResponse.message = "YSQL successfully upgraded to the latest version";
 
     ybAdminFuncName = ArgumentCaptor.forClass(String.class);
+    ybAdminArgs = ArgumentCaptor.forClass(List.class);
 
     ShellResponse shellResponse = new ShellResponse();
-    shellResponse.message = "COMMAND OUTPUT: \n 2989898";
+    shellResponse.message = "Command output:\n2989898";
     shellResponse.code = 0;
-    when(mockNodeUniverseManager.runCommand(any(), any(), any())).thenReturn(shellResponse);
+    when(mockNodeUniverseManager.runCommand(any(), any(), anyList(), any()))
+        .thenReturn(shellResponse);
 
-    try {
-      when(mockNodeUniverseManager.runYbAdminCommand(
-              any(), any(), ybAdminFuncName.capture(), anyLong()))
-          .thenReturn(successResponse);
-    } catch (Exception ignored) {
-    }
+    when(mockNodeUniverseManager.runYbAdminCommand(
+            ArgumentCaptor.forClass(NodeDetails.class).capture(),
+            eq(defaultUniverse),
+            ybAdminFuncName.capture(),
+            ybAdminArgs.capture(),
+            eq(1800L)))
+        .thenReturn(successResponse);
+
+    factory
+        .forUniverse(defaultUniverse)
+        .setValue(RunYsqlUpgrade.USE_SINGLE_CONNECTION_PARAM, "true");
   }
 
   private TaskInfo submitTask(SoftwareUpgradeParams requestParams) {
@@ -137,7 +166,8 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
       Map<Integer, List<TaskInfo>> subTasksByPosition,
       int startPosition,
       UpgradeType type,
-      boolean isFinalStep) {
+      boolean isFinalStep,
+      boolean systemCatalogUpgrade) {
     int position = startPosition;
     List<TaskType> commonNodeTasks = new ArrayList<>();
 
@@ -146,11 +176,12 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
     }
 
     if (isFinalStep) {
+      if (systemCatalogUpgrade) {
+        commonNodeTasks.add(TaskType.RunYsqlUpgrade);
+      }
       commonNodeTasks.addAll(
           ImmutableList.of(
-              TaskType.RunYsqlUpgrade,
-              TaskType.UpdateSoftwareVersion,
-              TaskType.UniverseUpdateSucceeded));
+              TaskType.UpdateSoftwareVersion, TaskType.RunHooks, TaskType.UniverseUpdateSucceeded));
     }
     for (TaskType commonNodeTask : commonNodeTasks) {
       assertTaskType(subTasksByPosition.get(position), commonNodeTask);
@@ -169,7 +200,9 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
     if (isRollingUpgrade) {
       List<TaskType> taskSequence =
           serverType == MASTER
-              ? (activeRole ? ROLLING_UPGRADE_TASK_SEQUENCE_MASTER : TASK_SEQUENCE_INACTIVE_ROLE)
+              ? (activeRole
+                  ? ROLLING_UPGRADE_TASK_SEQUENCE_MASTER
+                  : ROLLING_UPGRADE_TASK_SEQUENCE_INACTIVE_ROLE)
               : ROLLING_UPGRADE_TASK_SEQUENCE_TSERVER;
       List<Integer> nodeOrder = getRollingUpgradeNodeOrder(serverType, activeRole);
 
@@ -204,7 +237,9 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
       }
     } else {
       List<TaskType> taskSequence =
-          activeRole ? NON_ROLLING_UPGRADE_TASK_SEQUENCE_ACTIVE_ROLE : TASK_SEQUENCE_INACTIVE_ROLE;
+          activeRole
+              ? NON_ROLLING_UPGRADE_TASK_SEQUENCE_ACTIVE_ROLE
+              : NON_ROLLING_UPGRADE_TASK_SEQUENCE_INACTIVE_ROLE;
       for (TaskType type : taskSequence) {
         List<TaskInfo> tasks = subTasksByPosition.get(position);
         TaskType taskType = assertTaskType(tasks, type);
@@ -246,26 +281,28 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
   public void testSoftwareUpgradeWithSameVersion() {
     SoftwareUpgradeParams taskParams = new SoftwareUpgradeParams();
     taskParams.ybSoftwareVersion = "old-version";
+    taskParams.clusters.add(defaultUniverse.getUniverseDetails().getPrimaryCluster());
 
     TaskInfo taskInfo = submitTask(taskParams);
     verify(mockNodeManager, times(0)).nodeCommand(any(), any());
     assertEquals(Failure, taskInfo.getTaskState());
     defaultUniverse.refresh();
-    assertEquals(3, defaultUniverse.version);
-    // In case of an exception, only the ModifyBalckList task should be queued.
-    assertEquals(1, taskInfo.getSubTasks().size());
+    assertEquals(2, defaultUniverse.version);
+    // In case of an exception, only RunHooks task should be queued.
+    assertEquals(3, taskInfo.getSubTasks().size());
   }
 
   @Test
   public void testSoftwareUpgradeWithoutVersion() {
     SoftwareUpgradeParams taskParams = new SoftwareUpgradeParams();
+    taskParams.clusters.add(defaultUniverse.getUniverseDetails().getPrimaryCluster());
     TaskInfo taskInfo = submitTask(taskParams);
     verify(mockNodeManager, times(0)).nodeCommand(any(), any());
     assertEquals(Failure, taskInfo.getTaskState());
     defaultUniverse.refresh();
-    assertEquals(3, defaultUniverse.version);
-    // In case of an exception, only the ModifyBalckList task should be queued.
-    assertEquals(1, taskInfo.getSubTasks().size());
+    assertEquals(2, defaultUniverse.version);
+    // In case of an exception, only RunHooks tasks should be queued.
+    assertEquals(3, taskInfo.getSubTasks().size());
   }
 
   @Test
@@ -274,26 +311,72 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
 
     SoftwareUpgradeParams taskParams = new SoftwareUpgradeParams();
     taskParams.ybSoftwareVersion = "new-version";
+    taskParams.clusters.add(defaultUniverse.getUniverseDetails().getPrimaryCluster());
     TaskInfo taskInfo = submitTask(taskParams, defaultUniverse.version);
-    verify(mockNodeManager, times(33)).nodeCommand(any(), any());
-    verify(mockNodeUniverseManager, times(5)).runCommand(any(), any(), any());
+    verify(mockNodeManager, times(71)).nodeCommand(any(), any());
+    verify(mockNodeUniverseManager, times(5)).runCommand(any(), any(), anyList(), any());
 
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
 
     int position = 0;
+    assertTaskType(subTasksByPosition.get(position++), TaskType.RunHooks);
     assertTaskType(subTasksByPosition.get(position++), TaskType.CheckMemory);
+    // XCluster gflag set up.
+    assertTaskType(subTasksByPosition.get(position++), TaskType.XClusterInfoPersist);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+
     List<TaskInfo> downloadTasks = subTasksByPosition.get(position++);
     assertTaskType(downloadTasks, TaskType.AnsibleConfigureServers);
     assertEquals(5, downloadTasks.size());
     position = assertSequence(subTasksByPosition, MASTER, position, true, true);
     position = assertSequence(subTasksByPosition, MASTER, position, true, false);
     assertTaskType(subTasksByPosition.get(position++), TaskType.ModifyBlackList);
-    position = assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, false);
+    position =
+        assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, false, true);
     position = assertSequence(subTasksByPosition, TSERVER, position, true, true);
-    assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, true);
-    assertEquals(98, position);
+    assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, true, true);
+    assertEquals(122, position);
+    assertEquals(100.0, taskInfo.getPercentCompleted(), 0);
+    assertEquals(Success, taskInfo.getTaskState());
+  }
+
+  @Test
+  public void testSoftwareUpgradeNoSystemCatalogUpgrade() {
+    updateDefaultUniverseTo5Nodes(true);
+
+    SoftwareUpgradeParams taskParams = new SoftwareUpgradeParams();
+    taskParams.ybSoftwareVersion = "new-version";
+    taskParams.clusters.add(defaultUniverse.getUniverseDetails().getPrimaryCluster());
+    taskParams.upgradeSystemCatalog = false;
+    TaskInfo taskInfo = submitTask(taskParams, defaultUniverse.version);
+    verify(mockNodeManager, times(71)).nodeCommand(any(), any());
+    verify(mockNodeUniverseManager, times(5)).runCommand(any(), any(), anyList(), any());
+
+    List<TaskInfo> subTasks = taskInfo.getSubTasks();
+    Map<Integer, List<TaskInfo>> subTasksByPosition =
+        subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
+
+    int position = 0;
+    assertTaskType(subTasksByPosition.get(position++), TaskType.RunHooks);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.CheckMemory);
+    // XCluster gflag set up.
+    assertTaskType(subTasksByPosition.get(position++), TaskType.XClusterInfoPersist);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+
+    List<TaskInfo> downloadTasks = subTasksByPosition.get(position++);
+    assertTaskType(downloadTasks, TaskType.AnsibleConfigureServers);
+    assertEquals(5, downloadTasks.size());
+    position = assertSequence(subTasksByPosition, MASTER, position, true, true);
+    position = assertSequence(subTasksByPosition, MASTER, position, true, false);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.ModifyBlackList);
+    position =
+        assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, false, false);
+    position = assertSequence(subTasksByPosition, TSERVER, position, true, true);
+    assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, true, false);
     assertEquals(100.0, taskInfo.getPercentCompleted(), 0);
     assertEquals(Success, taskInfo.getTaskState());
   }
@@ -312,6 +395,7 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
     userIntent.accessKeyCode = "demo-access";
     userIntent.regionList = ImmutableList.of(region.uuid);
     userIntent.enableYSQL = enableYSQL;
+    userIntent.provider = defaultProvider.uuid.toString();
 
     PlacementInfo pi = new PlacementInfo();
     AvailabilityZone az4 = AvailabilityZone.createOrThrow(region, "az-4", "AZ 4", "subnet-1");
@@ -330,17 +414,21 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
 
     SoftwareUpgradeParams taskParams = new SoftwareUpgradeParams();
     taskParams.ybSoftwareVersion = "new-version";
+    taskParams.clusters.add(defaultUniverse.getUniverseDetails().getPrimaryCluster());
     TaskInfo taskInfo = submitTask(taskParams, defaultUniverse.version);
-    verify(mockNodeManager, times(45)).nodeCommand(any(), any());
-    verify(mockNodeUniverseManager, times(8)).runCommand(any(), any(), any());
+    verify(mockNodeManager, times(95)).nodeCommand(any(), any());
+    verify(mockNodeUniverseManager, times(8)).runCommand(any(), any(), anyList(), any());
 
     if (enableYSQL) {
       verify(mockNodeUniverseManager, times(1))
-          .runYbAdminCommand(any(), any(), ybAdminFuncName.capture(), anyLong());
+          .runYbAdminCommand(
+              any(), any(), ybAdminFuncName.capture(), ybAdminArgs.capture(), anyLong());
       assertEquals("upgrade_ysql", ybAdminFuncName.getValue());
+      assertThat(ybAdminArgs.getValue(), Matchers.contains("use_single_connection"));
     } else {
       verify(mockNodeUniverseManager, never())
-          .runYbAdminCommand(any(), any(), ybAdminFuncName.capture(), anyLong());
+          .runYbAdminCommand(
+              any(), any(), ybAdminFuncName.capture(), ybAdminArgs.capture(), anyLong());
     }
 
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
@@ -348,17 +436,24 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
 
     int position = 0;
+    assertTaskType(subTasksByPosition.get(position++), TaskType.RunHooks);
     assertTaskType(subTasksByPosition.get(position++), TaskType.CheckMemory);
+    // XCluster gflag set up.
+    assertTaskType(subTasksByPosition.get(position++), TaskType.XClusterInfoPersist);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+
     List<TaskInfo> downloadTasks = subTasksByPosition.get(position++);
     assertTaskType(downloadTasks, TaskType.AnsibleConfigureServers);
     assertEquals(8, downloadTasks.size());
     position = assertSequence(subTasksByPosition, MASTER, position, true, true);
     position = assertSequence(subTasksByPosition, MASTER, position, true, false);
     assertTaskType(subTasksByPosition.get(position++), TaskType.ModifyBlackList);
-    position = assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, false);
+    position =
+        assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, false, true);
     position = assertSequence(subTasksByPosition, TSERVER, position, true, true);
-    assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, true);
-    assertEquals(134, position);
+    assertCommonTasks(subTasksByPosition, position, UpgradeType.ROLLING_UPGRADE, true, true);
+    assertEquals(164, position);
     assertEquals(100.0, taskInfo.getPercentCompleted(), 0);
     assertEquals(Success, taskInfo.getTaskState());
   }
@@ -370,25 +465,32 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
     SoftwareUpgradeParams taskParams = new SoftwareUpgradeParams();
     taskParams.ybSoftwareVersion = "new-version";
     taskParams.upgradeOption = UpgradeOption.NON_ROLLING_UPGRADE;
+    taskParams.clusters.add(defaultUniverse.getUniverseDetails().getPrimaryCluster());
 
     TaskInfo taskInfo = submitTask(taskParams, defaultUniverse.version);
     ArgumentCaptor<NodeTaskParams> commandParams = ArgumentCaptor.forClass(NodeTaskParams.class);
-    verify(mockNodeManager, times(33)).nodeCommand(any(), commandParams.capture());
-    verify(mockNodeUniverseManager, times(5)).runCommand(any(), any(), any());
+    verify(mockNodeManager, times(51)).nodeCommand(any(), commandParams.capture());
+    verify(mockNodeUniverseManager, times(5)).runCommand(any(), any(), anyList(), any());
 
     List<TaskInfo> subTasks = taskInfo.getSubTasks();
     Map<Integer, List<TaskInfo>> subTasksByPosition =
         subTasks.stream().collect(Collectors.groupingBy(TaskInfo::getPosition));
     int position = 0;
+    assertTaskType(subTasksByPosition.get(position++), TaskType.RunHooks);
     assertTaskType(subTasksByPosition.get(position++), TaskType.CheckMemory);
+    // XCluster gflag set up.
+    assertTaskType(subTasksByPosition.get(position++), TaskType.XClusterInfoPersist);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+    assertTaskType(subTasksByPosition.get(position++), TaskType.AnsibleConfigureServers);
+
     List<TaskInfo> downloadTasks = subTasksByPosition.get(position++);
     assertTaskType(downloadTasks, TaskType.AnsibleConfigureServers);
     assertEquals(5, downloadTasks.size());
     position = assertSequence(subTasksByPosition, MASTER, position, false, true);
     position = assertSequence(subTasksByPosition, MASTER, position, false, false);
     position = assertSequence(subTasksByPosition, TSERVER, position, false, true);
-    assertCommonTasks(subTasksByPosition, position, UpgradeType.FULL_UPGRADE, true);
-    assertEquals(18, position);
+    assertCommonTasks(subTasksByPosition, position, UpgradeType.FULL_UPGRADE, true, true);
+    assertEquals(22, position);
     assertEquals(100.0, taskInfo.getPercentCompleted(), 0);
     assertEquals(Success, taskInfo.getTaskState());
   }
@@ -417,6 +519,7 @@ public class SoftwareUpgradeTest extends UpgradeTaskTest {
     userIntent.accessKeyCode = "demo-access";
     userIntent.regionList = ImmutableList.of(region.uuid);
     userIntent.enableYSQL = enableYSQL;
+    userIntent.provider = defaultProvider.uuid.toString();
 
     PlacementInfo pi = new PlacementInfo();
     PlacementInfoUtil.addPlacementZone(az1.uuid, pi, 1, 2, false);

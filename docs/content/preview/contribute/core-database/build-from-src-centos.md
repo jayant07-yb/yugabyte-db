@@ -5,35 +5,33 @@ linkTitle: Build the source
 description: Build YugabyteDB from source code on CentOS.
 image: /images/section_icons/index/quick_start.png
 headcontent: Build the source code.
-type: page
 menu:
   preview:
     identifier: build-from-src-2-centos
     parent: core-database
     weight: 2912
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li >
     <a href="{{< relref "./build-from-src-macos.md" >}}" class="nav-link">
-      <i class="fab fa-apple" aria-hidden="true"></i>
+      <i class="fa-brands fa-apple" aria-hidden="true"></i>
       macOS
     </a>
   </li>
 
   <li >
     <a href="{{< relref "./build-from-src-centos.md" >}}" class="nav-link active">
-      <i class="fab fa-linux" aria-hidden="true"></i>
+      <i class="fa-brands fa-linux" aria-hidden="true"></i>
       CentOS
     </a>
   </li>
 
   <li >
     <a href="{{< relref "./build-from-src-ubuntu.md" >}}" class="nav-link">
-      <i class="fab fa-linux" aria-hidden="true"></i>
+      <i class="fa-brands fa-linux" aria-hidden="true"></i>
       Ubuntu
     </a>
   </li>
@@ -74,14 +72,14 @@ We also use [Linuxbrew](https://github.com/linuxbrew/brew) to provide some of th
 Linuxbrew allows us to create a portable package that contains its own copy of glibc and can be installed on most Linux distributions.
 However, we are transitioning away from using Linuxbrew and towards native toolchains on various platforms.
 
-Our build scripts may automatically install Linuxbrew in a directory such as `/opt/yb-build/brew/linuxbrew-<version>` or `~/.linuxbrew-yb-build/linuxbrew-<version>`.
+Our build scripts may automatically install Linuxbrew in a directory such as `/opt/yb-build/brew/linuxbrew-<version>`.
 There is no need to add any of those directories to PATH.
 
 {{< /note >}}
 
 ## Building the code
 
-Assuming this repository is checked out in `~/code/yugabyte-db`, do the following:
+Assuming [this repository][repo] is checked out in `~/code/yugabyte-db`, do the following:
 
 ```sh
 cd ~/code/yugabyte-db
@@ -104,6 +102,8 @@ You can find the binaries you just built in `build/latest` directory, which woul
 {{< /tip >}}
 
 For Linux, it will first make sure our custom Linuxbrew distribution is installed into `~/.linuxbrew-yb-build/linuxbrew-<version>`.
+
+[repo]: https://github.com/yugabyte/yugabyte-db
 
 ## Build Java code
 

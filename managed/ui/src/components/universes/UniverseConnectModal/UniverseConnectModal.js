@@ -162,10 +162,10 @@ class UniverseConnectModal extends Component {
       const jdbcConnection = `jdbc:postgresql://${connectIp}:${ysqlRpcPort}/yugabyte`;
       
       const jdbcTLSConnection = `${jdbcConnection}?sslmode=require`;
-      const ysqlConnection = 'bin/ysqlsh';
+      const ysqlConnection = `bin/ysqlsh -h ${connectIp}`;
       const ySqlTLSConnection = `${ysqlConnection} sslmode=require`;
       const ycqlConnection = 'bin/ycqlsh';
-      const yCqlTLSConnection = `SSL_CERTFILE=<path to ca.crt> ycqlsh --ssl 172.151.37.101 9042`;
+      const yCqlTLSConnection = `SSL_CERTFILE=<path to ca.crt> ycqlsh --ssl ${connectIp} 9042`;
 
       content = (
         <Fragment>
@@ -192,8 +192,8 @@ class UniverseConnectModal extends Component {
                   isEnabled(currentCustomer.data.features, 'universe.defaultYCQL')) && (
                   <tr>
                     <td>YCQL Shell</td>
-                  <td>: </td>
-                  <td>{isTLSEnabled ? yCqlTLSConnection : ycqlConnection}</td>
+                    <td>: </td>
+                    <td>{isTLSEnabled ? yCqlTLSConnection : ycqlConnection}</td>
                   </tr>
                 )}
                 {(userIntent.enableYEDIS ||

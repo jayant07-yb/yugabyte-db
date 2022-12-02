@@ -7,6 +7,9 @@
  * http://github.com/YugaByte/yugabyte-db/blob/master/licenses/POLYFORM-FREE-TRIAL-LICENSE-1.0.0.txt
  */
 
+import { TableType } from '../../../redesign/helpers/dtos';
+import { OptionTypeBase } from 'react-select';
+
 export enum Backup_States {
   IN_PROGRESS = 'InProgress',
   COMPLETED = 'Completed',
@@ -14,6 +17,7 @@ export enum Backup_States {
   DELETED = 'Deleted',
   SKIPPED = 'Skipped',
   FAILED_TO_DELETE = 'FailedToDelete',
+  STOPPING = 'Stopping',
   STOPPED = 'Stopped',
   DELETE_IN_PROGRESS = 'DeleteInProgress',
   QUEUED_FOR_DELETION = 'QueuedForDeletion'
@@ -26,35 +30,42 @@ export const BACKUP_LABEL_MAP: Record<Backup_States, string> = {
   Deleted: 'Deleted',
   Skipped: 'Cancelled',
   FailedToDelete: 'Deletion failed',
+  Stopping: 'Cancelling',
   Stopped: 'Cancelled',
   DeleteInProgress: 'Deleting',
   QueuedForDeletion: 'Queued for deletion'
 };
 
-export enum TableType {
-  YQL_TABLE_TYPE = 'YQL_TABLE_TYPE',
-  REDIS_TABLE_TYPE = 'REDIS_TABLE_TYPE',
-  PGSQL_TABLE_TYPE = 'PGSQL_TABLE_TYPE'
-}
-
-export const TABLE_TYPE_MAP: Record<TableType, string> = {
-  YQL_TABLE_TYPE: 'YCQL',
-  PGSQL_TABLE_TYPE: 'YSQL',
-  REDIS_TABLE_TYPE: 'REDIS'
-};
-
 export interface Keyspace_Table {
+  allTables: boolean;
   keyspace: string;
   tablesList: string[];
   storageLocation?: string;
   defaultLocation?: string;
 }
 
-export interface IBackup {
-  state: Backup_States;
+export interface ICommonBackupInfo {
   backupUUID: string;
-  backupType: TableType;
+  baseBackupUUID: string;
+  completionTime: number;
+  createTime: number;
+  responseList: Keyspace_Table[];
+  sse: boolean;
+  state: Backup_States;
   storageConfigUUID: string;
+  taskUUID: string;
+  totalBackupSizeInBytes?: number;
+  updateTime: number;
+  parallelism: number;
+}
+
+export interface IBackup {
+  commonBackupInfo: ICommonBackupInfo;
+  isFullBackup: boolean;
+  hasIncrementalBackups: boolean;
+  lastBackupState: Backup_States;
+  backupType: TableType;
+  category: 'YB_BACKUP_SCRIPT' | 'YB_CONTROLLER';
   universeUUID: string;
   scheduleUUID: string;
   customerUUID: string;
@@ -62,13 +73,9 @@ export interface IBackup {
   isStorageConfigPresent: boolean;
   isUniversePresent: boolean;
   onDemand: boolean;
-  createTime: number;
   updateTime: number;
-  completionTime: number;
   expiryTime: number;
-  responseList: Keyspace_Table[];
-  sse: boolean;
-  totalBackupSizeInBytes?: number;
+  fullChainSizeInBytes: number;
   kmsConfigUUID?: null | string;
 }
 
@@ -77,6 +84,7 @@ export interface IUniverse {
   name: string;
   universeDetails: {
     universePaused: boolean;
+    [key: string]: any;
   };
 }
 
@@ -102,6 +110,7 @@ export interface IStorageConfig {
   name: string;
   data: {
     BACKUP_LOCATION: string;
+    REGION_LOCATIONS: any[];
   };
   state: 'ACTIVE' | 'INACTIVE';
   inUse: boolean;
@@ -113,9 +122,23 @@ export interface ITable {
   keySpace: string;
   tableUUID: string;
   tableType: BACKUP_API_TYPES;
+  isIndexTable: boolean;
 }
 
 export enum Backup_Options_Type {
   ALL = 'all',
   CUSTOM = 'custom'
 }
+
+export interface ThrottleParameters {
+  max_concurrent_uploads: number;
+  per_upload_num_objects: number;
+  max_concurrent_downloads: number;
+  per_download_num_objects: number;
+}
+
+interface IOptionType extends OptionTypeBase {
+  value: string;
+  label: string;
+}
+export type SELECT_VALUE_TYPE = IOptionType;

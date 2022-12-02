@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_RPC_SECURE_STREAM_H
-#define YB_RPC_SECURE_STREAM_H
+#pragma once
 
 #include <boost/version.hpp>
 
@@ -40,9 +39,11 @@ class SecureContext {
   Status UseCertificates(
       const std::string& ca_cert_file, const Slice& certificate_data, const Slice& pkey_data);
 
+  std::string GetCertificateDetails();
+
   // Generates and uses temporary keys, should be used only during testing.
   Status TEST_GenerateKeys(int bits, const std::string& common_name,
-                                   MatchingCertKeyPair matching_cert_key_pair);
+                           MatchingCertKeyPair matching_cert_key_pair);
 
  private:
   class Impl;
@@ -58,7 +59,11 @@ StreamFactoryPtr SecureStreamFactory(
 
 void InitOpenSSL();
 
+bool AllowInsecureConnections();
+
+std::string GetSSLProtocols();
+std::string GetCipherList();
+std::string GetCipherSuites();
+
 } // namespace rpc
 } // namespace yb
-
-#endif // YB_RPC_SECURE_STREAM_H

@@ -119,6 +119,11 @@ extern const char *YBGetCurrentMetricNodeName();
 extern bool YBIsCollationEnabled();
 
 /**
+ * Returns whether failure injection is enabled for matview refreshes.
+ */
+extern bool YBIsRefreshMatviewFailureInjected();
+
+/**
  * Returns the value of the configration variable `max_clock_sec_usec`
  * returns -1 if the configuration was not found.
  */
@@ -133,5 +138,10 @@ extern int YBGetYsqlOutputBufferSize();
  * The text columns of all system tables will have en_US.UTF-8 collation.
  */
 extern const bool kTestOnlyUseOSDefaultCollation;
+
+/**
+ * Returns whether colocation is enabled by default for each database.
+ */
+extern bool YBColocateDatabaseByDefault();
 
 #endif /* PG_YB_COMMON_H */

@@ -13,7 +13,8 @@
 
 package org.yb.cdc.util;
 
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.yb.cdc.CdcService;
 import org.yb.client.*;
 import org.yb.master.MasterDdlOuterClass;
@@ -27,7 +28,7 @@ import java.util.Objects;
 import static org.yb.AssertionWrappers.fail;
 
 public class CDCSubscriber {
-  private final static Logger LOG = Logger.getLogger(CDCSubscriber.class);
+  private final static Logger LOG = LoggerFactory.getLogger(CDCSubscriber.class);
 
   private String namespaceName = "yugabyte";
   private String tableName;
@@ -86,6 +87,10 @@ public class CDCSubscriber {
     this.dbStreamId = dbStreamId;
   }
 
+  public String getDbStreamId() {
+    return this.dbStreamId;
+  }
+
   public void setTableName(String tableName) {
     this.tableName = tableName;
   }
@@ -100,6 +105,10 @@ public class CDCSubscriber {
 
   public void setNumberOfTablets(int numberOfTablets) {
     this.numberOfTablets = numberOfTablets;
+  }
+
+  public String getTabletId() {
+    return this.tabletId;
   }
 
   /**
@@ -202,7 +211,7 @@ public class CDCSubscriber {
    * then the exact table corresponding to that tableId.
    *
    */
-  private void createStreamUtil(String cpType) throws Exception {
+  private void createStreamUtil(String cpType, String recordType) throws Exception {
     syncClient = createSyncClientForTest();
     tableId = getTableId();
     table = getTable();
@@ -219,7 +228,7 @@ public class CDCSubscriber {
     if (dbStreamId == null || dbStreamId.isEmpty()) {
       LOG.debug("Creating a new CDC DB stream");
       dbStreamId = syncClient.createCDCStream(table, "yugabyte", FORMAT,
-                                              checkpointingType).getStreamId();
+                                              checkpointingType, recordType).getStreamId();
 
       LOG.debug(String.format("Created a new DB stream id: %s", dbStreamId));
     } else {
@@ -228,6 +237,10 @@ public class CDCSubscriber {
 
     setCheckpoint(0, 0, true);
     LOG.info("DB Stream id: " + dbStreamId);
+  }
+
+  private void createStreamUtil(String cpType) throws Exception {
+    createStreamUtil(cpType, "");
   }
 
   /**
@@ -273,14 +286,18 @@ public class CDCSubscriber {
    * @param recordFormat Format of the record to be streamed (json/proto)
    * @throws Exception when unable to create a stream
    */
-  public void createStream(String recordFormat) throws Exception {
+  public void createStream(String recordFormat, String recordType) throws Exception {
     recordFormat = recordFormat.toLowerCase(Locale.ROOT);
     if (!Objects.equals(recordFormat, "proto") && !Objects.equals(recordFormat, "json")) {
       LOG.error("Invalid format specified, please specify one from JSON or PROTO");
       throw new RuntimeException("Invalid format specified, specify one from JSON or PROTO");
     }
     setFormat(recordFormat);
-    createStreamUtil("");
+    createStreamUtil("", recordType);
+  }
+
+  public void createStream(String recordFormat) throws Exception {
+    createStream(recordFormat, "");
   }
 
   /**
@@ -288,9 +305,11 @@ public class CDCSubscriber {
    * and checkpoint type.
    * @param recordFormat Format of the record to be streamed (json/proto)
    * @param checkpointingType Type of checkpointing for the stream to be created (IMPLICIT/EXPLICIT)
+   * @param recordType Type of the record, (CHANGE/ALL)
    * @throws Exception when unable to create a stream
    */
-  public void createStream(String recordFormat, String checkpointingType) throws Exception {
+  public void createStream(String recordFormat, String checkpointingType,
+                           String recordType) throws Exception {
     recordFormat = recordFormat.toLowerCase(Locale.ROOT);
     checkpointingType = checkpointingType.toUpperCase(Locale.ROOT);
 

@@ -10,20 +10,27 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
+#include "yb/common/partition.h"
+#include "yb/common/wire_protocol.h"
 
 #include "yb/master/catalog_manager_util.h"
 
 #include "yb/master/catalog_entity_info.h"
 
 #include "yb/master/master_cluster.pb.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/math_util.h"
 #include "yb/util/string_util.h"
 
-DEFINE_double(balancer_load_max_standard_deviation, 2.0,
+using std::string;
+using std::vector;
+
+DEFINE_UNKNOWN_double(balancer_load_max_standard_deviation, 2.0,
     "The standard deviation among the tserver load, above which that distribution "
     "is considered not balanced.");
 TAG_FLAG(balancer_load_max_standard_deviation, advanced);
+
+DECLARE_bool(transaction_tables_use_preferred_zones);
 
 namespace yb {
 namespace master {
@@ -502,19 +509,43 @@ Status CatalogManagerUtil::CheckValidLeaderAffinity(const ReplicationInfoPB& rep
   return Status::OK();
 }
 
-bool CMPerTableLoadState::CompareLoads(const TabletServerId &ts1, const TabletServerId &ts2) {
-  if (per_ts_load_[ts1] != per_ts_load_[ts2]) {
-    return per_ts_load_[ts1] < per_ts_load_[ts2];
+void CatalogManagerUtil::FillTableInfoPB(
+    const TableId& table_id, const std::string& table_name, const TableType& table_type,
+    const Schema& schema, uint32_t schema_version, const PartitionSchema& partition_schema,
+    tablet::TableInfoPB* pb) {
+  pb->set_table_id(table_id);
+  pb->set_table_name(table_name);
+  pb->set_table_type(table_type);
+  SchemaToPB(schema, pb->mutable_schema());
+  pb->set_schema_version(schema_version);
+  partition_schema.ToPB(pb->mutable_partition_schema());
+}
+
+Result<bool> CMPerTableLoadState::CompareReplicaLoads(
+    const TabletServerId &ts1, const TabletServerId &ts2) {
+  auto ts1_load = per_ts_replica_load_.find(ts1);
+  auto ts2_load = per_ts_replica_load_.find(ts2);
+  SCHECK(ts1_load != per_ts_replica_load_.end(), IllegalState,
+         Format("per_ts_replica_load_ does not contain $0", ts1));
+  SCHECK(ts2_load != per_ts_replica_load_.end(), IllegalState,
+         Format("per_ts_replica_load_ does not contain $0", ts2));
+
+  if (ts1_load->second != ts2_load->second) {
+    return ts1_load->second < ts2_load->second;
   }
-  if (global_load_state_->GetGlobalLoad(ts1) == global_load_state_->GetGlobalLoad(ts2)) {
+
+  auto ts1_global_load = VERIFY_RESULT(global_load_state_->GetGlobalReplicaLoad(ts1));
+  auto ts2_global_load = VERIFY_RESULT(global_load_state_->GetGlobalReplicaLoad(ts2));
+
+  if (ts1_global_load == ts2_global_load) {
     return ts1 < ts2;
   }
-  return global_load_state_->GetGlobalLoad(ts1) < global_load_state_->GetGlobalLoad(ts2);
+  return ts1_global_load < ts2_global_load;
 }
 
 void CMPerTableLoadState::SortLoad() {
   Comparator comp(this);
-  std::sort(sorted_load_.begin(), sorted_load_.end(), comp);
+  std::sort(sorted_replica_load_.begin(), sorted_replica_load_.end(), comp);
 }
 
 } // namespace master

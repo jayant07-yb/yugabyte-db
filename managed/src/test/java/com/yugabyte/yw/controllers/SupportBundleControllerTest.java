@@ -49,6 +49,8 @@ import com.yugabyte.yw.models.SupportBundle;
 import com.yugabyte.yw.models.Users;
 import com.yugabyte.yw.models.helpers.BundleDetails;
 import com.yugabyte.yw.models.helpers.TaskType;
+import com.yugabyte.yw.models.helpers.BundleDetails.ComponentType;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -139,6 +141,12 @@ public class SupportBundleControllerTest extends FakeDBApplication {
         String.format(
             uri, customerUUID.toString(), universeUUID.toString(), supportBundleUUID.toString()),
         user.createAuthToken());
+  }
+
+  private Result listSupportBundleComponents(UUID customerUUID) {
+    String uri = "/api/customers/%s/support_bundle/components";
+    return FakeApiHelper.doRequestWithAuthToken(
+        "GET", String.format(uri, customerUUID.toString()), user.createAuthToken());
   }
 
   /* ==== List Support Bundles API ==== */
@@ -244,7 +252,8 @@ public class SupportBundleControllerTest extends FakeDBApplication {
             "GFlags",
             "Instance",
             "ConsensusMeta",
-            "TabletMeta");
+            "TabletMeta",
+            "YbcLogs");
     ArrayNode componentsArray = mapper.valueToTree(components);
 
     bodyJson.put("startDate", "2022-02-01");
@@ -264,51 +273,6 @@ public class SupportBundleControllerTest extends FakeDBApplication {
   }
 
   @Test
-  public void testCreateSupportBundleWithUniverseBackupInProgress() {
-    // Filling the JSON object to be passed in the request body
-    ObjectNode bodyJson = Json.newObject();
-    ObjectMapper mapper = new ObjectMapper();
-    List<String> components =
-        Arrays.asList(
-            "UniverseLogs",
-            "ApplicationLogs",
-            "OutputFiles",
-            "ErrorFiles",
-            "GFlags",
-            "Instance",
-            "ConsensusMeta",
-            "TabletMeta");
-    ArrayNode componentsArray = mapper.valueToTree(components);
-
-    bodyJson.put("startDate", "2022-02-01");
-    bodyJson.put("endDate", "2022-03-03");
-    bodyJson.putArray("components").addAll(componentsArray);
-
-    // Mocking commissioner submit functionality to create a support bundle
-    UUID fakeTaskUUID = UUID.randomUUID();
-    lenient()
-        .when(mockCommissioner.submit(any(TaskType.class), any(SupportBundleTaskParams.class)))
-        .thenReturn(fakeTaskUUID);
-
-    // Changing universe state backupInProgress = true
-    universe =
-        Universe.saveDetails(
-            universe.universeUUID,
-            (universe) -> {
-              UniverseDefinitionTaskParams universeDetails = universe.getUniverseDetails();
-              universeDetails.backupInProgress = true;
-              universe.setUniverseDetails(universeDetails);
-            });
-
-    Result result =
-        assertPlatformException(
-            () -> createSupportBundle(customer.uuid, universe.universeUUID, bodyJson));
-    JsonNode json = Json.parse(contentAsString(result));
-    assertEquals(BAD_REQUEST, result.status());
-    assertAuditEntry(0, customer.uuid);
-  }
-
-  @Test
   public void testCreateSupportBundleWithUniverseUpdateInProgress() {
     // Filling the JSON object to be passed in the request body
     ObjectNode bodyJson = Json.newObject();
@@ -322,7 +286,8 @@ public class SupportBundleControllerTest extends FakeDBApplication {
             "GFlags",
             "Instance",
             "ConsensusMeta",
-            "TabletMeta");
+            "TabletMeta",
+            "YbcLogs");
     ArrayNode componentsArray = mapper.valueToTree(components);
 
     bodyJson.put("startDate", "2022-02-01");
@@ -367,7 +332,8 @@ public class SupportBundleControllerTest extends FakeDBApplication {
             "GFlags",
             "Instance",
             "ConsensusMeta",
-            "TabletMeta");
+            "TabletMeta",
+            "YbcLogs");
     ArrayNode componentsArray = mapper.valueToTree(components);
 
     bodyJson.put("startDate", "2022-02-01");
@@ -412,7 +378,8 @@ public class SupportBundleControllerTest extends FakeDBApplication {
             "GFlags",
             "Instance",
             "ConsensusMeta",
-            "TabletMeta");
+            "TabletMeta",
+            "YbcLogs");
     ArrayNode componentsArray = mapper.valueToTree(components);
 
     bodyJson.put("startDate", "2022-02-01");
@@ -435,12 +402,10 @@ public class SupportBundleControllerTest extends FakeDBApplication {
               universe.setUniverseDetails(universeDetails);
             });
 
-    Result result =
-        assertPlatformException(
-            () -> createSupportBundle(customer.uuid, universe.universeUUID, bodyJson));
+    Result result = createSupportBundle(customer.uuid, universe.universeUUID, bodyJson);
     JsonNode json = Json.parse(contentAsString(result));
-    assertEquals(BAD_REQUEST, result.status());
-    assertAuditEntry(0, customer.uuid);
+    assertEquals(OK, result.status());
+    assertAuditEntry(1, customer.uuid);
   }
 
   @Test
@@ -457,7 +422,8 @@ public class SupportBundleControllerTest extends FakeDBApplication {
             "GFlags",
             "Instance",
             "ConsensusMeta",
-            "TabletMeta");
+            "TabletMeta",
+            "YbcLogs");
     ArrayNode componentsArray = mapper.valueToTree(components);
 
     bodyJson.put("startDate", "2022-02-01");
@@ -480,12 +446,10 @@ public class SupportBundleControllerTest extends FakeDBApplication {
               universe.setUniverseDetails(universeDetails);
             });
 
-    Result result =
-        assertPlatformException(
-            () -> createSupportBundle(customer.uuid, universe.universeUUID, bodyJson));
+    Result result = createSupportBundle(customer.uuid, universe.universeUUID, bodyJson);
     JsonNode json = Json.parse(contentAsString(result));
-    assertEquals(BAD_REQUEST, result.status());
-    assertAuditEntry(0, customer.uuid);
+    assertEquals(OK, result.status());
+    assertAuditEntry(1, customer.uuid);
   }
 
   /* ==== Delete Support Bundle API ==== */
@@ -597,6 +561,17 @@ public class SupportBundleControllerTest extends FakeDBApplication {
         assertPlatformException(
             () -> downloadSupportBundle(customer.uuid, universe.universeUUID, sb1.getBundleUUID()));
     assertEquals(NOT_FOUND, result.status());
+    assertAuditEntry(0, customer.uuid);
+  }
+
+  @Test
+  public void testListSupportBundleComponents() {
+    Result result = listSupportBundleComponents(customer.uuid);
+    JsonNode json = Json.parse(contentAsString(result));
+    assertEquals(OK, result.status());
+
+    List<ComponentType> copmponents = Json.fromJson(json, List.class);
+    assertEquals(copmponents.size(), ComponentType.values().length);
     assertAuditEntry(0, customer.uuid);
   }
 }

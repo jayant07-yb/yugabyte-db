@@ -37,7 +37,6 @@
 #include <thread>
 #include <vector>
 
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 #include "yb/client/async_initializer.h"
@@ -85,6 +84,7 @@
 #include "yb/rpc/proxy.h"
 #include "yb/rpc/rpc_controller.h"
 #include "yb/rpc/rpc_test_util.h"
+#include "yb/rpc/sidecars.h"
 
 #include "yb/tablet/tablet.h"
 #include "yb/tablet/tablet_metadata.h"
@@ -95,6 +95,8 @@
 #include "yb/tserver/ts_tablet_manager.h"
 #include "yb/tserver/tserver_service.proxy.h"
 
+#include "yb/util/flags.h"
+#include "yb/util/backoff_waiter.h"
 #include "yb/util/capabilities.h"
 #include "yb/util/metrics.h"
 #include "yb/util/net/dns_resolver.h"
@@ -104,7 +106,6 @@
 #include "yb/util/status_log.h"
 #include "yb/util/stopwatch.h"
 #include "yb/util/test_thread_holder.h"
-#include "yb/util/test_util.h"
 #include "yb/util/thread.h"
 #include "yb/util/tostring.h"
 #include "yb/util/tsan_util.h"
@@ -119,13 +120,10 @@ DECLARE_int32(log_inject_latency_ms_mean);
 DECLARE_int32(log_inject_latency_ms_stddev);
 DECLARE_int32(master_inject_latency_on_tablet_lookups_ms);
 DECLARE_int32(max_create_tablets_per_ts);
-DECLARE_int32(TEST_scanner_inject_latency_on_each_batch_ms);
-DECLARE_int32(scanner_max_batch_size_bytes);
-DECLARE_int32(scanner_ttl_ms);
 DECLARE_int32(tablet_server_svc_queue_length);
 DECLARE_int32(replication_factor);
 
-DEFINE_int32(test_scan_num_rows, 1000, "Number of rows to insert and scan");
+DEFINE_UNKNOWN_int32(test_scan_num_rows, 1000, "Number of rows to insert and scan");
 DECLARE_int32(min_backoff_ms_exponent);
 DECLARE_int32(max_backoff_ms_exponent);
 DECLARE_bool(TEST_force_master_lookup_all_tablets);
@@ -1439,7 +1437,7 @@ TEST_F(ClientTest, TestBasicAlterOperations) {
   std::shared_ptr<TabletPeer> tablet_peer;
 
   for (auto& ts : cluster_->mini_tablet_servers()) {
-    ASSERT_TRUE(ts->server()->tablet_manager()->LookupTablet(tablet_id, &tablet_peer));
+    tablet_peer = ASSERT_RESULT(ts->server()->tablet_manager()->GetTablet(tablet_id));
     if (tablet_peer->LeaderStatus() == consensus::LeaderStatus::LEADER_AND_READY) {
       break;
     }
@@ -1490,9 +1488,8 @@ TEST_F(ClientTest, TestDeleteTable) {
   int wait_time = 1000;
   bool tablet_found = true;
   for (int i = 0; i < 80 && tablet_found; ++i) {
-    std::shared_ptr<TabletPeer> tablet_peer;
-    tablet_found = cluster_->mini_tablet_server(0)->server()->tablet_manager()->LookupTablet(
-                      tablet_id, &tablet_peer);
+    auto ts_manager = cluster_->mini_tablet_server(0)->server()->tablet_manager();
+    tablet_found = ts_manager->LookupTablet(tablet_id) != nullptr;
     SleepFor(MonoDelta::FromMicroseconds(wait_time));
     wait_time = std::min(wait_time * 5 / 4, 1000000);
   }
@@ -1785,9 +1782,8 @@ TEST_F(ClientTest, TestReplicatedTabletWritesAndAltersWithLeaderElection) {
 
   // Test altering the table metadata and ensure that meta operations are resilient as well.
   {
-    std::shared_ptr<TabletPeer> tablet_peer;
-    ASSERT_TRUE(new_leader->server()->tablet_manager()->LookupTablet(remote_tablet->tablet_id(),
-        &tablet_peer));
+    auto tablet_peer = ASSERT_RESULT(
+        new_leader->server()->tablet_manager()->GetTablet(remote_tablet->tablet_id()));
     auto old_version = tablet_peer->tablet()->metadata()->schema_version();
     std::unique_ptr<YBTableAlterer> table_alterer(client_->NewTableAlterer(kReplicatedTable));
     table_alterer->AddColumn("new_col")->Type(INT32);
@@ -2124,10 +2120,6 @@ TEST_F(ClientTest, DISABLED_TestCreateTableWithTooManyReplicas) {
 TEST_F(ClientTest, TestServerTooBusyRetry) {
   ASSERT_NO_FATALS(InsertTestRows(client_table_, FLAGS_test_scan_num_rows));
 
-  // Introduce latency in each scan to increase the likelihood of
-  // ERROR_SERVER_TOO_BUSY.
-  FLAGS_TEST_scanner_inject_latency_on_each_batch_ms = 10;
-
   // Reduce the service queue length of each tablet server in order to increase
   // the likelihood of ERROR_SERVER_TOO_BUSY.
   FLAGS_tablet_server_svc_queue_length = 1;
@@ -2176,7 +2168,7 @@ TEST_F(ClientTest, TestServerTooBusyRetry) {
         }
         --running_threads;
       });
-      std::this_thread::sleep_for(10ms);
+      std::this_thread::sleep_for(10ms * kTimeMultiplier);
     }
 
     for (size_t i = 0; i < cluster_->num_tablet_servers(); i++) {
@@ -2198,7 +2190,7 @@ TEST_F(ClientTest, TestServerTooBusyRetry) {
         idle_threads.pop_back();
       }
     }
-    std::this_thread::sleep_for(10ms);
+    std::this_thread::sleep_for(10ms * kTimeMultiplier);
   }
   thread_holder.JoinAll();
 }
@@ -2266,8 +2258,9 @@ TEST_F(ClientTest, TestReadFromFollower) {
       EXPECT_TRUE(ql_resp.has_rows_data_sidecar());
 
       EXPECT_TRUE(controller.finished());
-      Slice rows_data = EXPECT_RESULT(controller.GetSidecar(ql_resp.rows_data_sidecar()));
-      ql::RowsResult rows_result(kReadFromFollowerTable, selected_cols, rows_data.ToBuffer());
+      std::string rows_data;
+      EXPECT_OK(controller.AssignSidecarTo(ql_resp.rows_data_sidecar(), &rows_data));
+      ql::RowsResult rows_result(kReadFromFollowerTable, selected_cols, rows_data);
       row_block = rows_result.GetRowBlock();
       return implicit_cast<size_t>(FLAGS_test_scan_num_rows) == row_block->row_count();
     }, MonoDelta::FromSeconds(30), "Waiting for replication to followers"));
@@ -2340,7 +2333,8 @@ TEST_F(ClientTest, TestCreateTableWithRangePartition) {
   // Write to the PGSQL table.
   shared_ptr<YBTable> pgsq_table;
   EXPECT_OK(client_->OpenTable(kPgsqlTableId , &pgsq_table));
-  std::shared_ptr<YBPgsqlWriteOp> pgsql_write_op(client::YBPgsqlWriteOp::NewInsert(pgsq_table));
+  rpc::Sidecars sidecars;
+  auto pgsql_write_op = client::YBPgsqlWriteOp::NewInsert(pgsq_table, &sidecars);
   PgsqlWriteRequestPB* psql_write_request = pgsql_write_op->mutable_request();
 
   psql_write_request->add_range_column_values()->mutable_value()->set_string_value("pgsql_key1");
@@ -2374,9 +2368,6 @@ TEST_F(ClientTest, TestCreateTableWithRangePartition) {
   session->Apply(write_op);
 }
 
-// TODO(jason): enable the test in clang when we use clang version at least 9 (otherwise, there is a
-// compilation error: P0428R2).
-#if !defined(__clang__)
 TEST_F(ClientTest, FlushTable) {
   const tablet::Tablet* tablet;
   constexpr int kTimeoutSecs = 30;
@@ -2386,7 +2377,7 @@ TEST_F(ClientTest, FlushTable) {
     std::shared_ptr<TabletPeer> tablet_peer;
     string tablet_id = GetFirstTabletId(client_table2_.get());
     for (auto& ts : cluster_->mini_tablet_servers()) {
-      ASSERT_TRUE(ts->server()->tablet_manager()->LookupTablet(tablet_id, &tablet_peer));
+      tablet_peer = ts->server()->tablet_manager()->LookupTablet(tablet_id);
       if (tablet_peer->LeaderStatus() == consensus::LeaderStatus::LEADER_AND_READY) {
         break;
       }
@@ -2395,7 +2386,7 @@ TEST_F(ClientTest, FlushTable) {
   }
 
   auto test_good_flush_and_compact = ([&]<class T>(T table_id_or_name) {
-    int initial_num_sst_files = tablet->GetCurrentVersionNumSSTFiles();
+    auto initial_num_sst_files = tablet->GetCurrentVersionNumSSTFiles();
 
     // Test flush table.
     InsertTestRows(client_table2_, 1, current_row++);
@@ -2437,7 +2428,6 @@ TEST_F(ClientTest, FlushTable) {
       "bad namespace name",
       "bad table name"));
 }
-#endif  // !defined(__clang__)
 
 TEST_F(ClientTest, GetNamespaceInfo) {
   GetNamespaceInfoResponsePB resp;
@@ -2487,7 +2477,7 @@ TEST_F(ClientTest, BadMasterAddress) {
     opts.SetMasterAddresses(master_addr);
 
     AsyncClientInitialiser async_init(
-        "test-client", /* num_reactors= */ 1, /* timeout_seconds= */ 1, "UUID", &opts,
+        "test-client", /* timeout= */ 1s, "UUID", &opts,
         /* metric_entity= */ nullptr, /* parent_mem_tracker= */ nullptr, messenger.get());
     async_init.Start();
     async_init.get_client_future().wait_for(1s);

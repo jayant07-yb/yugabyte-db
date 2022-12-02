@@ -39,6 +39,7 @@
 
 #include "yb/gutil/stl_util.h"
 
+#include "yb/integration-tests/external_mini_cluster.h"
 #include "yb/master/async_rpc_tasks.h"
 #include "yb/master/catalog_manager.h"
 #include "yb/master/master_cluster.pb.h"
@@ -52,6 +53,7 @@ using std::make_shared;
 using std::string;
 using std::shared_ptr;
 using std::unique_ptr;
+using std::vector;
 using yb::rpc::Messenger;
 using yb::rpc::MessengerBuilder;
 using yb::rpc::RpcController;
@@ -75,7 +77,7 @@ class TestTableLoader : public Visitor<PersistentTableInfo> {
 
   Status Visit(const std::string& table_id, const SysTablesEntryPB& metadata) override {
     // Setup the table info
-    TableInfo *table = new TableInfo(table_id);
+    TableInfo *table = new TableInfo(table_id, /* colocated */ false);
     auto l = table->LockForWrite();
     l.mutable_data()->pb.CopyFrom(metadata);
     l.Commit();
@@ -88,14 +90,15 @@ class TestTableLoader : public Visitor<PersistentTableInfo> {
 };
 
 TEST_F(SysCatalogTest, TestPrepareDefaultClusterConfig) {
-
-  FLAGS_cluster_uuid = "invalid_uuid";
-
-  enterprise::CatalogManager catalog_manager(nullptr);
-  {
-    CatalogManager::LockGuard lock(catalog_manager.mutex_);
-    ASSERT_NOK(catalog_manager.PrepareDefaultClusterConfig(0));
-  }
+  // Verify that a cluster cannot be created with an invalid uuid.
+  ExternalMiniClusterOptions opts;
+  opts.num_masters = 1;
+  opts.num_tablet_servers = 1;
+  opts.extra_master_flags.push_back("--FLAGS_cluster_uuid=invalid_uuid");
+  auto external_mini_cluster = std::make_unique<ExternalMiniCluster>(opts);
+  Status s = external_mini_cluster->Start();
+  ASSERT_NOK(s);
+  ASSERT_STR_CONTAINS(s.message().ToBuffer(), "Unable to start Master");
 
   auto dir = GetTestPath("Master") + "valid_cluster_uuid_test";
   ASSERT_OK(Env::Default()->CreateDir(dir));
@@ -149,7 +152,8 @@ TEST_F(SysCatalogTest, TestSysCatalogTablesOperations) {
 
   // Create new table.
   const std::string table_id = "abc";
-  scoped_refptr<TableInfo> table = master_->catalog_manager()->NewTableInfo(table_id);
+  scoped_refptr<TableInfo> table =
+      master_->catalog_manager()->NewTableInfo(table_id, /* colocated */ false);
   {
     auto l = table->LockForWrite();
     l.mutable_data()->pb.set_name("testtb");
@@ -193,7 +197,8 @@ TEST_F(SysCatalogTest, TestSysCatalogTablesOperations) {
 
 // Verify that data mutations are not available from metadata() until commit.
 TEST_F(SysCatalogTest, TestTableInfoCommit) {
-  scoped_refptr<TableInfo> table(master_->catalog_manager()->NewTableInfo("123"));
+  scoped_refptr<TableInfo> table(
+      master_->catalog_manager()->NewTableInfo("123", /* colocated */ false));
 
   // Mutate the table, under the write lock.
   auto writer_lock = table->LockForWrite();
@@ -273,7 +278,8 @@ static TabletInfo *CreateTablet(TableInfo *table,
 // Test the sys-catalog tablets basic operations (add, update, delete,
 // visit)
 TEST_F(SysCatalogTest, TestSysCatalogTabletsOperations) {
-  scoped_refptr<TableInfo> table(master_->catalog_manager()->NewTableInfo("abc"));
+  scoped_refptr<TableInfo> table(
+      master_->catalog_manager()->NewTableInfo("abc", /* colocated */ false));
   // This leaves all three in StartMutation.
   scoped_refptr<TabletInfo> tablet1(CreateTablet(table.get(), "123", "a", "b"));
   scoped_refptr<TabletInfo> tablet2(CreateTablet(table.get(), "456", "b", "c"));
@@ -1029,7 +1035,8 @@ TEST_F(SysCatalogTest, TestCatalogManagerTasksTracker) {
 
   // Create new table.
   const std::string table_id = "abc";
-  scoped_refptr<TableInfo> table = master_->catalog_manager()->NewTableInfo(table_id);
+  scoped_refptr<TableInfo> table =
+      master_->catalog_manager()->NewTableInfo(table_id, /* colocated */ false);
   {
     auto l = table->LockForWrite();
     l.mutable_data()->pb.set_name("testtb");

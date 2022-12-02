@@ -10,8 +10,7 @@ menu:
     weight: 220
 aliases:
   - /preview/explore/ysql-language-features/cursor/
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 This document describes how to use YSQL cursors to process a result set query one row at a time.
@@ -46,15 +45,15 @@ Operations involving cursors must be performed inside transactions.
 
 You need to declare a cursor  before you can open and use it. There are two ways to declare a cursor:
 
-- As a variable of type `refcursor` placed within the YSQL block's declaration section, as demonstrated by the following syntax:
+- As a variable of type `refcursor` placed in the YSQL block's declaration section, as demonstrated by the following syntax:
 
-  ```
+  ```sql
   DECLARE new_cursor refcursor;
   ```
 
 - As an element bound to a query, based on the following syntax:
 
-  ```
+  ```sql
   new_cursor CURSOR [( arguments )] FOR a_query;
   ```
 
@@ -198,7 +197,7 @@ For more information and examples, refer to the "Returning Cursors" section in [
 
 You can iterate through the result set of a bound cursor using a certain form of the `FOR` statement, as per the following syntax:
 
-```
+```sql
 FOR rec_var
 IN bound_cursor_var [ ( [ argument_name := ] argument_value [, ...] ) ]
 LOOP
@@ -221,6 +220,8 @@ CLOSE employees_cursor_2;
 ```
 
 ## Examples
+
+{{% explore-setup-single %}}
 
 Suppose you work with a database that includes the following table populated with data:
 
@@ -257,12 +258,3 @@ The following is the output produced by the preceding example:
  1222        | Bette Davis  | Sales
  1223        | Lucille Ball | Operations
 ```
-
-
-
-
-
-
-
-
-

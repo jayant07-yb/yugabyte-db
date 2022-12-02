@@ -29,6 +29,10 @@
 #include "yb/util/random_util.h"
 #include "yb/util/result.h"
 #include "yb/util/status_format.h"
+#include "yb/util/flags.h"
+
+DEFINE_UNKNOWN_bool(cql_always_return_metadata_in_execute_response, false,
+            "Force returning the table metadata in the EXECUTE request response");
 
 namespace yb {
 namespace ql {
@@ -65,8 +69,8 @@ constexpr char CQLMessage::kStatusChangeEvent[];
 constexpr char CQLMessage::kSchemaChangeEvent[];
 
 Status CQLMessage::QueryParameters::GetBindVariableValue(const std::string& name,
-                                                                 const size_t pos,
-                                                                 const Value** value) const {
+                                                         const size_t pos,
+                                                         const Value** value) const {
   if (!value_map.empty()) {
     const auto itr = value_map.find(name);
     if (itr == value_map.end()) {
@@ -734,6 +738,12 @@ ExecuteRequest::~ExecuteRequest() {
 Status ExecuteRequest::ParseBody() {
   RETURN_NOT_OK(ParseShortBytes(&query_id_));
   RETURN_NOT_OK(ParseQueryParameters(&params_));
+
+  if (FLAGS_cql_always_return_metadata_in_execute_response) {
+    // Set 'Skip_metadata' flag into 0 for the execution of the prepared statement to force
+    // adding the table metadata to the response.
+    params_.flags &= ~CQLMessage::QueryParameters::kSkipMetadataFlag;
+  }
   return Status::OK();
 }
 
@@ -1394,6 +1404,17 @@ ResultResponse::RowsMetadata::Type::Type(const shared_ptr<QLType>& ql_type) {
           UDTType{type->udtype_keyspace_name(), type->udtype_name(), fields}));
       return;
     }
+    case DataType::TUPLE: {
+      id = Id::TUPLE;
+      std::vector<std::shared_ptr<const Type>> elem_types;
+      for (size_t i = 0; i < type->params().size(); i++) {
+        auto elem_type = std::make_shared<const Type>(Type(type->param_type(i)));
+        elem_types.emplace_back(std::move(elem_type));
+      }
+      new (&tuple_component_types)
+          shared_ptr<const TupleComponentTypes>(std::make_shared<TupleComponentTypes>(elem_types));
+      return;
+    }
     case DataType::FROZEN: FALLTHROUGH_INTENDED;
     QL_UNSUPPORTED_TYPES_IN_SWITCH: FALLTHROUGH_INTENDED;
     QL_INVALID_TYPES_IN_SWITCH:
@@ -1853,8 +1874,8 @@ CQLServerEvent::CQLServerEvent(std::unique_ptr<EventResponse> event_response)
   serialized_response_ = RefCntBuffer(temp);
 }
 
-void CQLServerEvent::Serialize(boost::container::small_vector_base<RefCntBuffer>* output) const {
-  output->push_back(serialized_response_);
+void CQLServerEvent::Serialize(rpc::ByteBlocks* output) const {
+  output->emplace_back(serialized_response_);
 }
 
 std::string CQLServerEvent::ToString() const {
@@ -1870,8 +1891,7 @@ void CQLServerEventList::Transferred(const Status& status, rpc::Connection*) {
   }
 }
 
-void CQLServerEventList::Serialize(
-    boost::container::small_vector_base<RefCntBuffer>* output) {
+void CQLServerEventList::Serialize(rpc::ByteBlocks* output) {
   for (const auto& cql_server_event : cql_server_events_) {
     cql_server_event->Serialize(output);
   }

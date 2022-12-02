@@ -30,8 +30,7 @@
 // under the License.
 //
 
-#ifndef YB_INTEGRATION_TESTS_EXTERNAL_MINI_CLUSTER_ITEST_BASE_H_
-#define YB_INTEGRATION_TESTS_EXTERNAL_MINI_CLUSTER_ITEST_BASE_H_
+#pragma once
 
 #include <string>
 #include <unordered_map>
@@ -45,6 +44,8 @@
 #include "yb/integration-tests/external_mini_cluster_fs_inspector.h"
 
 #include "yb/master/master_cluster.proxy.h"
+
+#include "yb/tserver/tserver_service.pb.h"
 
 #include "yb/util/pstack_watcher.h"
 #include "yb/util/status_log.h"
@@ -84,6 +85,20 @@ class ExternalMiniClusterITestBase : public YBTest {
     ts_map_.clear();
   }
 
+  Result<TabletId> GetSingleTabletId(const TableName& table_name) {
+    TabletId tablet_id_to_split;
+    for (size_t i = 0; i < cluster_->num_tablet_servers(); ++i) {
+      const auto ts = cluster_->tablet_server(i);
+      const auto tablets = VERIFY_RESULT(cluster_->GetTablets(ts));
+      for (const auto& tablet : tablets) {
+        if (tablet.table_name() == table_name) {
+          return tablet.tablet_id();
+        }
+      }
+    }
+    return STATUS(NotFound, Format("No tablet found for table $0.", table_name));
+  }
+
  protected:
   void StartCluster(const std::vector<std::string>& extra_ts_flags = std::vector<std::string>(),
                     const std::vector<std::string>& extra_master_flags = std::vector<std::string>(),
@@ -118,5 +133,3 @@ void ExternalMiniClusterITestBase::StartCluster(const std::vector<std::string>& 
 }
 
 }  // namespace yb
-
-#endif // YB_INTEGRATION_TESTS_EXTERNAL_MINI_CLUSTER_ITEST_BASE_H_

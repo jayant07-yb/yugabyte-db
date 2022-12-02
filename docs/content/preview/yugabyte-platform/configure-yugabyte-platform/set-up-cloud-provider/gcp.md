@@ -6,26 +6,25 @@ description: Configure the Google Cloud Platform (GCP) cloud provider.
 aliases:
   - /preview/deploy/enterprise-edition/configure-cloud-providers/gcp
 menu:
-  preview:
+  preview_yugabyte-platform:
     identifier: set-up-cloud-provider-2-gcp
     parent: configure-yugabyte-platform
     weight: 20
-isTocNested: false
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li>
     <a href="../aws/" class="nav-link">
-      <i class="fab fa-aws"></i>
+      <i class="fa-brands fa-aws"></i>
       AWS
     </a>
   </li>
 
   <li>
     <a href="../gcp/" class="nav-link active">
-      <i class="fab fa-google" aria-hidden="true"></i>
+      <i class="fa-brands fa-google" aria-hidden="true"></i>
       GCP
     </a>
   </li>
@@ -39,33 +38,33 @@ showAsideToc: true
 
   <li>
     <a href="../kubernetes/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       Kubernetes
     </a>
   </li>
 
   <li>
     <a href="../vmware-tanzu/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>
       VMware Tanzu
     </a>
   </li>
 
 <li>
     <a href="../openshift/" class="nav-link">
-      <i class="fas fa-cubes" aria-hidden="true"></i>OpenShift</a>
+      <i class="fa-solid fa-cubes" aria-hidden="true"></i>OpenShift</a>
   </li>
 
   <li>
     <a href="../on-premises/" class="nav-link">
-      <i class="fas fa-building"></i>
+      <i class="fa-solid fa-building"></i>
       On-premises
     </a>
   </li>
 
 </ul>
 
-You can configure Google Cloud Platform (GCP) for YugabyteDB clusters using YugabyteDB Anywhere. If no cloud providers are configured yet, the main Dashboard page prompts you to configure at least one cloud provider.
+<br>You can configure Google Cloud Platform (GCP) for YugabyteDB clusters using YugabyteDB Anywhere. If no cloud providers are configured yet, the main Dashboard page prompts you to configure at least one cloud provider.
 
 ## Prerequisites
 
@@ -77,9 +76,9 @@ You can configure GCP as follows:
 
 - Navigate to **Configs > Google Cloud Platform**.
 
-- Click **Add Configuration** to open the **Cloud Provider Configuration** page shown in the following illustration:<br><br>
+- Click **Add Configuration** to open the **Cloud Provider Configuration** page shown in the following illustration:<br>
 
-  ![GCP Configuration empty](/images/ee/gcp-setup/gcp-configure-empty.png)<br><br>
+  ![GCP Configuration empty](/images/ee/gcp-setup/gcp-configure-empty.png)<br>
 
 - Complete the fields, keeping in mind the following guidelines:
   - Supply a descriptive name that preferably contains Google or GCP, which is especially important if you are planning to configure other providers.
@@ -90,20 +89,27 @@ You can configure GCP as follows:
 
   - If this is a new deployment, it is recommended that you use the **VPC Setup** field to create a new VPC specifically for YugabyteDB nodes. You have to ensure that the YugabyteDB Anywhere host machine can connect to your Google Cloud account where this new VPC will be created.
 
-    <br>Alternatively, you may choose to specify an existing VPC for YugabyteDB nodes, in which case you would need to map regions by providing the following:
+    Alternatively, you may choose to specify an existing VPC for YugabyteDB nodes, in which case you would need to map regions by providing the following:
 
     - A region name.
     - A subnet ID.
     - Optionally, a custom machine image. YugabyteDB Anywhere allows you to bring up universes on Ubuntu 18.04 host nodes, assuming you have Python 2 or later installed on the host, as well as the provider created with a custom AMI and custom SSH user.
 
-    \
-    The third option that is available only when your YugabyteDB Anywhere host machine is also running on Google Cloud, is to use the same VPC on which the YugabyteDB Anywhere host machine runs. Note that choosing to use the same VPC as YugabyteDB Anywhere is an advanced option, which assumes that you are in complete control over this VPC and will be responsible for setting up the networking, SSH access, and firewall rules for it.
+    The third option that is available only when your YugabyteDB Anywhere host machine is also running on Google Cloud, is to use the same VPC on which the YugabyteDB Anywhere host machine runs. Note that choosing to use the same VPC as YugabyteDB Anywhere is an advanced option, which assumes that you are in complete control over this VPC and will be responsible for setting up the networking, SSH access, and firewall rules for it.<br>
+
+    Also note that creating a new VPC using YugabyteDB Anywhere is considered beta and, therefore, not recommended for production use cases. If there are any classless inter-domain routing (CIDR) conflicts, using this option can result in a silent failure. For example, the following will fail:
+
+    - Configure more than one AWS cloud provider with different CIDR block prefixes and selecting the **Create a new VPC** option.
+    - Creating a new VPC with an CIDR block that overlaps with any of the existing subnets.
 
   - **NTP Setup** lets you to customize the Network Time Protocol server, as follows:
-    - Select **Use provider’s NTP server** to enable cluster nodes to connect to the GCP internal time servers. For more information, consult the GCP documentation such as [Configure NTP on a VM](https://cloud.google.com/compute/docs/instances/configure-ntp). 
-    - Select **Manually add NTP Servers** to provide your own NTP servers and allow the cluster nodes to connect to those NTP servers. 
-    - Select **Don’t set up NTP** to prevent YugabyteDB Anywhere from performing any NTP configuration on the cluster nodes. For data consistency, ensure that NTP is correctly configured on your machine image. Note that **Use GCP Time Sync** must be disabled during the universe creation; otherwise **Don’t set up NTP** will be overridden.
-  
+
+    - Select **Use provider’s NTP server** to enable cluster nodes to connect to the GCP internal time servers. For more information, consult the GCP documentation such as [Configure NTP on a VM](https://cloud.google.com/compute/docs/instances/configure-ntp).
+
+  - Select **Manually add NTP Servers** to provide your own NTP servers and allow the cluster nodes to connect to those NTP servers.
+
+    - Select **Don’t set up NTP** to prevent YugabyteDB Anywhere from performing any NTP configuration on the cluster nodes. For data consistency, ensure that NTP is correctly configured on your machine image.
+
 - Click **Save** and wait for the configuration to complete.
 
   This process includes generating a new VPC, a network, subnetworks in all available regions, as well as a new firewall rule, VPC peering for network connectivity, and a custom SSH key pair for YugabyteDB Anywhere-to-YugabyteDB connectivity.

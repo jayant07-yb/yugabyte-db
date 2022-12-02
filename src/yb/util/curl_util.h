@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_UTIL_CURL_UTIL_H
-#define YB_UTIL_CURL_UTIL_H
+#pragma once
 
 #include <string>
 #include <vector>
@@ -89,6 +88,14 @@ class EasyCurl {
     return_headers_ = v;
   }
 
+  void set_follow_redirects(bool v) {
+    follow_redirects_ = v;
+  }
+
+  void set_ca_cert(const std::string& v) {
+    ca_cert_ = v;
+  }
+
  private:
   // Do a request. If 'post_data' is non-NULL, does a POST.
   // Otherwise, does a GET.
@@ -103,9 +110,11 @@ class EasyCurl {
   CURL* curl_;
   // Whether to return the HTTP headers with the response.
   bool return_headers_ = false;
+  // Whether to follow HTTP redirects.
+  bool follow_redirects_ = false;
+  // Path to CA certificates. Defaults to system-wide registered CAs if not set.
+  std::string ca_cert_;
   DISALLOW_COPY_AND_ASSIGN(EasyCurl);
 };
 
 } // namespace yb
-
-#endif /* YB_UTIL_CURL_UTIL_H */

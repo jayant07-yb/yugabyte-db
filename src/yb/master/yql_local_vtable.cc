@@ -27,6 +27,8 @@
 #include "yb/util/net/inetaddress.h"
 #include "yb/util/status_log.h"
 
+using std::vector;
+
 namespace yb {
 namespace master {
 
@@ -68,7 +70,7 @@ Result<std::shared_ptr<QLRowBlock>> LocalVTable::RetrieveData(
   struct Entry {
     size_t index;
     TSInformationPB ts_info;
-    util::PublicPrivateIPFutures ips;
+    util::PublicPrivateIPFutures ips{};
   };
 
   std::vector<Entry> entries;

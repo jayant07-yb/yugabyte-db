@@ -6,12 +6,11 @@ description: Migrate your YugabyteDB universes and YugabyteDB Anywhere from Helm
 aliases:
   - /preview/manage/enterprise-edition/migrate-to-helm3/
 menu:
-  preview:
+  preview_yugabyte-platform:
     identifier: migrate-to-helm3
     parent: manage-deployments
     weight: 90
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 Starting with YugabyteDB version 2.1.8, Helm 2 is not supported. You would need to migrate your existing YugabyteDB universes and YugabyteDB Anywhere from Helm 2 to Helm 3.
@@ -26,7 +25,7 @@ You can perform migration as follows:
    helm2 ls
    ```
 
-   <br>Expect the following output:
+   Expect the following output:
 
    ```output
    NAME   	REVISION	UPDATED                 STATUS  	CHART         	APP VERSION	NAMESPACE
@@ -39,9 +38,9 @@ You can perform migration as follows:
    helm 2to3 convert yw-test
    ```
 
-   <br>For more information, see [Migrating Helm v2 to v3](https://helm.sh/docs/topics/v2_v3_migration/).
+   For more information, see [Migrating Helm v2 to v3](https://helm.sh/docs/topics/v2_v3_migration/).
 
-   <br>Expect the following output:
+   Expect the following output:
 
    ```output
    2020/05/12 22:25:49 Release "yw-test" will be converted from Helm v2 to Helm v3.
@@ -60,7 +59,7 @@ You can perform migration as follows:
    helm ls -n yw-test
    ```
 
-   <br>Expect the following output:
+   Expect the following output:
 
    ```output
    NAME   	NAMESPACE	REVISION	UPDATED                               	STATUS  	CHART         	APP VERSION
@@ -78,7 +77,7 @@ kubectl get svc -n yw-test
 Expect the following output:
 
 ```output
-NAME                         TYPE                CLUSTER-IP    EXTERNAL-IP   PORT(S)                                       AGE
+NAME                  TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)                       AGE
 yw-test-yugaware-ui   LoadBalancer   10.103.85.235   10.103.85.235   80:30265/TCP,9090:30661/TCP   18m
 ```
 
@@ -177,7 +176,7 @@ You can perform the migration as follows:
    helm2 ls
    ```
 
-   <br>Expect the following output:
+   Expect the following output:
 
    ```output
    helm2 ls
@@ -193,7 +192,7 @@ You can perform the migration as follows:
    helm 2to3 convert yb-admin-test-a
    ```
 
-   <br>For each migration, expect to see messages similar to the following:
+   For each migration, expect to see messages similar to the following:
 
    ```output
    2020/05/12 23:20:42 Release "yb-admin-test-a" will be converted from Helm v2 to Helm v3.
@@ -207,7 +206,7 @@ You can perform the migration as follows:
    2020/05/12 23:20:42 v2 release information should only be removed using `helm 2to3` cleanup and when all releases have been migrated over.
    ```
 
-   <br>Execute the same command for every release, as per the following examples:
+   Execute the same command for every release, as per the following examples:
 
    ```sh
    helm 2to3 convert yb-admin-test-b
@@ -223,7 +222,7 @@ You can perform the migration as follows:
    helm ls -A
    ```
 
-   <br>Expect the following output:
+   Expect the following output:
 
    ```output
    NAME           	NAMESPACE     REVISION   UPDATED                 STATUS    CHART         	APP VERSION

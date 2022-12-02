@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_CLIENT_TABLE_INFO_H
-#define YB_CLIENT_TABLE_INFO_H
+#pragma once
 
 #include "yb/client/schema.h"
 #include "yb/client/yb_table_name.h"
@@ -41,7 +40,10 @@ struct YBTableInfo {
 Result<YBTableType> PBToClientTableType(TableType table_type_from_pb);
 TableType ClientToPBTableType(YBTableType table_type);
 
+struct TableSizeInfo {
+  int64 table_size;
+  int32 num_missing_tablets;
+};
+
 }  // namespace client
 }  // namespace yb
-
-#endif  // YB_CLIENT_TABLE_INFO_H

@@ -35,6 +35,9 @@ import com.yugabyte.yw.commissioner.tasks.params.KMSConfigTaskParams;
 import com.yugabyte.yw.common.FakeDBApplication;
 import com.yugabyte.yw.common.ModelFactory;
 import com.yugabyte.yw.common.kms.services.SmartKeyEARService;
+import com.yugabyte.yw.common.kms.util.AzuEARServiceUtil;
+import com.yugabyte.yw.common.kms.util.KeyProvider;
+import com.yugabyte.yw.common.kms.util.AwsEARServiceUtil.AwsKmsAuthConfigField;
 import com.yugabyte.yw.models.Customer;
 import com.yugabyte.yw.models.KmsConfig;
 import com.yugabyte.yw.models.Universe;
@@ -206,9 +209,9 @@ public class EncryptionAtRestControllerTest extends FakeDBApplication {
     String kmsConfigUrl = "/api/customers/" + customer.uuid + "/kms_configs/AWS";
     ObjectNode kmsConfigReq =
         Json.newObject()
-            .put(EncryptionAtRestController.AWS_ACCESS_KEY_ID_FIELDNAME, "aws_accesscode")
-            .put(EncryptionAtRestController.AWS_REGION_FIELDNAME, "ap-south-1")
-            .put(EncryptionAtRestController.AWS_SECRET_ACCESS_KEY_FIELDNAME, "aws_secretKey")
+            .put(AwsKmsAuthConfigField.ACCESS_KEY_ID.fieldName, "aws_accesscode")
+            .put(AwsKmsAuthConfigField.REGION.fieldName, "ap-south-1")
+            .put(AwsKmsAuthConfigField.SECRET_ACCESS_KEY.fieldName, "aws_secretKey")
             .put("name", "test");
     CloudAPI mockCloudAPI = mock(CloudAPI.class);
     when(mockCloudAPIFactory.get(any())).thenReturn(mockCloudAPI);
@@ -223,12 +226,10 @@ public class EncryptionAtRestControllerTest extends FakeDBApplication {
     String kmsConfigUrl = "/api/customers/" + customer.uuid + "/kms_configs/AWS";
     ObjectNode kmsConfigReq =
         Json.newObject()
-            .put(EncryptionAtRestController.AWS_ACCESS_KEY_ID_FIELDNAME, "valid_accessKey")
-            .put(EncryptionAtRestController.AWS_REGION_FIELDNAME, "ap-south-1")
-            .put(EncryptionAtRestController.AWS_SECRET_ACCESS_KEY_FIELDNAME, "valid_secretKey")
-            .put(
-                EncryptionAtRestController.AWS_KMS_ENDPOINT_FIELDNAME,
-                "https://kms.ap-south-1.amazonaws.com")
+            .put(AwsKmsAuthConfigField.ACCESS_KEY_ID.fieldName, "valid_accessKey")
+            .put(AwsKmsAuthConfigField.REGION.fieldName, "ap-south-1")
+            .put(AwsKmsAuthConfigField.SECRET_ACCESS_KEY.fieldName, "valid_secretKey")
+            .put(AwsKmsAuthConfigField.ENDPOINT.fieldName, "https://kms.ap-south-1.amazonaws.com")
             .put("name", "test");
     UUID fakeTaskUUID = UUID.randomUUID();
     when(mockCommissioner.submit(any(TaskType.class), any(KMSConfigTaskParams.class)))
@@ -261,21 +262,16 @@ public class EncryptionAtRestControllerTest extends FakeDBApplication {
 
   @Test
   public void testCreateKMSProviderWithDuplicateName() {
-    ObjectNode authConfig = Json.newObject().put("cmk_id", "test_id");
+    ObjectNode authConfig = Json.newObject().put(AwsKmsAuthConfigField.CMK_ID.fieldName, "test_id");
     ModelFactory.createKMSConfig(customer.uuid, "AWS", authConfig, "test");
     String kmsConfigUrl = "/api/customers/" + customer.uuid + "/kms_configs/AWS";
     ObjectNode kmsConfigReq =
         Json.newObject()
-            .put(EncryptionAtRestController.AWS_ACCESS_KEY_ID_FIELDNAME, "valid_accessKey")
-            .put(EncryptionAtRestController.AWS_REGION_FIELDNAME, "ap-south-1")
-            .put(EncryptionAtRestController.AWS_SECRET_ACCESS_KEY_FIELDNAME, "valid_secretKey")
-            .put(
-                EncryptionAtRestController.AWS_KMS_ENDPOINT_FIELDNAME,
-                "https://kms.ap-south-1.amazonaws.com")
+            .put(AwsKmsAuthConfigField.ACCESS_KEY_ID.fieldName, "valid_accessKey")
+            .put(AwsKmsAuthConfigField.REGION.fieldName, "ap-south-1")
+            .put(AwsKmsAuthConfigField.SECRET_ACCESS_KEY.fieldName, "valid_secretKey")
+            .put(AwsKmsAuthConfigField.ENDPOINT.fieldName, "https://kms.ap-south-1.amazonaws.com")
             .put("name", "test");
-    CloudAPI mockCloudAPI = mock(CloudAPI.class);
-    when(mockCloudAPIFactory.get(any())).thenReturn(mockCloudAPI);
-    when(mockCloudAPI.isValidCredsKms(any(), any())).thenReturn(true);
     Result createKMSResult =
         assertPlatformException(
             () -> doRequestWithAuthTokenAndBody("POST", kmsConfigUrl, authToken, kmsConfigReq));
@@ -289,12 +285,10 @@ public class EncryptionAtRestControllerTest extends FakeDBApplication {
         "/api/customers/" + customer.uuid + "/kms_configs/" + invalidConfigUUID + "/edit";
     ObjectNode kmsConfigReq =
         Json.newObject()
-            .put(EncryptionAtRestController.AWS_ACCESS_KEY_ID_FIELDNAME, "valid_accessKey")
-            .put(EncryptionAtRestController.AWS_REGION_FIELDNAME, "ap-south-1")
-            .put(EncryptionAtRestController.AWS_SECRET_ACCESS_KEY_FIELDNAME, "valid_secretKey")
-            .put(
-                EncryptionAtRestController.AWS_KMS_ENDPOINT_FIELDNAME,
-                "https://kms.ap-south-1.amazonaws.com")
+            .put(AwsKmsAuthConfigField.ACCESS_KEY_ID.fieldName, "valid_accessKey")
+            .put(AwsKmsAuthConfigField.REGION.fieldName, "ap-south-1")
+            .put(AwsKmsAuthConfigField.SECRET_ACCESS_KEY.fieldName, "valid_secretKey")
+            .put(AwsKmsAuthConfigField.ENDPOINT.fieldName, "https://kms.ap-south-1.amazonaws.com")
             .put("name", "test");
     Result updateKMSResult =
         assertPlatformException(
@@ -357,22 +351,52 @@ public class EncryptionAtRestControllerTest extends FakeDBApplication {
   public void testEditAWSKMSConfigRegion() {
     ObjectNode kmsConfigReq =
         Json.newObject()
-            .put(EncryptionAtRestController.AWS_ACCESS_KEY_ID_FIELDNAME, "valid_accessKey")
-            .put(EncryptionAtRestController.AWS_REGION_FIELDNAME, "ap-south-1")
-            .put(EncryptionAtRestController.AWS_SECRET_ACCESS_KEY_FIELDNAME, "valid_secretKey")
-            .put(
-                EncryptionAtRestController.AWS_KMS_ENDPOINT_FIELDNAME,
-                "https://kms.ap-south-1.amazonaws.com")
+            .put(AwsKmsAuthConfigField.ACCESS_KEY_ID.fieldName, "valid_accessKey")
+            .put(AwsKmsAuthConfigField.REGION.fieldName, "ap-south-1")
+            .put(AwsKmsAuthConfigField.SECRET_ACCESS_KEY.fieldName, "valid_secretKey")
+            .put(AwsKmsAuthConfigField.ENDPOINT.fieldName, "https://kms.ap-south-1.amazonaws.com")
             .put("name", "test")
-            .put("cmk_id", "3ccb9374-bc6e-4247-9cc5-2170ec77053e");
+            .put(AwsKmsAuthConfigField.CMK_ID.fieldName, "3ccb9374-bc6e-4247-9cc5-2170ec77053e");
     ModelFactory.createKMSConfig(customer.uuid, "AWS", kmsConfigReq, "test");
     KmsConfig config = KmsConfig.listKMSConfigs(customer.uuid).get(0);
     String kmsConfigUrl =
         "/api/customers/" + customer.uuid + "/kms_configs/" + config.configUUID + "/edit";
-    kmsConfigReq.put(EncryptionAtRestController.AWS_REGION_FIELDNAME, "ap-south-2");
+    kmsConfigReq.put(AwsKmsAuthConfigField.REGION.fieldName, "ap-south-2");
     Result updateKMSResult =
         assertPlatformException(
             () -> doRequestWithAuthTokenAndBody("POST", kmsConfigUrl, authToken, kmsConfigReq));
-    assertBadRequest(updateKMSResult, "KmsConfig region cannot be changed.");
+    assertBadRequest(updateKMSResult, "AWS KmsConfig field 'AWS_REGION' cannot be changed.");
+  }
+
+  @Test
+  public void testEditAZUKMSConfigKeyName() {
+    // Negative test case where a field that should not be changed is attempted to be edited
+    // Create the request body with all test fields
+    KeyProvider keyProvider = KeyProvider.valueOf("AZU");
+    String configName = "test-azu-kms-config";
+    ObjectNode kmsConfigReq =
+        Json.newObject()
+            .put("name", configName)
+            .put(AzuEARServiceUtil.CLIENT_ID_FIELDNAME, "test-client-id")
+            .put(AzuEARServiceUtil.CLIENT_SECRET_FIELDNAME, "test-client-secret")
+            .put(AzuEARServiceUtil.TENANT_ID_FIELDNAME, "test-tenant-id")
+            .put(AzuEARServiceUtil.AZU_VAULT_URL_FIELDNAME, "test-vault-url")
+            .put(AzuEARServiceUtil.AZU_KEY_NAME_FIELDNAME, "test-key-name")
+            .put(AzuEARServiceUtil.AZU_KEY_ALGORITHM_FIELDNAME, "RSA")
+            .put(AzuEARServiceUtil.AZU_KEY_SIZE_FIELDNAME, 2048);
+
+    KmsConfig result =
+        KmsConfig.createKMSConfig(customer.uuid, keyProvider, kmsConfigReq, configName);
+
+    // Edit the key name field in the request body
+    String kmsConfigUrl =
+        String.format("/api/customers/%s/kms_configs/%s/edit", customer.uuid, result.configUUID);
+    kmsConfigReq.put(AzuEARServiceUtil.AZU_KEY_NAME_FIELDNAME, "test-key-name-2");
+
+    // Call the API and assert that the POST request throws exception
+    Result updateKMSResult =
+        assertPlatformException(
+            () -> doRequestWithAuthTokenAndBody("POST", kmsConfigUrl, authToken, kmsConfigReq));
+    assertBadRequest(updateKMSResult, "AZU Kms config field 'AZU_KEY_NAME' cannot be changed.");
   }
 }

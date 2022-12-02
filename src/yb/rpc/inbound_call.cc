@@ -41,7 +41,7 @@
 #include "yb/rpc/service_if.h"
 
 #include "yb/util/debug/trace_event.h"
-#include "yb/util/flag_tags.h"
+#include "yb/util/flags.h"
 #include "yb/util/logging.h"
 #include "yb/util/metrics.h"
 #include "yb/util/trace.h"
@@ -50,34 +50,29 @@ using std::shared_ptr;
 using std::vector;
 using strings::Substitute;
 
-DEFINE_bool(rpc_dump_all_traces, false,
-            "If true, dump all RPC traces at INFO level");
+DEFINE_RUNTIME_bool(rpc_dump_all_traces, false, "If true, dump all RPC traces at INFO level");
 TAG_FLAG(rpc_dump_all_traces, advanced);
-TAG_FLAG(rpc_dump_all_traces, runtime);
 
-DEFINE_bool(collect_end_to_end_traces, false,
-            "If true, collected traces includes information for sub-components "
-            "potentially running on a different server. ");
+DEFINE_RUNTIME_bool(collect_end_to_end_traces, false,
+    "If true, collected traces includes information for sub-components "
+    "potentially running on a different server. ");
 TAG_FLAG(collect_end_to_end_traces, advanced);
-TAG_FLAG(collect_end_to_end_traces, runtime);
 
-DEFINE_int32(print_trace_every, 0,
-             "Controls the rate at which traces are printed. Setting this to 0 "
-             "disables printing the collected traces.");
+DEFINE_RUNTIME_int32(print_trace_every, 0,
+    "Controls the rate at which traces are printed. Setting this to 0 "
+    "disables printing the collected traces.");
 TAG_FLAG(print_trace_every, advanced);
-TAG_FLAG(print_trace_every, runtime);
 
-DEFINE_int32(rpc_slow_query_threshold_ms, 10000,
-             "Traces for calls that take longer than this threshold (in ms) are logged");
+DEFINE_RUNTIME_int32(rpc_slow_query_threshold_ms, 10000,
+    "Traces for calls that take longer than this threshold (in ms) are logged");
 TAG_FLAG(rpc_slow_query_threshold_ms, advanced);
-TAG_FLAG(rpc_slow_query_threshold_ms, runtime);
 
 namespace yb {
 namespace rpc {
 
 InboundCall::InboundCall(ConnectionPtr conn, RpcMetrics* rpc_metrics,
                          CallProcessedListener* call_processed_listener)
-    : trace_(new Trace),
+    : trace_(Trace::NewTrace()),
       conn_(std::move(conn)),
       rpc_metrics_(rpc_metrics ? rpc_metrics : &conn_->rpc_metrics()),
       call_processed_listener_(call_processed_listener) {
@@ -88,8 +83,10 @@ InboundCall::InboundCall(ConnectionPtr conn, RpcMetrics* rpc_metrics,
 
 InboundCall::~InboundCall() {
   TRACE_TO(trace_, "Destroying InboundCall");
-  YB_LOG_IF_EVERY_N(INFO, FLAGS_print_trace_every > 0, FLAGS_print_trace_every)
-      << "Tracing op: \n " << trace_->DumpToString(true);
+  if (trace_) {
+    YB_LOG_IF_EVERY_N(INFO, FLAGS_print_trace_every > 0, FLAGS_print_trace_every)
+        << "Tracing op: \n " << trace_->DumpToString(true);
+  }
   DecrementGauge(rpc_metrics_->inbound_calls_alive);
 }
 
@@ -102,6 +99,20 @@ void InboundCall::NotifyTransferred(const Status& status, Connection* conn) {
   }
   if (call_processed_listener_) {
     call_processed_listener_->CallProcessed(this);
+  }
+}
+
+void InboundCall::EnsureTraceCreated() {
+  if (!trace_) {
+    trace_ = new Trace;
+    if (timing_.time_received.Initialized()) {
+      TRACE_TO_WITH_TIME(trace_, ToCoarse(timing_.time_received), "Created InboundCall");
+    }
+    if (timing_.time_handled.Initialized()) {
+      TRACE_TO_WITH_TIME(trace_, ToCoarse(timing_.time_handled), "Handling the call");
+    }
+    DCHECK(!timing_.time_completed.Initialized());
+    TRACE_TO(trace_, "Trace Created");
   }
 }
 
@@ -208,6 +219,10 @@ bool InboundCall::RespondTimedOutIfPending(const char* message) {
 }
 
 void InboundCall::Clear() {
+  {
+    std::lock_guard<simple_spinlock> lock(mutex_);
+    cleared_ = true;
+  }
   serialized_request_.clear();
   request_data_.Reset();
   request_data_memory_usage_.store(0, std::memory_order_release);
@@ -241,7 +256,7 @@ void InboundCall::SetRpcMethodMetrics(std::reference_wrapper<const RpcMethodMetr
   }
 }
 
-void InboundCall::Serialize(boost::container::small_vector_base<RefCntBuffer>* output) {
+void InboundCall::Serialize(ByteBlocks* output) {
   size_t old_size = output->size();
   DoSerialize(output);
   if (rpc_method_response_bytes_) {

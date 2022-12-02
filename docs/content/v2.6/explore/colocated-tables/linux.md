@@ -8,22 +8,21 @@ menu:
     identifier: colocated-tables-2-linux
     parent: explore
     weight: 600
-isTocNested: true
-showAsideToc: true
+type: docs
 ---
 
 <ul class="nav nav-tabs-alt nav-tabs-yb">
 
   <li >
     <a href="../macos/" class="nav-link">
-      <i class="fab fa-apple" aria-hidden="true"></i>
+      <i class="fa-brands fa-apple" aria-hidden="true"></i>
       macOS
     </a>
   </li>
 
   <li >
     <a href="../linux/" class="nav-link active">
-      <i class="fab fa-linux" aria-hidden="true"></i>
+      <i class="fa-brands fa-linux" aria-hidden="true"></i>
       Linux
     </a>
   </li>

@@ -53,11 +53,12 @@
 #include "yb/util/slice.h"
 #include "yb/util/status_format.h"
 #include "yb/yql/cql/ql/util/errcodes.h"
+#include "yb/util/flags.h"
 
 using google::protobuf::RepeatedPtrField;
 using std::vector;
 
-DEFINE_string(use_private_ip, "never",
+DEFINE_UNKNOWN_string(use_private_ip, "never",
               "When to use private IP for connection. "
               "cloud - would use private IP if destination node is located in the same cloud. "
               "region - would use private IP if destination node is located in the same cloud and "
@@ -137,9 +138,24 @@ const HostPortPB& GetHostPort(
   return empty_host_port;
 }
 
-} // namespace
+void DupMessage(const Slice& message, AppStatusPB* pb) {
+  pb->set_message(message.cdata(), message.size());
+}
 
-void StatusToPB(const Status& status, AppStatusPB* pb) {
+void DupErrors(const Slice& errors, AppStatusPB* pb) {
+  pb->set_errors(errors.cdata(), errors.size());
+}
+
+void DupMessage(const Slice& message, LWAppStatusPB* pb) {
+  pb->dup_message(message);
+}
+
+void DupErrors(const Slice& errors, LWAppStatusPB* pb) {
+  pb->dup_errors(errors);
+}
+
+template <class PB>
+void SharedStatusToPB(const Status& status, PB* pb) {
   pb->Clear();
 
   if (status.ok()) {
@@ -156,15 +172,15 @@ void StatusToPB(const Status& status, AppStatusPB* pb) {
                  << status << ": sending UNKNOWN_ERROR";
     // For unknown status codes, include the original stringified error
     // code.
-    pb->set_message(status.CodeAsString() + ": " + status.message().ToBuffer());
+    DupMessage(status.CodeAsString() + ": " + status.message().ToBuffer(), pb);
   } else {
     // Otherwise, just encode the message itself, since the other end
     // will reconstruct the other parts of the ToString() response.
-    pb->set_message(status.message().cdata(), status.message().size());
+    DupMessage(status.message(), pb);
   }
 
   auto error_codes = status.ErrorCodesSlice();
-  pb->set_errors(error_codes.data(), error_codes.size());
+  DupErrors(error_codes, pb);
   // We always has 0 as terminating byte for error codes, so non empty error codes would have
   // more than one bytes.
   if (error_codes.size() > 1) {
@@ -179,8 +195,21 @@ void StatusToPB(const Status& status, AppStatusPB* pb) {
     }
   }
 
-  pb->set_source_file(status.file_name());
   pb->set_source_line(status.line_number());
+}
+
+} // namespace
+
+void StatusToPB(const Status& status, AppStatusPB* pb) {
+  SharedStatusToPB(status, pb);
+
+  pb->set_source_file(status.file_name());
+}
+
+void StatusToPB(const Status& status, LWAppStatusPB* pb) {
+  SharedStatusToPB(status, pb);
+
+  pb->dup_source_file(status.file_name());
 }
 
 struct WireProtocolTabletServerErrorTag {
@@ -206,7 +235,7 @@ Status StatusFromOldPB(const PB& pb) {
   auto status_factory = [code, &pb](const Slice& errors) {
     return Status(
         code, Slice(pb.source_file()).cdata(), pb.source_line(), pb.message(), errors,
-        DupFileName::kTrue);
+        pb.source_file().size());
   };
 
   #define ENCODE_ERROR_AND_RETURN_STATUS(Tag, value) \
@@ -236,7 +265,7 @@ Status StatusFromOldPB(const PB& pb) {
   }
 
   return Status(code, Slice(pb.source_file()).cdata(), pb.source_line(), pb.message(), "",
-                nullptr /* error */, DupFileName::kTrue);
+                nullptr /* error */, pb.source_file().size());
   #undef ENCODE_ERROR_AND_RETURN_STATUS
 }
 
@@ -255,7 +284,7 @@ Status DoStatusFromPB(const PB& pb) {
 
   if (pb.has_errors()) {
     return Status(kErrorCodeToStatus[pb.code()], Slice(pb.source_file()).cdata(), pb.source_line(),
-                  pb.message(), pb.errors(), DupFileName::kTrue);
+                  pb.message(), pb.errors(), pb.source_file().size());
   }
 
   return StatusFromOldPB(pb);
@@ -561,7 +590,7 @@ static const std::string kSplitChildTabletIdsCategoryName = "split child tablet 
 StatusCategoryRegisterer split_child_tablet_ids_category_registerer(
     StatusCategoryDescription::Make<SplitChildTabletIdsTag>(&kSplitChildTabletIdsCategoryName));
 
-std::string SplitChildTabletIdsTag::ToMessage(Value value) {
+std::string SplitChildTabletIdsTag::ToMessage(const Value& value) {
   return Format("Split child tablet IDs: $0", value);
 }
 

@@ -1,12 +1,18 @@
 package com.yugabyte.yw.forms;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.yugabyte.yw.common.BackupUtil.RegionLocations;
+import com.yugabyte.yw.models.Backup.BackupCategory;
 import io.swagger.annotations.ApiModel;
 import io.swagger.annotations.ApiModelProperty;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import lombok.NoArgsConstructor;
 import org.yb.CommonTypes.TableType;
 import play.data.validation.Constraints;
 
+@NoArgsConstructor
 public class RestoreBackupParams extends UniverseTaskParams {
 
   public enum ActionType {
@@ -28,8 +34,18 @@ public class RestoreBackupParams extends UniverseTaskParams {
   @ApiModelProperty(value = "Action type")
   public ActionType actionType;
 
+  @ApiModelProperty(value = "Category of the backup")
+  public BackupCategory category = BackupCategory.YB_BACKUP_SCRIPT;
+
   @ApiModelProperty(value = "Backup's storage info to restore")
   public List<BackupStorageInfo> backupStorageInfoList;
+
+  // Intermediate states to resume ybc backups
+  public UUID prefixUUID;
+
+  public int currentIdx;
+
+  public String currentYbcTaskId;
 
   // Should backup script enable verbose logging.
   @ApiModelProperty(value = "Is verbose logging enabled")
@@ -47,18 +63,15 @@ public class RestoreBackupParams extends UniverseTaskParams {
   @ApiModelProperty(value = "Is tablespaces information included")
   public Boolean useTablespaces = false;
 
+  @ApiModelProperty(value = "Disable multipart upload")
+  public boolean disableMultipart = false;
+
   // The number of concurrent commands to run on nodes over SSH
   @ApiModelProperty(value = "Number of concurrent commands to run on nodes over SSH")
   public int parallelism = 8;
 
   @ApiModelProperty(value = "Restore TimeStamp")
   public String restoreTimeStamp = null;
-
-  @ApiModelProperty(value = "User name of the current tables owner")
-  public String oldOwner = "yugabyte";
-
-  @ApiModelProperty(value = "User name of the new tables owner")
-  public String newOwner = null;
 
   @ApiModel(description = "Backup Storage Info for doing restore operation")
   public static class BackupStorageInfo {
@@ -79,5 +92,54 @@ public class RestoreBackupParams extends UniverseTaskParams {
 
     @ApiModelProperty(value = "Is SSE")
     public boolean sse = false;
+
+    @ApiModelProperty(value = "User name of the current tables owner")
+    public String oldOwner = "postgres";
+
+    @ApiModelProperty(value = "User name of the new tables owner")
+    public String newOwner = null;
+  }
+
+  public RestoreBackupParams(
+      RestoreBackupParams otherParams, BackupStorageInfo backupStorageInfo, ActionType actionType) {
+    this(otherParams, backupStorageInfo, actionType, null);
+  }
+
+  public RestoreBackupParams(
+      RestoreBackupParams otherParams,
+      BackupStorageInfo backupStorageInfo,
+      ActionType actionType,
+      String currentYbcTaskId) {
+    this.customerUUID = otherParams.customerUUID;
+    this.universeUUID = otherParams.universeUUID;
+    this.storageConfigUUID = otherParams.storageConfigUUID;
+    this.restoreTimeStamp = otherParams.restoreTimeStamp;
+    this.kmsConfigUUID = otherParams.kmsConfigUUID;
+    this.parallelism = otherParams.parallelism;
+    this.actionType = actionType;
+    this.backupStorageInfoList = new ArrayList<>();
+    this.backupStorageInfoList.add(backupStorageInfo);
+    this.disableChecksum = otherParams.disableChecksum;
+    this.useTablespaces = otherParams.useTablespaces;
+    this.disableMultipart = otherParams.disableMultipart;
+    this.enableVerboseLogs = otherParams.enableVerboseLogs;
+    this.prefixUUID = otherParams.prefixUUID;
+    this.currentYbcTaskId = currentYbcTaskId;
+  }
+
+  @JsonIgnore
+  public RestoreBackupParams(RestoreBackupParams params) {
+    // Don't need vebose, multipart, parallelism.
+    // Since only using this for YBC restores.
+    this.customerUUID = params.customerUUID;
+    this.universeUUID = params.universeUUID;
+    this.storageConfigUUID = params.storageConfigUUID;
+    this.restoreTimeStamp = params.restoreTimeStamp;
+    this.kmsConfigUUID = params.kmsConfigUUID;
+    this.actionType = params.actionType;
+    this.backupStorageInfoList = new ArrayList<>(params.backupStorageInfoList);
+    this.disableChecksum = params.disableChecksum;
+    this.useTablespaces = params.useTablespaces;
+    this.prefixUUID = params.prefixUUID;
   }
 }

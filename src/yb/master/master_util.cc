@@ -13,7 +13,7 @@
 
 #include "yb/master/master_util.h"
 
-#include <boost/container/stable_vector.hpp>
+#include <deque>
 
 #include "yb/common/redis_constants_common.h"
 #include "yb/common/wire_protocol.h"
@@ -37,11 +37,6 @@ namespace yb {
 namespace master {
 
 namespace {
-
-static constexpr const char* kColocatedDbParentTableIdSuffix = ".colocated.parent.uuid";
-static constexpr const char* kColocatedDbParentTableNameSuffix = ".colocated.parent.tablename";
-static constexpr const char* kTablegroupParentTableIdSuffix = ".tablegroup.parent.uuid";
-static constexpr const char* kTablegroupParentTableNameSuffix = ".tablegroup.parent.tablename";
 
 struct GetMasterRegistrationData {
   GetMasterRegistrationRequestPB req;
@@ -78,8 +73,7 @@ Status GetMasterEntryForHosts(rpc::ProxyCache* proxy_cache,
                               ServerEntryPB* e) {
   CHECK(!hostports.empty());
 
-  boost::container::stable_vector<GetMasterRegistrationData> datas;
-  datas.reserve(hostports.size());
+  std::deque<GetMasterRegistrationData> datas;
   std::atomic<GetMasterRegistrationData*> last_data{nullptr};
   CountDownLatch latch(hostports.size());
   for (size_t i = 0; i != hostports.size(); ++i) {
@@ -244,8 +238,10 @@ TableName GetColocatedDbParentTableName(const NamespaceId& database_id) {
 }
 
 bool IsTablegroupParentTableId(const TableId& table_id) {
-  return table_id.find(kTablegroupParentTableIdSuffix) == 32 &&
-      boost::algorithm::ends_with(table_id, kTablegroupParentTableIdSuffix);
+  return (table_id.find(kTablegroupParentTableIdSuffix) == 32 &&
+      boost::algorithm::ends_with(table_id, kTablegroupParentTableIdSuffix)) ||
+      (table_id.find(kColocationParentTableIdSuffix) == 32 &&
+      boost::algorithm::ends_with(table_id, kColocationParentTableIdSuffix));
 }
 
 TableId GetTablegroupParentTableId(const TablegroupId& tablegroup_id) {
@@ -261,6 +257,16 @@ TableName GetTablegroupParentTableName(const TablegroupId& tablegroup_id) {
 TablegroupId GetTablegroupIdFromParentTableId(const TableId& table_id) {
   DCHECK(IsTablegroupParentTableId(table_id)) << table_id;
   return table_id.substr(0, 32);
+}
+
+TableId GetColocationParentTableId(const TablegroupId& tablegroup_id) {
+  DCHECK(IsIdLikeUuid(tablegroup_id)) << tablegroup_id;
+  return tablegroup_id + kColocationParentTableIdSuffix;
+}
+
+TableName GetColocationParentTableName(const TablegroupId& tablegroup_id) {
+  DCHECK(IsIdLikeUuid(tablegroup_id)) << tablegroup_id;
+  return tablegroup_id + kColocationParentTableNameSuffix;
 }
 
 bool IsBlacklisted(const ServerRegistrationPB& registration, const BlacklistSet& blacklist) {

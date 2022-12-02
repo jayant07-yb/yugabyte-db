@@ -11,8 +11,7 @@
 // under the License.
 //
 
-#ifndef YB_COMMON_COMMON_FWD_H
-#define YB_COMMON_COMMON_FWD_H
+#pragma once
 
 #include <memory>
 #include <vector>
@@ -35,6 +34,7 @@ class IndexMap;
 class Partition;
 class PartitionSchema;
 class PgsqlScanSpec;
+class QLResultSet;
 class QLRow;
 class QLRowBlock;
 class QLScanSpec;
@@ -85,5 +85,3 @@ class Jsonb;
 } // namespace common
 
 } // namespace yb
-
-#endif // YB_COMMON_COMMON_FWD_H

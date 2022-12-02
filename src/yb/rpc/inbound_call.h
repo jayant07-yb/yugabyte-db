@@ -29,8 +29,7 @@
 // or implied.  See the License for the specific language governing permissions and limitations
 // under the License.
 //
-#ifndef YB_RPC_INBOUND_CALL_H_
-#define YB_RPC_INBOUND_CALL_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -53,6 +52,7 @@
 
 #include "yb/util/faststring.h"
 #include "yb/util/lockfree.h"
+#include "yb/util/locks.h"
 #include "yb/util/metrics_fwd.h"
 #include "yb/util/memory/memory.h"
 #include "yb/util/monotime.h"
@@ -157,7 +157,7 @@ class InboundCall : public RpcCall, public MPSCQueueEntry<InboundCall> {
   // If the client did not specify a deadline, returns MonoTime::Max().
   virtual CoarseTimePoint GetClientDeadline() const = 0;
 
-  virtual void DoSerialize(boost::container::small_vector_base<RefCntBuffer>* output) = 0;
+  virtual void DoSerialize(ByteBlocks* output) = 0;
 
   // Returns the time spent in the service queue -- from the time the call was received, until
   // it gets handled.
@@ -206,11 +206,15 @@ class InboundCall : public RpcCall, public MPSCQueueEntry<InboundCall> {
 
   size_t DynamicMemoryUsage() const override;
 
-  void Serialize(boost::container::small_vector_base<RefCntBuffer>* output) override final;
+  void Serialize(ByteBlocks* output) override final;
 
   const CallData& request_data() const { return request_data_; }
 
   int64_t GetRpcQueuePosition() const { return rpc_queue_position_; }
+
+  // For requests that have requested traces to be collected, we will ensure
+  // that trace_ is not null and can be used for collecting the requested data.
+  void EnsureTraceCreated();
 
  protected:
   ThreadPoolTask* BindTask(InboundCallHandler* handler, int64_t rpc_queue_limit);
@@ -248,6 +252,9 @@ class InboundCall : public RpcCall, public MPSCQueueEntry<InboundCall> {
   scoped_refptr<Counter> rpc_method_response_bytes_;
   scoped_refptr<Histogram> rpc_method_handler_latency_;
 
+  bool cleared_ = false;
+  mutable simple_spinlock mutex_;
+
  private:
   // The connection on which this inbound call arrived. Can be null for LocalYBInboundCall.
   ConnectionPtr conn_ = nullptr;
@@ -283,5 +290,3 @@ class InboundCall : public RpcCall, public MPSCQueueEntry<InboundCall> {
 
 }  // namespace rpc
 }  // namespace yb
-
-#endif  // YB_RPC_INBOUND_CALL_H_

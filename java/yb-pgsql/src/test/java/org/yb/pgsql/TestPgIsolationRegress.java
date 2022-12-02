@@ -32,7 +32,7 @@ public class TestPgIsolationRegress extends BasePgSQLTest {
 
   @Override
   public int getTestMethodTimeoutSec() {
-    return 1600;
+    return 1800;
   }
 
   private void runIsolationRegressTest() throws Exception {
@@ -43,6 +43,13 @@ public class TestPgIsolationRegress extends BasePgSQLTest {
 
   @Test
   public void isolationRegress() throws Exception {
+    runIsolationRegressTest();
+  }
+
+  @Test
+  public void isolationRegressWithWaitQueues() throws Exception {
+    restartClusterWithFlags(Collections.emptyMap(),
+                            Collections.singletonMap("enable_wait_queues", "true"));
     runIsolationRegressTest();
   }
 
@@ -58,6 +65,16 @@ public class TestPgIsolationRegress extends BasePgSQLTest {
     restartClusterWithFlags(Collections.emptyMap(),
                             Collections.singletonMap("TEST_inject_sleep_before_applying_intents_ms",
                                                      "100"));
+    runIsolationRegressTest();
+  }
+
+  @Test
+  public void withDelayedTxnApplyWithWaitQueues() throws Exception {
+    Map<String, String> flags = super.getTServerFlags();
+    flags.put("TEST_inject_sleep_before_applying_intents_ms", "100");
+    flags.put("enable_wait_queues", "true");
+
+    restartClusterWithFlags(Collections.emptyMap(), flags);
     runIsolationRegressTest();
   }
 }
