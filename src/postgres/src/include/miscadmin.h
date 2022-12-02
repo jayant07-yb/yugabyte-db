@@ -26,6 +26,8 @@
 #include <signal.h>
 
 #include "pgtime.h"				/* for pg_time_t */
+#include "postgres.h"			/* for HeapTuple */
+#include "access/htup.h"		/* for HeapTuple */
 
 
 #define InvalidPid				(-1)
@@ -456,5 +458,12 @@ extern bool has_rolreplication(Oid roleid);
 /* in access/transam/xlog.c */
 extern bool BackupInProgress(void);
 extern void CancelBackup(void);
+
+extern void process_settings(Oid databaseid, Oid roleid);
+
+extern HeapTuple GetDatabaseTuple(const char *dbname);
+extern HeapTuple GetDatabaseTupleByOid(Oid dboid);
+extern void CheckMyDatabase(const char *name, bool am_superuser,
+	bool override_allow_connections, bool treat_errors_as_fatal);
 
 #endif							/* MISCADMIN_H */

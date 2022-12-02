@@ -83,10 +83,8 @@
 
 #include "pg_yb_utils.h"
 
-static HeapTuple GetDatabaseTuple(const char *dbname);
-static HeapTuple GetDatabaseTupleByOid(Oid dboid);
+
 static void PerformAuthentication(Port *port);
-static void CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connections);
 static void InitCommunication(void);
 static void ShutdownPostgres(int code, Datum arg);
 static void StatementTimeoutHandler(void);
@@ -94,7 +92,6 @@ static void LockTimeoutHandler(void);
 static void IdleInTransactionSessionTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
-static void process_settings(Oid databaseid, Oid roleid);
 
 /*** InitPostgres support ***/
 
@@ -110,7 +107,7 @@ static void process_settings(Oid databaseid, Oid roleid);
  * cache file, and so we can do an indexscan.  criticalSharedRelcachesBuilt
  * tells whether we got the cached descriptors.
  */
-static HeapTuple
+HeapTuple
 GetDatabaseTuple(const char *dbname)
 {
 	HeapTuple	tuple;
@@ -153,7 +150,7 @@ GetDatabaseTuple(const char *dbname)
 /*
  * GetDatabaseTupleByOid -- as above, but search by database OID
  */
-static HeapTuple
+HeapTuple
 GetDatabaseTupleByOid(Oid dboid)
 {
 	HeapTuple	tuple;
@@ -308,8 +305,9 @@ PerformAuthentication(Port *port)
 /*
  * CheckMyDatabase -- fetch information from the pg_database entry for our DB
  */
-static void
-CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connections)
+void
+CheckMyDatabase(const char *name, bool am_superuser,
+	bool override_allow_connections, bool treat_errors_as_fatal)
 {
 	HeapTuple	tup;
 	Form_pg_database dbform;
@@ -324,7 +322,7 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 
 	/* This recheck is strictly paranoia */
 	if (strcmp(name, NameStr(dbform->datname)) != 0)
-		ereport(FATAL,
+		ereport(treat_errors_as_fatal ? FATAL : ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
 				 errmsg("database \"%s\" has disappeared from pg_database",
 						name),
@@ -346,7 +344,7 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		 * Check that the database is currently allowing connections.
 		 */
 		if (!dbform->datallowconn && !override_allow_connections)
-			ereport(FATAL,
+			ereport(treat_errors_as_fatal ? FATAL : ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("database \"%s\" is not currently accepting connections",
 							name)));
@@ -359,7 +357,7 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		if (!am_superuser &&
 			pg_database_aclcheck(MyDatabaseId, GetUserId(),
 								 ACL_CONNECT) != ACLCHECK_OK)
-			ereport(FATAL,
+			ereport(treat_errors_as_fatal ? FATAL : ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied for database \"%s\"", name),
 					 errdetail("User does not have CONNECT privilege.")));
@@ -377,11 +375,13 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		if (dbform->datconnlimit >= 0 &&
 			!am_superuser &&
 			CountDBConnections(MyDatabaseId) > dbform->datconnlimit)
-			ereport(FATAL,
+			ereport(treat_errors_as_fatal ? FATAL : ERROR,
 					(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
 					 errmsg("too many connections for database \"%s\"",
 							name)));
 	}
+
+	// TODO: Unset the below on error?
 
 	/*
 	 * OK, we're golden.  Next to-do item is to save the encoding info out of
@@ -400,14 +400,14 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	ctype = NameStr(dbform->datctype);
 
 	if (pg_perm_setlocale(LC_COLLATE, collate) == NULL)
-		ereport(FATAL,
+		ereport(treat_errors_as_fatal ? FATAL : ERROR,
 				(errmsg("database locale is incompatible with operating system"),
 				 errdetail("The database was initialized with LC_COLLATE \"%s\", "
 						   " which is not recognized by setlocale().", collate),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 
 	if (pg_perm_setlocale(LC_CTYPE, ctype) == NULL)
-		ereport(FATAL,
+		ereport(treat_errors_as_fatal ? FATAL : ERROR,
 				(errmsg("database locale is incompatible with operating system"),
 				 errdetail("The database was initialized with LC_CTYPE \"%s\", "
 						   " which is not recognized by setlocale().", ctype),
@@ -1108,7 +1108,7 @@ InitPostgresImpl(const char *in_dbname, Oid dboid, const char *username,
 	 * user is a superuser, so the above stuff has to happen first.)
 	 */
 	if (!bootstrap)
-		CheckMyDatabase(dbname, am_superuser, override_allow_connections);
+		CheckMyDatabase(dbname, am_superuser, override_allow_connections, true /* treat_errors_as_fatal */);
 
 	/*
 	 * Now process any command-line switches and any additional GUC variable
@@ -1244,7 +1244,7 @@ process_startup_options(Port *port, bool am_superuser)
  * We try specific settings for the database/role combination, as well as
  * general for this database and for this user.
  */
-static void
+void
 process_settings(Oid databaseid, Oid roleid)
 {
 	Relation	relsetting;

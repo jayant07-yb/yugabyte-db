@@ -452,6 +452,12 @@ Status PgApiImpl::InitSession(const string& database_name) {
   return Status::OK();
 }
 
+Status PgApiImpl::SetSessionDatabaseName(const string& database_name) {
+  CHECK(pg_session_);
+  pg_session_->set_connected_database(database_name);
+  return Status::OK();
+}
+
 Status PgApiImpl::InvalidateCache() {
   pg_session_->InvalidateAllTablesCache();
   return Status::OK();

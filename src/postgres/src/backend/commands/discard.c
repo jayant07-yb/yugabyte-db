@@ -22,8 +22,6 @@
 #include "utils/guc.h"
 #include "utils/portal.h"
 
-static void DiscardAll(bool isTopLevel);
-
 /*
  * DISCARD { ALL | SEQUENCES | TEMP | PLANS }
  */
@@ -53,7 +51,7 @@ DiscardCommand(DiscardStmt *stmt, bool isTopLevel)
 	}
 }
 
-static void
+void
 DiscardAll(bool isTopLevel)
 {
 	/*

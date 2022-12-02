@@ -154,6 +154,8 @@ check_xact_readonly(Node *parsetree)
 	if (!XactReadOnly && !IsInParallelMode())
 		return;
 
+	// TODO: What about T_UsedbStmt?
+
 	/*
 	 * Note: Commands that need to do more complicated checking are handled
 	 * elsewhere, in particular COPY and plannable statements do their own
@@ -629,7 +631,13 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			DropDatabase(pstate, (DropdbStmt *) parsetree);
 			break;
 
-			/* Query-level asynchronous notification */
+		case T_UsedbStmt:
+			/* no event triggers for global objects */
+			PreventInTransactionBlock(isTopLevel, "USE DATABASE");
+			UseDatabase((UsedbStmt *) parsetree);
+			break;
+
+		/* Query-level asynchronous notification */
 		case T_NotifyStmt:
 			{
 				NotifyStmt *stmt = (NotifyStmt *) parsetree;
@@ -2651,6 +2659,10 @@ CreateCommandTag(Node *parsetree)
 			tag = "DROP DATABASE";
 			break;
 
+		case T_UsedbStmt:
+			tag = "USE DATABASE";
+			break;
+
 		case T_NotifyStmt:
 			tag = "NOTIFY";
 			break;
@@ -3280,6 +3292,10 @@ GetCommandLogLevel(Node *parsetree)
 
 		case T_DropdbStmt:
 			lev = LOGSTMT_DDL;
+			break;
+
+		case T_UsedbStmt:
+			lev = LOGSTMT_ALL;
 			break;
 
 		case T_NotifyStmt:

@@ -611,6 +611,10 @@ YBInitPostgresBackend(
 	}
 }
 
+void YBSetSessionDatabaseName(const char *db_name) {
+	HandleYBStatus(YBCPgSetSessionDatabaseName(db_name));
+}
+
 void
 YBOnPostgresBackendShutdown()
 {
@@ -1478,6 +1482,11 @@ bool IsTransactionalDdlStatement(PlannedStmt *pstmt,
 			 * so nothing to do on the cache side.
 			 */
 			*is_breaking_catalog_change = false;
+			break;
+
+		// TODO: What about T_UsedbStmt?
+		case T_UsedbStmt:
+			//*is_breaking_catalog_change = false;
 			break;
 
 		// All T_Alter... tags from nodes.h:

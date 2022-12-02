@@ -54,10 +54,12 @@
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_yb_tablegroup_d.h"
 #include "commands/comment.h"
 #include "commands/dbcommands.h"
 #include "commands/dbcommands_xlog.h"
 #include "commands/defrem.h"
+#include "commands/discard.h"
 #include "commands/seclabel.h"
 #include "commands/tablespace.h"
 #include "mb/pg_wchar.h"
@@ -1565,6 +1567,119 @@ DropDatabase(ParseState *pstate, DropdbStmt *stmt)
 	}
 
 	dropdb(stmt->dbname, stmt->missing_ok, force);
+}
+
+/*
+ * USE DATABASE
+ *
+ * Changes database context to the specified database.
+ *
+ */
+void UseDatabase(UsedbStmt *stmt) {
+	if (!IsYugaByteEnabled()) {
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+					errmsg("This command is only supported in Yugabyte mode")));
+	}
+
+	const char* dbname = stmt->dbname;
+
+	// TODO: Ensure that all state is restored on failure...
+	Oid origMyDatabaseId = MyDatabaseId;
+	Oid origMyDatabaseTableSpace = MyDatabaseTableSpace;
+	bool origMyDatabaseColocated = MyDatabaseColocated;
+	bool origYbTablegroupCatalogExists = YbTablegroupCatalogExists;
+
+	PG_TRY();
+	{
+		// Resolve database name to db oid
+		HeapTuple	tuple;
+		Form_pg_database dbform;
+
+		tuple = GetDatabaseTuple(dbname);
+		if (!HeapTupleIsValid(tuple))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_DATABASE),
+						errmsg("database \"%s\" does not exist", dbname)));
+		dbform = (Form_pg_database) GETSTRUCT(tuple);
+		MyDatabaseId = HeapTupleGetOid(tuple);
+		MyDatabaseTableSpace = dbform->dattablespace;
+
+		bool am_superuser = superuser();
+
+		// TODO
+		LockSharedObject(DatabaseRelationId, MyDatabaseId, 0,
+							RowExclusiveLock);
+
+		MyProc->databaseId = MyDatabaseId;
+
+		InvalidateCatalogSnapshot();
+
+		/*
+		* Recheck pg_database to make sure the target database hasn't gone away.
+		*/
+		tuple = GetDatabaseTuple(dbname);
+		if (!HeapTupleIsValid(tuple) ||
+			MyDatabaseId != HeapTupleGetOid(tuple) ||
+			MyDatabaseTableSpace != ((Form_pg_database) GETSTRUCT(tuple))->dattablespace)
+			ereport(FATAL,
+					(errcode(ERRCODE_UNDEFINED_DATABASE),
+						errmsg("database \"%s\" does not exist", dbname),
+						errdetail("It seems to have just been dropped or renamed.")));
+
+		/*
+		* It's now possible to do real access to the system catalogs.
+		*
+		* Load relcache entries for the system catalogs.  This must create at
+		* least the minimum set of "nailed-in" cache entries.
+		*/
+		// See if tablegroup catalog exists - needs to happen before cache fully initialized.
+		if (IsYugaByteEnabled())
+		{
+			HandleYBStatus(YBCPgTableExists(MyDatabaseId,
+											YbTablegroupRelationId,
+											&YbTablegroupCatalogExists));
+		}
+
+		/*
+		* Also cache whather the database is colocated for optimization purposes.
+		*/
+		if (IsYugaByteEnabled() && !IsBootstrapProcessingMode())
+		{
+			MyDatabaseColocated = YbIsDatabaseColocated(MyDatabaseId, &MyColocatedDatabaseLegacy);
+		}
+
+		CheckMyDatabase(dbname, am_superuser, false /* override_allow_connections */,
+			false /* treat_errors_as_fatal */);
+	}
+	PG_CATCH();
+	{
+		// Restore previous state
+		MyDatabaseId = origMyDatabaseId;
+		MyDatabaseTableSpace = origMyDatabaseTableSpace;
+		MyProc->databaseId = origMyDatabaseId;
+		YbTablegroupCatalogExists = origYbTablegroupCatalogExists;
+		MyDatabaseColocated = origMyDatabaseColocated;
+
+		// Rethrow exception
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/* Process pg_db_role_setting options */
+	process_settings(MyDatabaseId, GetSessionUserId());
+
+	// Update PgSession's database name
+	// TODO: Do we need this?
+	YBCPgSetSessionDatabaseName(dbname);
+
+	// Discard all session state
+	// TODO: PortalHashTableDeleteAll may run user code. So do we need to do this
+	// under original database context?
+	DiscardAll(true);
+
+	// Force cache refresh
+	YBForceCacheRefresh();
 }
 
 /*

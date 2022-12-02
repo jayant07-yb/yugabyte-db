@@ -16,5 +16,6 @@
 #include "nodes/parsenodes.h"
 
 extern void DiscardCommand(DiscardStmt *stmt, bool isTopLevel);
+extern void DiscardAll(bool isTopLevel);
 
 #endif							/* DISCARD_H */
