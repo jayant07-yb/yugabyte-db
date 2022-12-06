@@ -43,4 +43,5 @@ extern bool check_follower_reads(bool *newval, void **extra, GucSource source);
 extern bool check_follower_read_staleness_ms(int32_t *newval, void **extra, GucSource source);
 extern bool check_default_XactIsoLevel(int *newval, void **extra, GucSource source);
 
+extern void yb_set_auth_role(char *newval);
 #endif							/* VARIABLE_H */

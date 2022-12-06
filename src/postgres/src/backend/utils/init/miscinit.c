@@ -1635,3 +1635,17 @@ pg_bindtextdomain(const char *domain)
 	}
 #endif
 }
+
+void Ybsetauthuser(Oid val){
+
+
+	/* change the auth user */
+	AuthenticatedUserId = val ;
+
+	/* reset the valus */
+	SessionUserId = AuthenticatedUserId;
+	OuterUserId = AuthenticatedUserId;
+	CurrentUserId = AuthenticatedUserId;
+
+	/* reset users */
+}

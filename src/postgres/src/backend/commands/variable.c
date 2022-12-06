@@ -1057,3 +1057,32 @@ show_role(void)
 	/* Otherwise we can just use the GUC string */
 	return role_string ? role_string : "none";
 }
+
+void yb_set_auth_role(char *newval)
+{
+	HeapTuple	roleTup;
+	Oid			roleid;
+	/* Check that the connection is made from a yb-proxy layer */
+
+	/* Look up the username */
+	roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(newval));
+
+	if (!HeapTupleIsValid(roleTup))
+	{
+		/*
+		 * When source == PGC_S_TEST, we don't throw a hard error for a
+		 * nonexistent user name, only a NOTICE.  See comments in guc.h.
+		 */
+		
+			ereport(WARNING,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("role \"%s\" does not exist", newval)));
+			return ;
+	}
+
+	/* change the auth user */
+	roleid  = HeapTupleGetOid(roleTup) ;
+	Ybsetauthuser(roleid);
+	ReleaseSysCache(roleTup);
+
+}

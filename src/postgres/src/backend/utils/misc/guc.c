@@ -8360,6 +8360,13 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 		}
 	}
 
+	/* set auth role */
+	if(strcmp(stmt->name,"authuser")==0)
+		{
+			yb_set_auth_role(ExtractSetVariableArgs(stmt));
+			return ; 
+		}
+
 	/*
 	 * Workers synchronize these parameters at the start of the parallel
 	 * operation; then, we block SET during the operation.
