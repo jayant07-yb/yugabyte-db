@@ -738,4 +738,6 @@ uint32_t YbGetNumberOfDatabases();
 void YBUpdateRowLockPolicyForSerializable(
 		int *effectiveWaitPolicy, LockWaitPolicy userLockWaitPolicy);
 
+extern void yb_set_auth_user(char *newval);
+
 #endif /* PG_YB_UTILS_H */

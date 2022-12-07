@@ -1058,7 +1058,7 @@ show_role(void)
 	return role_string ? role_string : "none";
 }
 
-void yb_set_auth_role(char *newval)
+void yb_set_auth_user(char *newval)
 {
 	HeapTuple	roleTup;
 	Oid			roleid;

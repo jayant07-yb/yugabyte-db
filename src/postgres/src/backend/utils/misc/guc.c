@@ -8363,7 +8363,7 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 	/* set auth role */
 	if(strcmp(stmt->name,"authuser")==0)
 		{
-			yb_set_auth_role(ExtractSetVariableArgs(stmt));
+			yb_set_auth_user(ExtractSetVariableArgs(stmt));
 			return ; 
 		}
 

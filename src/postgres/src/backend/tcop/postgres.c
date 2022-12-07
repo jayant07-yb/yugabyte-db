@@ -483,6 +483,8 @@ SocketBackend(StringInfo inBuf)
 						(errcode(ERRCODE_PROTOCOL_VIOLATION),
 						 errmsg("invalid frontend message type %d", qtype)));
 			break;
+		case 'a':				/* Change auth user */
+			break;
 
 		default:
 
@@ -5666,6 +5668,16 @@ PostgresMain(int argc, char *argv[],
 				 * probably got here because a COPY failed, and the frontend
 				 * is still sending data.
 				 */
+				break;
+
+			case 'a':			/* Change auth user */
+			{
+				//start_xact_command();										/* Start the transaction */
+				char* new_user = (char *) pq_getmsgstring(&input_message);	/* Extract the user name */
+				yb_set_auth_user(new_user);
+
+				ReadyForQuery(DestRemote);								/* We need not to send the ready for query ?*/
+			}
 				break;
 
 			default:
