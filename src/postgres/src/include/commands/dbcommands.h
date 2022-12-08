@@ -22,6 +22,7 @@
 extern Oid	createdb(ParseState *pstate, const CreatedbStmt *stmt);
 extern void dropdb(const char *dbname, bool missing_ok, bool force);
 extern void DropDatabase(ParseState *pstate, DropdbStmt *stmt);
+extern void UseDatabase(UsedbStmt *stmt);
 extern ObjectAddress RenameDatabase(const char *oldname, const char *newname);
 extern Oid	AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel);
 extern Oid	AlterDatabaseSet(AlterDatabaseSetStmt *stmt);

@@ -313,6 +313,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		CreatePublicationStmt AlterPublicationStmt
 		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt
 		BackfillIndexStmt
+		UsedbStmt
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause
@@ -736,7 +737,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
 	UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNLOGGED
-	UNTIL UPDATE USER USING
+	UNTIL UPDATE USE USER USING
 
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
 	VERBOSE VERSION_P VIEW VIEWS VOLATILE
@@ -966,6 +967,7 @@ stmt :
 			| TransactionStmt
 			| TruncateStmt
 			| UpdateStmt
+			| UsedbStmt
 			| VariableResetStmt
 			| VariableSetStmt
 			| VariableShowStmt
@@ -11125,6 +11127,21 @@ drop_option:
 				}
 		;
 
+
+/*****************************************************************************
+ *
+ *		USE dbname
+ *
+ *****************************************************************************/
+
+UsedbStmt: USE database_name
+				{
+					UsedbStmt *n = makeNode(UsedbStmt);
+					n->dbname = $2;
+					$$ = (Node *)n;
+				}
+		;
+
 /*****************************************************************************
  *
  *		ALTER COLLATION
@@ -16428,6 +16445,7 @@ reserved_keyword:
 			| TRUE_P
 			| UNION
 			| UNIQUE
+			| USE
 			| USER
 			| USING
 			| VARIADIC

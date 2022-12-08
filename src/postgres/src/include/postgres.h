@@ -746,6 +746,8 @@ extern Datum Float8GetDatum(float8 X);
  */
 const char* RedactPasswordIfExists(const char* queryStr);
 
+void YBForceCacheRefresh();
+
 /*
  * Int64GetDatumFast
  * Float8GetDatumFast

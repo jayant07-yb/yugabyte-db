@@ -344,6 +344,7 @@ typedef enum NodeTag
 	T_CreateDomainStmt,
 	T_CreatedbStmt,
 	T_DropdbStmt,
+	T_UsedbStmt,
 	T_VacuumStmt,
 	T_ExplainStmt,
 	T_CreateTableAsStmt,

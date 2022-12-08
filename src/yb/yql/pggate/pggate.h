@@ -128,6 +128,11 @@ class PgApiImpl {
   // If database_name is empty, a session is created without connecting to any database.
   Status InitSession(const std::string& database_name);
 
+  // Set session database name
+  // TODO: Do we need to track this? Doesn't seem to be used anywhere.
+  Status SetSessionDatabaseName(const std::string& database_name);
+
+
   PgMemctx *CreateMemctx();
   Status DestroyMemctx(PgMemctx *memctx);
   Status ResetMemctx(PgMemctx *memctx);

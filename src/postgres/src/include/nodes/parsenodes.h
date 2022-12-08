@@ -3170,6 +3170,16 @@ typedef struct DropdbStmt
 } DropdbStmt;
 
 /* ----------------------
+ *		Usedb Statement
+ * ----------------------
+ */
+typedef struct UsedbStmt
+{
+	NodeTag		type;
+	char	   *dbname;			/* name of database to use */
+} UsedbStmt;
+
+/* ----------------------
  *		Alter System Statement
  * ----------------------
  */

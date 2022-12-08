@@ -5919,6 +5919,10 @@ disable_statement_timeout(void)
 	}
 }
 
+void YBForceCacheRefresh() {
+	yb_need_cache_refresh = true;
+}
+
 /*
  * Redact password, if exists in the query text.
  */

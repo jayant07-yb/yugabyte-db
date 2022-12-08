@@ -201,6 +201,11 @@ YBCStatus YBCPgInitSession(const char *database_name) {
   return ToYBCStatus(pgapi->InitSession(db_name));
 }
 
+YBCStatus YBCPgSetSessionDatabaseName(const char *database_name) {
+  const string db_name(database_name);
+  return ToYBCStatus(pgapi->SetSessionDatabaseName(db_name));
+}
+
 YBCPgMemctx YBCPgCreateMemctx() {
   return pgapi->CreateMemctx();
 }
